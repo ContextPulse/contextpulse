@@ -16,7 +16,7 @@ ContextPulse is a platform that provides always-on context for AI agents. Screen
 
 | Package | Description | Status |
 |---------|-------------|--------|
-| **contextpulse-sight** | Always-on screen capture + MCP server | Phase 1 MVP in progress |
+| **contextpulse-sight** | Always-on screen capture + MCP server | Phase 1.5 IN PROGRESS: UAT 44/44, MCP configured, skill created |
 | **contextpulse-core** | Shared config, utilities | Scaffolded |
 | **contextpulse-memory** | Cross-session persistent memory (journal pattern) | Planned — from SynapseAI |
 | **contextpulse-agent** | Agent coordination, session protocol | Planned — from SynapseAI |
@@ -58,7 +58,8 @@ ContextPulse/
 ├── docs/
 │   ├── NAMING.md               # Brand naming research (80+ candidates evaluated)
 │   └── DOMAINS.md              # Domain registrations, pricing, DNS strategy
-└── tests/                      # Per-package test suites
+├── tests/
+│   └── test_user_acceptance.py # 44-test automated UAT (captures, buffer, privacy, hotkeys, daemon, MCP, OCR)
 ```
 
 ## Screen Capture Modes
@@ -111,6 +112,22 @@ All files written to `C:\Users\david\screenshots\`.
 - [x] Python 3.14 venv created
 - [x] End-to-end integration tests (daemon + MCP data flow)
 - [x] Privacy controls (window title blocklist, auto-pause on lock screen)
+- [x] Brand kit (colors, typography, voice, assets)
+- [x] Rename to ContextPulse Sight
+- [x] Package for pip install (wheel builds, entry points work)
+- [x] Single-instance mutex guard (prevents duplicate daemons)
+- [x] Live daemon test — tray icon, auto-capture, buffer, MCP all verified
+- [x] MCP integration test — get_buffer_status and get_screenshot return correct data
+
+### Phase 1.5: Ship & Publish — IN PROGRESS
+- [x] Automated UAT script (44 tests, all passing — tests/test_user_acceptance.py)
+- [x] Add to Claude Code MCP config (`contextpulse-sight` in ~/.claude/settings.json)
+- [x] Create `using-contextpulse-sight` skill for Claude Code
+- [x] Daemon running via `pythonw` (tray icon, auto-capture, hotkeys active)
+- [ ] Manual user testing across multiple Claude Code sessions
+- [ ] Push to GitHub (junkyard-rules/contextpulse)
+- [ ] Publish to PyPI
+- [ ] Add to Windows Startup folder for auto-launch on login
 
 ### Phase 2: Memory Package — PLANNED
 - [ ] Port SynapseAI journal pattern

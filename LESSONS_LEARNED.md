@@ -32,3 +32,18 @@
 ### [2026-03-15] numpy bool comparison: use truthiness, not `is True`
 **Context:** Tests like `assert buf._has_changed(arr) is True` failed because numpy returns `np.True_` (a numpy bool), not Python's `True`. `np.True_ is True` evaluates to `False`.
 **Lesson:** Never use `is True`/`is False` with values that might be numpy bools. Use `assert expr` or `assert not expr` instead, which works with any truthy/falsy value.
+
+
+### [2026-03-15] PEP 639 — don't mix license field with license classifiers
+**Context:** `pip install -e .` failed with `InvalidConfigError: License classifiers have been superseded by license expressions` when pyproject.toml had both `license = "MIT"` and a `License :: OSI Approved :: MIT License` classifier.
+**Lesson:** With PEP 639, use `license = "MIT"` (SPDX expression) and remove all `License ::` classifiers from pyproject.toml. They are mutually exclusive.
+
+### [2026-03-15] Multiple daemon instances need single-instance guard
+**Context:** Each test launch spawned a new daemon process without killing the old one, resulting in 5+ copies running simultaneously.
+**Lesson:** Use a Windows named mutex (`CreateMutexW` + check `ERROR_ALREADY_EXISTS`) for single-instance enforcement. It's the standard Windows pattern — the mutex auto-releases when the process exits even if it crashes.
+
+<!-- Archived to skills: pystray PIPE deadlock → developing-python, MCP newline JSON → managing-mcp-servers -->
+
+### [2026-03-15] Win32 SendInput doesn't reliably reach pynput's keyboard hook cross-process
+**Context:** Tried to test hotkeys by injecting Ctrl+Shift+S via `SendInput` from the test process to a background daemon using pynput's `WH_KEYBOARD_LL` hook. The keys never reached the daemon's listener.
+**Lesson:** Cross-process keyboard injection via SendInput is unreliable for testing pynput hooks. Instead, test hotkey handler logic in-process by directly calling app methods and simulating the `_pressed_keys` set. Reserve SendInput for UI automation, not unit/acceptance testing.
