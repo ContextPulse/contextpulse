@@ -1,0 +1,106 @@
+"""Screen capture engine using mss. Handles multi-monitor, cursor tracking, region crop."""
+
+import ctypes
+import ctypes.wintypes
+import logging
+from io import BytesIO
+
+import mss
+from PIL import Image
+
+from contextpulse_screen.config import JPEG_QUALITY, MAX_HEIGHT, MAX_WIDTH
+
+logger = logging.getLogger(__name__)
+
+
+class POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
+def _get_cursor_pos() -> tuple[int, int]:
+    """Get current cursor position (screen coordinates)."""
+    pt = POINT()
+    ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+    return pt.x, pt.y
+
+
+def _find_monitor_at_cursor(sct: mss.mss) -> dict:
+    """Return the mss monitor dict containing the cursor. Falls back to primary."""
+    cx, cy = _get_cursor_pos()
+    for mon in sct.monitors[1:]:
+        if (mon["left"] <= cx < mon["left"] + mon["width"]
+                and mon["top"] <= cy < mon["top"] + mon["height"]):
+            return mon
+    return sct.monitors[1]
+
+
+def _downscale(img: Image.Image) -> Image.Image:
+    """Downscale image to fit within MAX_WIDTH x MAX_HEIGHT, preserving aspect ratio."""
+    if img.width <= MAX_WIDTH and img.height <= MAX_HEIGHT:
+        return img
+    img.thumbnail((MAX_WIDTH, MAX_HEIGHT), Image.LANCZOS)
+    return img
+
+
+def _mss_to_pil(sct_img) -> Image.Image:
+    """Convert mss screenshot to PIL Image (RGB)."""
+    return Image.frombytes("RGB", (sct_img.width, sct_img.height), sct_img.rgb)
+
+
+def capture_active_monitor() -> Image.Image:
+    """Capture the monitor where the cursor currently is, downscaled."""
+    with mss.mss() as sct:
+        mon = _find_monitor_at_cursor(sct)
+        sct_img = sct.grab(mon)
+        img = _mss_to_pil(sct_img)
+    return _downscale(img)
+
+
+def capture_all_monitors() -> Image.Image:
+    """Capture all monitors stitched together, downscaled."""
+    with mss.mss() as sct:
+        sct_img = sct.grab(sct.monitors[0])
+        img = _mss_to_pil(sct_img)
+    return _downscale(img)
+
+
+def capture_region(width: int = 800, height: int = 600) -> Image.Image:
+    """Capture a region centered on the cursor, downscaled."""
+    cx, cy = _get_cursor_pos()
+    with mss.mss() as sct:
+        desktop = sct.monitors[0]
+        left = max(desktop["left"], cx - width // 2)
+        top = max(desktop["top"], cy - height // 2)
+        right = min(desktop["left"] + desktop["width"], left + width)
+        bottom = min(desktop["top"] + desktop["height"], top + height)
+
+        region = {
+            "left": left,
+            "top": top,
+            "width": right - left,
+            "height": bottom - top,
+        }
+        sct_img = sct.grab(region)
+        img = _mss_to_pil(sct_img)
+    return _downscale(img)
+
+
+def save_image(img: Image.Image, path, fmt: str = "PNG") -> None:
+    """Save image to disk. PNG for lossless, JPEG for smaller size."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if fmt.upper() == "JPEG":
+        if img.mode == "RGBA":
+            img = img.convert("RGB")
+        img.save(path, format="JPEG", quality=JPEG_QUALITY)
+    else:
+        img.save(path, format="PNG")
+    logger.info("Saved %s (%dx%d) to %s", fmt, img.width, img.height, path)
+
+
+def capture_to_bytes(img: Image.Image, fmt: str = "PNG") -> bytes:
+    """Convert image to bytes (for MCP server)."""
+    buf = BytesIO()
+    if fmt.upper() == "JPEG" and img.mode == "RGBA":
+        img = img.convert("RGB")
+    img.save(buf, format=fmt, quality=JPEG_QUALITY if fmt.upper() == "JPEG" else None)
+    return buf.getvalue()
