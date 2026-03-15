@@ -39,6 +39,29 @@ WTS_SESSION_UNLOCK = 0x8
 NOTIFY_FOR_THIS_SESSION = 0
 HWND_MESSAGE = ctypes.wintypes.HWND(-3)
 
+WNDPROC = ctypes.WINFUNCTYPE(
+    ctypes.c_long,
+    ctypes.wintypes.HWND,
+    ctypes.c_uint,
+    ctypes.wintypes.WPARAM,
+    ctypes.wintypes.LPARAM,
+)
+
+
+class WNDCLASSW(ctypes.Structure):
+    _fields_ = [
+        ("style", ctypes.c_uint),
+        ("lpfnWndProc", WNDPROC),
+        ("cbClsExtra", ctypes.c_int),
+        ("cbWndExtra", ctypes.c_int),
+        ("hInstance", ctypes.wintypes.HINSTANCE),
+        ("hIcon", ctypes.wintypes.HICON),
+        ("hCursor", ctypes.wintypes.HANDLE),
+        ("hbrBackground", ctypes.wintypes.HBRUSH),
+        ("lpszMenuName", ctypes.wintypes.LPCWSTR),
+        ("lpszClassName", ctypes.wintypes.LPCWSTR),
+    ]
+
 
 class SessionMonitor:
     """Monitors Windows session lock/unlock events via WTS notifications.
@@ -64,29 +87,46 @@ class SessionMonitor:
             elif wparam == WTS_SESSION_UNLOCK:
                 logger.info("Session unlocked")
                 self.on_unlock()
-        return ctypes.windll.user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+        DefWindowProcW = ctypes.windll.user32.DefWindowProcW
+        DefWindowProcW.restype = ctypes.c_long
+        DefWindowProcW.argtypes = [
+            ctypes.wintypes.HWND, ctypes.c_uint,
+            ctypes.wintypes.WPARAM, ctypes.wintypes.LPARAM,
+        ]
+        return DefWindowProcW(hwnd, msg, wparam, lparam)
 
     def _run(self):
-        WNDPROC = ctypes.WINFUNCTYPE(
-            ctypes.c_long,
-            ctypes.wintypes.HWND,
-            ctypes.c_uint,
-            ctypes.wintypes.WPARAM,
-            ctypes.wintypes.LPARAM,
-        )
         self._wndproc_ref = WNDPROC(self._wndproc)
 
-        wc = ctypes.wintypes.WNDCLASSW()
+        GetModuleHandleW = ctypes.windll.kernel32.GetModuleHandleW
+        GetModuleHandleW.restype = ctypes.wintypes.HINSTANCE
+        GetModuleHandleW.argtypes = [ctypes.wintypes.LPCWSTR]
+
+        RegisterClassW = ctypes.windll.user32.RegisterClassW
+        RegisterClassW.restype = ctypes.wintypes.ATOM
+        RegisterClassW.argtypes = [ctypes.POINTER(WNDCLASSW)]
+
+        CreateWindowExW = ctypes.windll.user32.CreateWindowExW
+        CreateWindowExW.restype = ctypes.wintypes.HWND
+        CreateWindowExW.argtypes = [
+            ctypes.wintypes.DWORD, ctypes.wintypes.LPCWSTR,
+            ctypes.wintypes.LPCWSTR, ctypes.wintypes.DWORD,
+            ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            ctypes.wintypes.HWND, ctypes.wintypes.HMENU,
+            ctypes.wintypes.HINSTANCE, ctypes.wintypes.LPVOID,
+        ]
+
+        wc = WNDCLASSW()
         wc.lpfnWndProc = self._wndproc_ref
-        wc.hInstance = ctypes.windll.kernel32.GetModuleHandleW(None)
+        wc.hInstance = GetModuleHandleW(None)
         wc.lpszClassName = "ContextPulseSessionMonitor"
 
-        atom = ctypes.windll.user32.RegisterClassW(ctypes.byref(wc))
+        atom = RegisterClassW(ctypes.byref(wc))
         if not atom:
             logger.error("Failed to register window class for session monitor")
             return
 
-        self._hwnd = ctypes.windll.user32.CreateWindowExW(
+        self._hwnd = CreateWindowExW(
             0, wc.lpszClassName, "ContextPulse Session Monitor",
             0, 0, 0, 0, 0,
             HWND_MESSAGE, None, wc.hInstance, None,
