@@ -14,6 +14,7 @@ from contextpulse_screen.config import (
     FILE_ALL, FILE_LATEST, FILE_REGION, OUTPUT_DIR,
 )
 from contextpulse_screen.icon import create_icon
+from contextpulse_screen.privacy import SessionMonitor, is_blocked
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,15 +27,26 @@ logger = logging.getLogger("contextpulse.screen")
 class ContextPulseScreenApp:
     def __init__(self):
         self.paused = False
+        self._user_paused = False  # tracks manual pause vs auto-pause from lock
         self.stop_event = threading.Event()
         self._pressed_keys: set = set()
         self.buffer = RollingBuffer()
 
+    # -- Privacy guard -----------------------------------------------------
+
+    def _should_skip(self, action_name: str) -> bool:
+        if self.paused:
+            logger.info("Paused -- skipping %s", action_name)
+            return True
+        if is_blocked():
+            logger.info("Blocked window -- skipping %s", action_name)
+            return True
+        return False
+
     # -- Capture actions ---------------------------------------------------
 
     def do_quick_capture(self):
-        if self.paused:
-            logger.info("Paused -- skipping quick capture")
+        if self._should_skip("quick capture"):
             return
         try:
             img = capture.capture_active_monitor()
@@ -44,8 +56,7 @@ class ContextPulseScreenApp:
             logger.exception("Quick capture failed")
 
     def do_all_capture(self):
-        if self.paused:
-            logger.info("Paused -- skipping all-monitor capture")
+        if self._should_skip("all-monitor capture"):
             return
         try:
             img = capture.capture_all_monitors()
@@ -54,8 +65,7 @@ class ContextPulseScreenApp:
             logger.exception("All-monitor capture failed")
 
     def do_region_capture(self):
-        if self.paused:
-            logger.info("Paused -- skipping region capture")
+        if self._should_skip("region capture"):
             return
         try:
             img = capture.capture_region()
@@ -64,9 +74,22 @@ class ContextPulseScreenApp:
             logger.exception("Region capture failed")
 
     def toggle_pause(self):
-        self.paused = not self.paused
+        self._user_paused = not self._user_paused
+        self.paused = self._user_paused
         state = "PAUSED" if self.paused else "ACTIVE"
         logger.info("ContextPulse Screen %s", state)
+        self._update_tray_icon()
+
+    # -- Session lock/unlock -----------------------------------------------
+
+    def _on_session_lock(self):
+        logger.info("Session locked -- auto-pausing")
+        self.paused = True
+        self._update_tray_icon()
+
+    def _on_session_unlock(self):
+        logger.info("Session unlocked -- restoring state")
+        self.paused = self._user_paused
         self._update_tray_icon()
 
     # -- Auto-capture loop -------------------------------------------------
@@ -74,7 +97,7 @@ class ContextPulseScreenApp:
     def _auto_capture_loop(self):
         logger.info("Auto-capture started (interval=%ds)", AUTO_INTERVAL)
         while not self.stop_event.is_set():
-            if not self.paused:
+            if not self._should_skip("auto-capture"):
                 try:
                     img = capture.capture_active_monitor()
                     stored = self.buffer.add(img)
@@ -197,6 +220,12 @@ class ContextPulseScreenApp:
             on_release=self._on_release,
         )
         self.hotkey_listener.start()
+
+        self._session_monitor = SessionMonitor(
+            on_lock=self._on_session_lock,
+            on_unlock=self._on_session_unlock,
+        )
+        self._session_monitor.start()
 
         if AUTO_INTERVAL > 0:
             t = threading.Thread(target=self._auto_capture_loop, daemon=True)
