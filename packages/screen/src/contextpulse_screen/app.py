@@ -13,8 +13,10 @@ from contextpulse_screen.config import (
     AUTO_INTERVAL, BUFFER_MAX_AGE, CHANGE_THRESHOLD,
     FILE_ALL, FILE_LATEST, FILE_REGION, OUTPUT_DIR,
 )
-from contextpulse_screen.icon import create_icon
+from contextpulse_screen.icon import _COLORS, create_icon
 from contextpulse_screen.privacy import SessionMonitor, is_blocked
+
+_WARNING_COLOR = _COLORS.get("dark", {}).get("warning", "#F0B429")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -162,8 +164,7 @@ class ContextPulseScreenApp:
 
     def _update_tray_icon(self):
         if hasattr(self, "tray") and self.tray:
-            color = "#FFB800" if self.paused else "#00CC66"
-            self.tray.icon = create_icon(color)
+            self.tray.icon = create_icon(_WARNING_COLOR if self.paused else None)
 
     def _create_tray_menu(self):
         return pystray.Menu(
