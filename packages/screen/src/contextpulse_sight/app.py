@@ -1,7 +1,9 @@
 """Main application: system tray + global hotkeys + auto-capture with rolling buffer."""
 
+import ctypes
 import logging
 import subprocess
+import sys
 import threading
 
 import pystray
@@ -203,12 +205,22 @@ class ContextPulseSightApp:
         self.stop_event.set()
         if hasattr(self, "hotkey_listener") and self.hotkey_listener:
             self.hotkey_listener.stop()
+        if hasattr(self, "_mutex") and self._mutex:
+            ctypes.windll.kernel32.ReleaseMutex(self._mutex)
+            ctypes.windll.kernel32.CloseHandle(self._mutex)
         if hasattr(self, "tray") and self.tray:
             self.tray.stop()
 
     # -- Run ---------------------------------------------------------------
 
     def run(self):
+        # Single-instance guard via Windows named mutex
+        self._mutex = ctypes.windll.kernel32.CreateMutexW(None, True, "ContextPulseSight_SingleInstance")
+        if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+            logger.error("ContextPulse Sight is already running. Exiting.")
+            print("ContextPulse Sight is already running.", file=sys.stderr)
+            sys.exit(1)
+
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         logger.info("ContextPulse Sight starting -- output: %s", OUTPUT_DIR)
         logger.info(
