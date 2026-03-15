@@ -17,8 +17,8 @@ class TestClassifyAndExtract:
         mock_ocr = MagicMock()
         mock_ocr.return_value = (None, None)
 
-        with patch("contextpulse_screen.classifier._get_ocr", return_value=mock_ocr):
-            from contextpulse_screen.classifier import classify_and_extract
+        with patch("contextpulse_sight.classifier._get_ocr", return_value=mock_ocr):
+            from contextpulse_sight.classifier import classify_and_extract
             result = classify_and_extract(_make_image())
 
         assert result["type"] == "image"
@@ -32,8 +32,8 @@ class TestClassifyAndExtract:
         mock_ocr = MagicMock()
         mock_ocr.return_value = ([], None)
 
-        with patch("contextpulse_screen.classifier._get_ocr", return_value=mock_ocr):
-            from contextpulse_screen.classifier import classify_and_extract
+        with patch("contextpulse_sight.classifier._get_ocr", return_value=mock_ocr):
+            from contextpulse_sight.classifier import classify_and_extract
             result = classify_and_extract(_make_image())
 
         assert result["type"] == "image"
@@ -49,8 +49,8 @@ class TestClassifyAndExtract:
         mock_ocr = MagicMock()
         mock_ocr.return_value = (ocr_results, None)
 
-        with patch("contextpulse_screen.classifier._get_ocr", return_value=mock_ocr):
-            from contextpulse_screen.classifier import classify_and_extract
+        with patch("contextpulse_sight.classifier._get_ocr", return_value=mock_ocr):
+            from contextpulse_sight.classifier import classify_and_extract
             result = classify_and_extract(_make_image())
 
         assert result["type"] == "text"
@@ -68,8 +68,8 @@ class TestClassifyAndExtract:
         mock_ocr = MagicMock()
         mock_ocr.return_value = (ocr_results, None)
 
-        with patch("contextpulse_screen.classifier._get_ocr", return_value=mock_ocr):
-            from contextpulse_screen.classifier import classify_and_extract
+        with patch("contextpulse_sight.classifier._get_ocr", return_value=mock_ocr):
+            from contextpulse_sight.classifier import classify_and_extract
             result = classify_and_extract(_make_image())
 
         assert result["type"] == "image"
@@ -84,8 +84,8 @@ class TestClassifyAndExtract:
         mock_ocr = MagicMock()
         mock_ocr.return_value = (ocr_results, None)
 
-        with patch("contextpulse_screen.classifier._get_ocr", return_value=mock_ocr):
-            from contextpulse_screen.classifier import classify_and_extract
+        with patch("contextpulse_sight.classifier._get_ocr", return_value=mock_ocr):
+            from contextpulse_sight.classifier import classify_and_extract
             result = classify_and_extract(_make_image())
 
         assert result["type"] == "image"
@@ -97,15 +97,15 @@ class TestOCRLazyInit:
 
     def test_get_ocr_returns_instance(self):
         mock_rapid = MagicMock()
-        with patch("contextpulse_screen.classifier.RapidOCR", mock_rapid), \
-             patch("contextpulse_screen.classifier._ocr", None):
-            from contextpulse_screen.classifier import _get_ocr
+        with patch("contextpulse_sight.classifier.RapidOCR", mock_rapid), \
+             patch("contextpulse_sight.classifier._ocr", None):
+            from contextpulse_sight.classifier import _get_ocr
             result = _get_ocr()
             mock_rapid.assert_called_once()
 
     def test_get_ocr_cached(self):
         sentinel = object()
-        with patch("contextpulse_screen.classifier._ocr", sentinel):
-            from contextpulse_screen.classifier import _get_ocr
+        with patch("contextpulse_sight.classifier._ocr", sentinel):
+            from contextpulse_sight.classifier import _get_ocr
             result = _get_ocr()
             assert result is sentinel

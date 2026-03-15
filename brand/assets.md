@@ -7,7 +7,7 @@
 - Formats needed: SVG (master), ICO (Windows tray/installer), PNG (various sizes)
 
 ## System Tray Icon
-- `packages/screen/src/contextpulse_screen/icon.py` — programmatically generated
+- `packages/screen/src/contextpulse_sight/icon.py` — programmatically generated
 - Currently: solid circle with color fill (green=active, amber=paused)
 - Colors: `#00CC66` (active), `#FFB800` (paused) — matches brand accent/warning
 - **Action:** Replace with proper logo once designed

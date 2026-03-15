@@ -9,7 +9,7 @@ from pathlib import Path
 import mss
 from PIL import Image
 
-from contextpulse_screen.config import JPEG_QUALITY, MAX_HEIGHT, MAX_WIDTH
+from contextpulse_sight.config import JPEG_QUALITY, MAX_HEIGHT, MAX_WIDTH
 
 logger = logging.getLogger(__name__)
 

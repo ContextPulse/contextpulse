@@ -16,14 +16,14 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from contextpulse_screen.config import (
+from contextpulse_sight.config import (
     BUFFER_DIR,
     BUFFER_MAX_AGE,
     CHANGE_THRESHOLD,
     JPEG_QUALITY,
 )
 
-logger = logging.getLogger("contextpulse.screen.buffer")
+logger = logging.getLogger("contextpulse.sight.buffer")
 
 
 class RollingBuffer:

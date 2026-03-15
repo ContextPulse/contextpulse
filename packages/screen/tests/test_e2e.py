@@ -13,7 +13,7 @@ from unittest.mock import patch
 import numpy as np
 from PIL import Image
 
-from contextpulse_screen.buffer import RollingBuffer
+from contextpulse_sight.buffer import RollingBuffer
 
 
 def _make_image(width: int = 1280, height: int = 720, color: tuple = (100, 150, 200)) -> Image.Image:
@@ -37,15 +37,15 @@ class TestDaemonToMCPFlow:
         output_dir.mkdir()
 
         with (
-            patch("contextpulse_screen.buffer.BUFFER_DIR", buf_dir),
-            patch("contextpulse_screen.config.BUFFER_DIR", buf_dir),
-            patch("contextpulse_screen.config.OUTPUT_DIR", output_dir),
-            patch("contextpulse_screen.app.FILE_LATEST", output_dir / "screen_latest.png"),
-            patch("contextpulse_screen.capture.capture_active_monitor", return_value=_make_image()),
+            patch("contextpulse_sight.buffer.BUFFER_DIR", buf_dir),
+            patch("contextpulse_sight.config.BUFFER_DIR", buf_dir),
+            patch("contextpulse_sight.config.OUTPUT_DIR", output_dir),
+            patch("contextpulse_sight.app.FILE_LATEST", output_dir / "screen_latest.png"),
+            patch("contextpulse_sight.capture.capture_active_monitor", return_value=_make_image()),
         ):
-            from contextpulse_screen.app import ContextPulseScreenApp
+            from contextpulse_sight.app import ContextPulseSightApp
 
-            app = ContextPulseScreenApp()
+            app = ContextPulseSightApp()
             # Override app's buffer to use our temp dir
             app.buffer = RollingBuffer()
 
@@ -68,11 +68,11 @@ class TestDaemonToMCPFlow:
         output_dir.mkdir()
 
         with (
-            patch("contextpulse_screen.buffer.BUFFER_DIR", buf_dir),
-            patch("contextpulse_screen.config.BUFFER_DIR", buf_dir),
-            patch("contextpulse_screen.config.OUTPUT_DIR", output_dir),
-            patch("contextpulse_screen.config.FILE_LATEST", output_dir / "screen_latest.png"),
-            patch("contextpulse_screen.capture.capture_active_monitor", return_value=_make_image()),
+            patch("contextpulse_sight.buffer.BUFFER_DIR", buf_dir),
+            patch("contextpulse_sight.config.BUFFER_DIR", buf_dir),
+            patch("contextpulse_sight.config.OUTPUT_DIR", output_dir),
+            patch("contextpulse_sight.config.FILE_LATEST", output_dir / "screen_latest.png"),
+            patch("contextpulse_sight.capture.capture_active_monitor", return_value=_make_image()),
         ):
             # Simulate daemon writing frames
             daemon_buffer = RollingBuffer()
@@ -99,7 +99,7 @@ class TestDaemonToMCPFlow:
         """get_buffer_status() correctly reports daemon-written frames."""
         buf_dir = tmp_path / "buffer"
 
-        with patch("contextpulse_screen.buffer.BUFFER_DIR", buf_dir):
+        with patch("contextpulse_sight.buffer.BUFFER_DIR", buf_dir):
             buf = RollingBuffer()
 
             # Empty buffer
@@ -122,7 +122,7 @@ class TestDaemonToMCPFlow:
         """OCR text written by daemon is readable by MCP buffer."""
         buf_dir = tmp_path / "buffer"
 
-        with patch("contextpulse_screen.buffer.BUFFER_DIR", buf_dir):
+        with patch("contextpulse_sight.buffer.BUFFER_DIR", buf_dir):
             # Daemon writes frame + OCR text
             daemon_buf = RollingBuffer()
             daemon_buf.add(_make_image())
@@ -139,7 +139,7 @@ class TestDaemonToMCPFlow:
         """Identical frames are not stored twice."""
         buf_dir = tmp_path / "buffer"
 
-        with patch("contextpulse_screen.buffer.BUFFER_DIR", buf_dir):
+        with patch("contextpulse_sight.buffer.BUFFER_DIR", buf_dir):
             buf = RollingBuffer()
             img = _make_image(color=(128, 128, 128))
 
@@ -154,19 +154,19 @@ class TestDaemonToMCPFlow:
         buf_dir = tmp_path / "buffer"
 
         with (
-            patch("contextpulse_screen.buffer.BUFFER_DIR", buf_dir),
-            patch("contextpulse_screen.config.BUFFER_DIR", buf_dir),
-            patch("contextpulse_screen.config.OUTPUT_DIR", output_dir),
-            patch("contextpulse_screen.app.FILE_LATEST", output_dir / "screen_latest.png"),
-            patch("contextpulse_screen.app.FILE_ALL", output_dir / "screen_all.png"),
-            patch("contextpulse_screen.app.FILE_REGION", output_dir / "screen_region.png"),
-            patch("contextpulse_screen.capture.capture_active_monitor", return_value=_make_image(color=(255, 0, 0))),
-            patch("contextpulse_screen.capture.capture_all_monitors", return_value=_make_image(2560, 720, (0, 255, 0))),
-            patch("contextpulse_screen.capture.capture_region", return_value=_make_image(800, 600, (0, 0, 255))),
+            patch("contextpulse_sight.buffer.BUFFER_DIR", buf_dir),
+            patch("contextpulse_sight.config.BUFFER_DIR", buf_dir),
+            patch("contextpulse_sight.config.OUTPUT_DIR", output_dir),
+            patch("contextpulse_sight.app.FILE_LATEST", output_dir / "screen_latest.png"),
+            patch("contextpulse_sight.app.FILE_ALL", output_dir / "screen_all.png"),
+            patch("contextpulse_sight.app.FILE_REGION", output_dir / "screen_region.png"),
+            patch("contextpulse_sight.capture.capture_active_monitor", return_value=_make_image(color=(255, 0, 0))),
+            patch("contextpulse_sight.capture.capture_all_monitors", return_value=_make_image(2560, 720, (0, 255, 0))),
+            patch("contextpulse_sight.capture.capture_region", return_value=_make_image(800, 600, (0, 0, 255))),
         ):
-            from contextpulse_screen.app import ContextPulseScreenApp
+            from contextpulse_sight.app import ContextPulseSightApp
 
-            app = ContextPulseScreenApp()
+            app = ContextPulseSightApp()
             app.buffer = RollingBuffer()
 
             app.do_quick_capture()
@@ -188,14 +188,14 @@ class TestDaemonToMCPFlow:
         output_dir.mkdir()
 
         with (
-            patch("contextpulse_screen.buffer.BUFFER_DIR", buf_dir),
-            patch("contextpulse_screen.config.OUTPUT_DIR", output_dir),
-            patch("contextpulse_screen.app.FILE_LATEST", output_dir / "screen_latest.png"),
-            patch("contextpulse_screen.capture.capture_active_monitor", return_value=_make_image()),
+            patch("contextpulse_sight.buffer.BUFFER_DIR", buf_dir),
+            patch("contextpulse_sight.config.OUTPUT_DIR", output_dir),
+            patch("contextpulse_sight.app.FILE_LATEST", output_dir / "screen_latest.png"),
+            patch("contextpulse_sight.capture.capture_active_monitor", return_value=_make_image()),
         ):
-            from contextpulse_screen.app import ContextPulseScreenApp
+            from contextpulse_sight.app import ContextPulseSightApp
 
-            app = ContextPulseScreenApp()
+            app = ContextPulseSightApp()
             app.buffer = RollingBuffer()
             app.paused = True
 
@@ -207,8 +207,8 @@ class TestDaemonToMCPFlow:
         buf_dir = tmp_path / "buffer"
 
         with (
-            patch("contextpulse_screen.buffer.BUFFER_DIR", buf_dir),
-            patch("contextpulse_screen.buffer.BUFFER_MAX_AGE", 1),  # 1 second
+            patch("contextpulse_sight.buffer.BUFFER_DIR", buf_dir),
+            patch("contextpulse_sight.buffer.BUFFER_MAX_AGE", 1),  # 1 second
         ):
             buf = RollingBuffer()
             buf.add(_make_image(color=(10, 10, 10)))

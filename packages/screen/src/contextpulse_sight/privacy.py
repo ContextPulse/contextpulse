@@ -5,9 +5,9 @@ import ctypes.wintypes
 import logging
 import threading
 
-from contextpulse_screen.config import BLOCKLIST_PATTERNS
+from contextpulse_sight.config import BLOCKLIST_PATTERNS
 
-logger = logging.getLogger("contextpulse.screen.privacy")
+logger = logging.getLogger("contextpulse.sight.privacy")
 
 
 # -- Window title blocklist ------------------------------------------------

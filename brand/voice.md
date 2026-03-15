@@ -37,13 +37,13 @@ Direct, technical, and confident without being cold. We talk to developers like 
 > Always-on context for AI agents
 
 ### One-liner (for README / PyPI)
-> ContextPulse Screen captures your desktop continuously and serves it to AI coding assistants via MCP. Your AI can see what you see.
+> ContextPulse Sight captures your desktop continuously and serves it to AI coding assistants via MCP. Your AI can see what you see.
 
 ### Error Message
 > Capture skipped — active window matches your privacy blocklist.
 
 ### Onboarding Welcome (system tray tooltip)
-> ContextPulse Screen is running. Ctrl+Shift+S for a quick capture, or let auto-capture handle it.
+> ContextPulse Sight is running. Ctrl+Shift+S for a quick capture, or let auto-capture handle it.
 
 ### Feature Description
 > Auto-capture takes a screenshot every 5 seconds, but only stores frames that actually changed. Your buffer stays lean — no duplicate frames eating disk space.

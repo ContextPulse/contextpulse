@@ -16,7 +16,7 @@ ContextPulse is a platform that provides always-on context for AI agents. Screen
 
 | Package | Description | Status |
 |---------|-------------|--------|
-| **contextpulse-screen** | Always-on screen capture + MCP server | Phase 1 MVP in progress |
+| **contextpulse-sight** | Always-on screen capture + MCP server | Phase 1 MVP in progress |
 | **contextpulse-core** | Shared config, utilities | Scaffolded |
 | **contextpulse-memory** | Cross-session persistent memory (journal pattern) | Planned — from SynapseAI |
 | **contextpulse-agent** | Agent coordination, session protocol | Planned — from SynapseAI |
@@ -40,7 +40,7 @@ ContextPulse/
 │   ├── core/                   # Shared utilities
 │   │   └── src/contextpulse_core/
 │   ├── screen/                 # Screen capture daemon + MCP
-│   │   └── src/contextpulse_screen/
+│   │   └── src/contextpulse_sight/
 │   │       ├── app.py          # Main daemon: tray + hotkeys + auto-capture
 │   │       ├── capture.py      # mss wrapper: monitor detection, region crop
 │   │       ├── buffer.py       # Rolling buffer with change detection

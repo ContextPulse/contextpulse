@@ -3,7 +3,7 @@ requires = ["setuptools>=75.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "contextpulse-screen"
+name = "contextpulse-sight"
 version = "0.1.0"
 description = "Always-on screen capture for AI coding assistants"
 requires-python = ">=3.14"
@@ -20,8 +20,8 @@ dependencies = [
 ]
 
 [project.scripts]
-contextpulse-screen = "contextpulse_screen.app:main"
-contextpulse-screen-mcp = "contextpulse_screen.mcp_server:main"
+contextpulse-sight = "contextpulse_sight.app:main"
+contextpulse-sight-mcp = "contextpulse_sight.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

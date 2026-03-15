@@ -16,7 +16,7 @@ import numpy as np
 from PIL import Image
 from rapidocr_onnxruntime import RapidOCR
 
-logger = logging.getLogger("contextpulse.screen.classifier")
+logger = logging.getLogger("contextpulse.sight.classifier")
 
 # Lazy-init OCR engine (loads model weights on first call)
 _ocr: RapidOCR | None = None

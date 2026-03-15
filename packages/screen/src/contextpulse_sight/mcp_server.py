@@ -15,20 +15,20 @@ from PIL import Image
 
 from mcp.server.fastmcp import FastMCP, Image as MCPImage
 
-from contextpulse_screen import capture
-from contextpulse_screen.buffer import RollingBuffer
-from contextpulse_screen.classifier import classify_and_extract
-from contextpulse_screen.config import FILE_LATEST, OUTPUT_DIR
-from contextpulse_screen.privacy import is_blocked
+from contextpulse_sight import capture
+from contextpulse_sight.buffer import RollingBuffer
+from contextpulse_sight.classifier import classify_and_extract
+from contextpulse_sight.config import FILE_LATEST, OUTPUT_DIR
+from contextpulse_sight.privacy import is_blocked
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(message)s",
     datefmt="%H:%M:%S",
 )
-logger = logging.getLogger("contextpulse.screen.mcp")
+logger = logging.getLogger("contextpulse.sight.mcp")
 
-mcp_app = FastMCP("ContextPulse Screen")
+mcp_app = FastMCP("ContextPulse Sight")
 
 # Shared buffer instance (reads frames written by the daemon)
 _buffer = RollingBuffer()
@@ -135,7 +135,7 @@ def get_buffer_status() -> str:
     frames = _buffer.list_frames()
 
     if not frames:
-        return "Buffer is empty. Is the ContextPulse Screen daemon running?"
+        return "Buffer is empty. Is the ContextPulse Sight daemon running?"
 
     oldest_ts = int(frames[0].stem) / 1000.0
     newest_ts = int(frames[-1].stem) / 1000.0
