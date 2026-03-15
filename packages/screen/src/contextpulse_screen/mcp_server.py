@@ -19,6 +19,7 @@ from contextpulse_screen import capture
 from contextpulse_screen.buffer import RollingBuffer
 from contextpulse_screen.classifier import classify_and_extract
 from contextpulse_screen.config import FILE_LATEST, OUTPUT_DIR
+from contextpulse_screen.privacy import is_blocked
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,6 +44,9 @@ def get_screenshot(mode: str = "active") -> MCPImage:
 
     Returns the screenshot as an inline image that Claude can see directly.
     """
+    if is_blocked():
+        return "Capture blocked: active window matches privacy blocklist."
+
     if mode == "all":
         img = capture.capture_all_monitors()
     elif mode == "region":
@@ -94,6 +98,9 @@ def get_screen_text() -> str:
     Use this when you think the screen contains mostly text (code, terminal,
     docs, chat). Use get_screenshot() for visual content (diagrams, UIs, etc).
     """
+    if is_blocked():
+        return "Capture blocked: active window matches privacy blocklist."
+
     with mss_lib.mss() as sct:
         mon = capture.find_monitor_at_cursor(sct)
         sct_img = sct.grab(mon)
