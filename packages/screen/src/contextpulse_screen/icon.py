@@ -1,15 +1,29 @@
 """Programmatic icon generation for system tray."""
 
+import json
+from pathlib import Path
+
 from PIL import Image, ImageDraw
 
+_BRAND_DIR = Path(__file__).resolve().parent.parent.parent.parent.parent / "brand"
+_COLORS = {}
+if (_BRAND_DIR / "colors.json").exists():
+    _COLORS = json.loads((_BRAND_DIR / "colors.json").read_text(encoding="utf-8"))
 
-def create_icon(color: str = "#00CC66", size: int = 64) -> Image.Image:
+# Resolve brand colors with fallbacks
+_DARK_SURFACE = _COLORS.get("dark", {}).get("surface", "#161B22")
+_ACCENT = _COLORS.get("dark", {}).get("accent", "#00E676")
+
+
+def create_icon(color: str | None = None, size: int = 64) -> Image.Image:
     """Create a simple camera/eye icon for the system tray.
 
     Args:
-        color: Fill color. Green=active, yellow=paused.
+        color: Fill color. None = brand accent (green). Pass warning color for paused.
         size: Icon dimensions (square).
     """
+    if color is None:
+        color = _ACCENT
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
@@ -17,7 +31,7 @@ def create_icon(color: str = "#00CC66", size: int = 64) -> Image.Image:
     margin = size // 8
     draw.ellipse(
         [margin, margin, size - margin, size - margin],
-        fill="#1a1a2e",
+        fill=_DARK_SURFACE,
         outline=color,
         width=max(2, size // 16),
     )
