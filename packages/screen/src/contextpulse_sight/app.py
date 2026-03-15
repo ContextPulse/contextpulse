@@ -7,14 +7,14 @@ import threading
 import pystray
 from pynput import keyboard
 
-from contextpulse_screen import capture
-from contextpulse_screen.buffer import RollingBuffer
-from contextpulse_screen.config import (
+from contextpulse_sight import capture
+from contextpulse_sight.buffer import RollingBuffer
+from contextpulse_sight.config import (
     AUTO_INTERVAL, BUFFER_MAX_AGE, CHANGE_THRESHOLD,
     FILE_ALL, FILE_LATEST, FILE_REGION, OUTPUT_DIR,
 )
-from contextpulse_screen.icon import _COLORS, create_icon
-from contextpulse_screen.privacy import SessionMonitor, is_blocked
+from contextpulse_sight.icon import _COLORS, create_icon
+from contextpulse_sight.privacy import SessionMonitor, is_blocked
 
 _WARNING_COLOR = _COLORS.get("dark", {}).get("warning", "#F0B429")
 
@@ -23,10 +23,10 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(message)s",
     datefmt="%H:%M:%S",
 )
-logger = logging.getLogger("contextpulse.screen")
+logger = logging.getLogger("contextpulse.sight")
 
 
-class ContextPulseScreenApp:
+class ContextPulseSightApp:
     def __init__(self):
         self.paused = False
         self._user_paused = False  # tracks manual pause vs auto-pause from lock
@@ -79,7 +79,7 @@ class ContextPulseScreenApp:
         self._user_paused = not self._user_paused
         self.paused = self._user_paused
         state = "PAUSED" if self.paused else "ACTIVE"
-        logger.info("ContextPulse Screen %s", state)
+        logger.info("ContextPulse Sight %s", state)
         self._update_tray_icon()
 
     # -- Session lock/unlock -----------------------------------------------
@@ -210,7 +210,7 @@ class ContextPulseScreenApp:
 
     def run(self):
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        logger.info("ContextPulse Screen starting -- output: %s", OUTPUT_DIR)
+        logger.info("ContextPulse Sight starting -- output: %s", OUTPUT_DIR)
         logger.info(
             "Auto-capture: every %ds, buffer: %ds, change threshold: %.1f%%",
             AUTO_INTERVAL, BUFFER_MAX_AGE, CHANGE_THRESHOLD,
@@ -233,9 +233,9 @@ class ContextPulseScreenApp:
             t.start()
 
         self.tray = pystray.Icon(
-            name="ContextPulse Screen",
+            name="ContextPulse Sight",
             icon=create_icon(),
-            title="ContextPulse Screen - Active",
+            title="ContextPulse Sight - Active",
             menu=self._create_tray_menu(),
         )
         logger.info("Tray icon ready. Hotkeys: Ctrl+Shift+S/A/Z/P")
@@ -243,7 +243,7 @@ class ContextPulseScreenApp:
 
 
 def main():
-    app = ContextPulseScreenApp()
+    app = ContextPulseSightApp()
     app.run()
 
 

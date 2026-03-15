@@ -14,28 +14,28 @@ class TestDownscale:
     """Test image downscaling logic."""
 
     def test_small_image_unchanged(self):
-        from contextpulse_screen.capture import _downscale
+        from contextpulse_sight.capture import _downscale
         img = _make_image(640, 480)
         result = _downscale(img)
         assert result.width == 640
         assert result.height == 480
 
     def test_exact_max_size_unchanged(self):
-        from contextpulse_screen.capture import _downscale
+        from contextpulse_sight.capture import _downscale
         img = _make_image(1280, 720)
         result = _downscale(img)
         assert result.width == 1280
         assert result.height == 720
 
     def test_large_image_downscaled(self):
-        from contextpulse_screen.capture import _downscale
+        from contextpulse_sight.capture import _downscale
         img = _make_image(3840, 2160)
         result = _downscale(img)
         assert result.width <= 1280
         assert result.height <= 720
 
     def test_wide_image_preserves_aspect(self):
-        from contextpulse_screen.capture import _downscale
+        from contextpulse_sight.capture import _downscale
         img = _make_image(3840, 1080)  # ultra-wide
         result = _downscale(img)
         assert result.width <= 1280
@@ -46,7 +46,7 @@ class TestDownscale:
         assert abs(original_ratio - new_ratio) < 0.1
 
     def test_tall_image_preserves_aspect(self):
-        from contextpulse_screen.capture import _downscale
+        from contextpulse_sight.capture import _downscale
         img = _make_image(1080, 3840)  # very tall
         result = _downscale(img)
         assert result.width <= 1280
@@ -57,7 +57,7 @@ class TestSaveImage:
     """Test saving images to disk."""
 
     def test_save_png(self, tmp_output_dir):
-        from contextpulse_screen.capture import save_image
+        from contextpulse_sight.capture import save_image
         img = _make_image(100, 100)
         path = tmp_output_dir / "test.png"
         save_image(img, path, fmt="PNG")
@@ -68,7 +68,7 @@ class TestSaveImage:
         assert loaded.format == "PNG"
 
     def test_save_jpeg(self, tmp_output_dir):
-        from contextpulse_screen.capture import save_image
+        from contextpulse_sight.capture import save_image
         img = _make_image(100, 100)
         path = tmp_output_dir / "test.jpg"
         save_image(img, path, fmt="JPEG")
@@ -77,14 +77,14 @@ class TestSaveImage:
         assert loaded.format == "JPEG"
 
     def test_save_creates_parent_dirs(self, tmp_output_dir):
-        from contextpulse_screen.capture import save_image
+        from contextpulse_sight.capture import save_image
         img = _make_image(100, 100)
         path = tmp_output_dir / "nested" / "dir" / "test.png"
         save_image(img, path, fmt="PNG")
         assert path.exists()
 
     def test_save_rgba_as_jpeg_converts(self, tmp_output_dir):
-        from contextpulse_screen.capture import save_image
+        from contextpulse_sight.capture import save_image
         img = Image.new("RGBA", (100, 100), (128, 128, 128, 255))
         path = tmp_output_dir / "test.jpg"
         save_image(img, path, fmt="JPEG")
@@ -97,7 +97,7 @@ class TestCaptureToBytes:
     """Test image-to-bytes conversion."""
 
     def test_png_bytes(self):
-        from contextpulse_screen.capture import capture_to_bytes
+        from contextpulse_sight.capture import capture_to_bytes
         img = _make_image(100, 100)
         data = capture_to_bytes(img, fmt="PNG")
         assert isinstance(data, bytes)
@@ -107,7 +107,7 @@ class TestCaptureToBytes:
         assert loaded.format == "PNG"
 
     def test_jpeg_bytes(self):
-        from contextpulse_screen.capture import capture_to_bytes
+        from contextpulse_sight.capture import capture_to_bytes
         img = _make_image(100, 100)
         data = capture_to_bytes(img, fmt="JPEG")
         assert isinstance(data, bytes)
@@ -115,7 +115,7 @@ class TestCaptureToBytes:
         assert loaded.format == "JPEG"
 
     def test_jpeg_smaller_than_png(self):
-        from contextpulse_screen.capture import capture_to_bytes
+        from contextpulse_sight.capture import capture_to_bytes
         img = _make_image(500, 500)
         png_data = capture_to_bytes(img, fmt="PNG")
         jpeg_data = capture_to_bytes(img, fmt="JPEG")
@@ -125,7 +125,7 @@ class TestCaptureToBytes:
         assert isinstance(png_data, bytes)
 
     def test_rgba_jpeg_converts(self):
-        from contextpulse_screen.capture import capture_to_bytes
+        from contextpulse_sight.capture import capture_to_bytes
         img = Image.new("RGBA", (100, 100), (128, 128, 128, 255))
         data = capture_to_bytes(img, fmt="JPEG")
         loaded = Image.open(BytesIO(data))
@@ -137,7 +137,7 @@ class TestMonitorDetection:
 
     def test_find_monitor_at_cursor_single_monitor(self):
         from unittest.mock import MagicMock, patch
-        from contextpulse_screen.capture import find_monitor_at_cursor
+        from contextpulse_sight.capture import find_monitor_at_cursor
 
         sct = MagicMock()
         # monitors[0] = virtual desktop, monitors[1] = primary
@@ -146,13 +146,13 @@ class TestMonitorDetection:
             {"left": 0, "top": 0, "width": 1920, "height": 1080},  # primary
         ]
 
-        with patch("contextpulse_screen.capture._get_cursor_pos", return_value=(500, 500)):
+        with patch("contextpulse_sight.capture._get_cursor_pos", return_value=(500, 500)):
             mon = find_monitor_at_cursor(sct)
             assert mon == sct.monitors[1]
 
     def test_find_monitor_at_cursor_dual_monitor(self):
         from unittest.mock import MagicMock, patch
-        from contextpulse_screen.capture import find_monitor_at_cursor
+        from contextpulse_sight.capture import find_monitor_at_cursor
 
         sct = MagicMock()
         sct.monitors = [
@@ -162,13 +162,13 @@ class TestMonitorDetection:
         ]
 
         # Cursor on right monitor
-        with patch("contextpulse_screen.capture._get_cursor_pos", return_value=(2500, 500)):
+        with patch("contextpulse_sight.capture._get_cursor_pos", return_value=(2500, 500)):
             mon = find_monitor_at_cursor(sct)
             assert mon == sct.monitors[2]
 
     def test_find_monitor_fallback_to_primary(self):
         from unittest.mock import MagicMock, patch
-        from contextpulse_screen.capture import find_monitor_at_cursor
+        from contextpulse_sight.capture import find_monitor_at_cursor
 
         sct = MagicMock()
         sct.monitors = [
@@ -177,21 +177,21 @@ class TestMonitorDetection:
         ]
 
         # Cursor way outside any monitor
-        with patch("contextpulse_screen.capture._get_cursor_pos", return_value=(9999, 9999)):
+        with patch("contextpulse_sight.capture._get_cursor_pos", return_value=(9999, 9999)):
             mon = find_monitor_at_cursor(sct)
             assert mon == sct.monitors[1]
 
     def test_find_monitor_only_virtual_desktop(self):
         """Edge case: only monitors[0] exists (shouldn't happen in practice)."""
         from unittest.mock import MagicMock, patch
-        from contextpulse_screen.capture import find_monitor_at_cursor
+        from contextpulse_sight.capture import find_monitor_at_cursor
 
         sct = MagicMock()
         sct.monitors = [
             {"left": 0, "top": 0, "width": 1920, "height": 1080},
         ]
 
-        with patch("contextpulse_screen.capture._get_cursor_pos", return_value=(500, 500)):
+        with patch("contextpulse_sight.capture._get_cursor_pos", return_value=(500, 500)):
             mon = find_monitor_at_cursor(sct)
             # Should return monitors[0] as fallback since monitors[1] doesn't exist
             assert mon == sct.monitors[0]

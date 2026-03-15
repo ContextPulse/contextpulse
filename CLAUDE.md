@@ -5,7 +5,7 @@
 ## Project-Specific Rules
 - This is a monorepo for the ContextPulse platform — always-on context for AI agents
 - Python 3.14, packages under `packages/` with separate pyproject.toml each
-- **packages/screen** — screen capture daemon + MCP server (most mature)
+- **packages/screen** — ContextPulse Sight: screen capture daemon + MCP server (most mature)
 - **packages/core** — shared config, utilities
 - **packages/memory** — cross-session persistent memory (from SynapseAI concepts)
 - **packages/agent** — agent coordination, session protocol

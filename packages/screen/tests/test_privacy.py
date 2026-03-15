@@ -2,7 +2,7 @@
 
 from unittest.mock import patch, MagicMock
 
-from contextpulse_screen import privacy
+from contextpulse_sight import privacy
 
 
 class TestIsBlocked:
@@ -85,14 +85,14 @@ class TestAppPrivacyIntegration:
         buf_dir = tmp_path / "buffer"
 
         with (
-            patch("contextpulse_screen.buffer.BUFFER_DIR", buf_dir),
-            patch("contextpulse_screen.app.is_blocked", return_value=True),
-            patch("contextpulse_screen.capture.capture_active_monitor") as mock_capture,
+            patch("contextpulse_sight.buffer.BUFFER_DIR", buf_dir),
+            patch("contextpulse_sight.app.is_blocked", return_value=True),
+            patch("contextpulse_sight.capture.capture_active_monitor") as mock_capture,
         ):
-            from contextpulse_screen.app import ContextPulseScreenApp
-            from contextpulse_screen.buffer import RollingBuffer
+            from contextpulse_sight.app import ContextPulseSightApp
+            from contextpulse_sight.buffer import RollingBuffer
 
-            app = ContextPulseScreenApp()
+            app = ContextPulseSightApp()
             app.buffer = RollingBuffer()
             app.do_quick_capture()
 
@@ -108,15 +108,15 @@ class TestAppPrivacyIntegration:
         test_img = Image.new("RGB", (100, 100), (128, 128, 128))
 
         with (
-            patch("contextpulse_screen.buffer.BUFFER_DIR", buf_dir),
-            patch("contextpulse_screen.app.is_blocked", return_value=False),
-            patch("contextpulse_screen.app.FILE_LATEST", output_dir / "screen_latest.png"),
-            patch("contextpulse_screen.capture.capture_active_monitor", return_value=test_img),
+            patch("contextpulse_sight.buffer.BUFFER_DIR", buf_dir),
+            patch("contextpulse_sight.app.is_blocked", return_value=False),
+            patch("contextpulse_sight.app.FILE_LATEST", output_dir / "screen_latest.png"),
+            patch("contextpulse_sight.capture.capture_active_monitor", return_value=test_img),
         ):
-            from contextpulse_screen.app import ContextPulseScreenApp
-            from contextpulse_screen.buffer import RollingBuffer
+            from contextpulse_sight.app import ContextPulseSightApp
+            from contextpulse_sight.buffer import RollingBuffer
 
-            app = ContextPulseScreenApp()
+            app = ContextPulseSightApp()
             app.buffer = RollingBuffer()
             app.do_quick_capture()
 
@@ -125,10 +125,10 @@ class TestAppPrivacyIntegration:
     def test_session_lock_auto_pauses(self, tmp_path):
         buf_dir = tmp_path / "buffer"
 
-        with patch("contextpulse_screen.buffer.BUFFER_DIR", buf_dir):
-            from contextpulse_screen.app import ContextPulseScreenApp
+        with patch("contextpulse_sight.buffer.BUFFER_DIR", buf_dir):
+            from contextpulse_sight.app import ContextPulseSightApp
 
-            app = ContextPulseScreenApp()
+            app = ContextPulseSightApp()
             assert app.paused is False
 
             app._on_session_lock()
@@ -140,10 +140,10 @@ class TestAppPrivacyIntegration:
     def test_user_pause_preserved_across_lock_unlock(self, tmp_path):
         buf_dir = tmp_path / "buffer"
 
-        with patch("contextpulse_screen.buffer.BUFFER_DIR", buf_dir):
-            from contextpulse_screen.app import ContextPulseScreenApp
+        with patch("contextpulse_sight.buffer.BUFFER_DIR", buf_dir):
+            from contextpulse_sight.app import ContextPulseSightApp
 
-            app = ContextPulseScreenApp()
+            app = ContextPulseSightApp()
 
             # User manually pauses
             app.toggle_pause()
@@ -161,10 +161,10 @@ class TestAppPrivacyIntegration:
     def test_no_user_pause_resumes_after_unlock(self, tmp_path):
         buf_dir = tmp_path / "buffer"
 
-        with patch("contextpulse_screen.buffer.BUFFER_DIR", buf_dir):
-            from contextpulse_screen.app import ContextPulseScreenApp
+        with patch("contextpulse_sight.buffer.BUFFER_DIR", buf_dir):
+            from contextpulse_sight.app import ContextPulseSightApp
 
-            app = ContextPulseScreenApp()
+            app = ContextPulseSightApp()
             assert app._user_paused is False
 
             # Session locks

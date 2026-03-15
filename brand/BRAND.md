@@ -13,7 +13,7 @@ ContextPulse is invisible infrastructure that gives AI coding assistants persist
 
 | Package | User-Facing Name | Description |
 |---------|-----------------|-------------|
-| contextpulse-screen | **ContextPulse Screen** | Visual context — always-on screen capture |
+| contextpulse-sight | **ContextPulse Sight** | Visual context — always-on screen capture |
 | contextpulse-memory | **ContextPulse Memory** | Cross-session persistent memory |
 | contextpulse-agent | **ContextPulse Agent** | Multi-agent coordination |
 | contextpulse-project | **ContextPulse Project** | Auto-generated project context |
