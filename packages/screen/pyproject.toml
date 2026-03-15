@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "contextpulse-screen"
+version = "0.1.0"
+description = "Always-on screen capture for AI coding assistants"
+requires-python = ">=3.12"
+dependencies = [
+    "contextpulse-core",
+    "mss>=9.0",
+    "pynput>=1.7",
+    "pystray>=0.19",
+    "Pillow>=10.0",
+    "python-dotenv>=1.0",
+    "numpy>=1.26",
+    "rapidocr-onnxruntime>=1.2",
+    "mcp>=1.0",
+]
+
+[project.scripts]
+contextpulse-screen = "contextpulse_screen.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
