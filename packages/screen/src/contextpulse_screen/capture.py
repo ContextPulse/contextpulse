@@ -4,6 +4,7 @@ import ctypes
 import ctypes.wintypes
 import logging
 from io import BytesIO
+from pathlib import Path
 
 import mss
 from PIL import Image
@@ -24,14 +25,17 @@ def _get_cursor_pos() -> tuple[int, int]:
     return pt.x, pt.y
 
 
-def _find_monitor_at_cursor(sct: mss.mss) -> dict:
+def find_monitor_at_cursor(sct: mss.mss) -> dict:
     """Return the mss monitor dict containing the cursor. Falls back to primary."""
     cx, cy = _get_cursor_pos()
     for mon in sct.monitors[1:]:
         if (mon["left"] <= cx < mon["left"] + mon["width"]
                 and mon["top"] <= cy < mon["top"] + mon["height"]):
             return mon
-    return sct.monitors[1]
+    # monitors[0] is the virtual desktop; monitors[1:] are physical monitors
+    if len(sct.monitors) > 1:
+        return sct.monitors[1]
+    return sct.monitors[0]
 
 
 def _downscale(img: Image.Image) -> Image.Image:
@@ -42,7 +46,7 @@ def _downscale(img: Image.Image) -> Image.Image:
     return img
 
 
-def _mss_to_pil(sct_img) -> Image.Image:
+def mss_to_pil(sct_img) -> Image.Image:
     """Convert mss screenshot to PIL Image (RGB)."""
     return Image.frombytes("RGB", (sct_img.width, sct_img.height), sct_img.rgb)
 
@@ -50,9 +54,9 @@ def _mss_to_pil(sct_img) -> Image.Image:
 def capture_active_monitor() -> Image.Image:
     """Capture the monitor where the cursor currently is, downscaled."""
     with mss.mss() as sct:
-        mon = _find_monitor_at_cursor(sct)
+        mon = find_monitor_at_cursor(sct)
         sct_img = sct.grab(mon)
-        img = _mss_to_pil(sct_img)
+        img = mss_to_pil(sct_img)
     return _downscale(img)
 
 
@@ -60,7 +64,7 @@ def capture_all_monitors() -> Image.Image:
     """Capture all monitors stitched together, downscaled."""
     with mss.mss() as sct:
         sct_img = sct.grab(sct.monitors[0])
-        img = _mss_to_pil(sct_img)
+        img = mss_to_pil(sct_img)
     return _downscale(img)
 
 
@@ -81,11 +85,11 @@ def capture_region(width: int = 800, height: int = 600) -> Image.Image:
             "height": bottom - top,
         }
         sct_img = sct.grab(region)
-        img = _mss_to_pil(sct_img)
+        img = mss_to_pil(sct_img)
     return _downscale(img)
 
 
-def save_image(img: Image.Image, path, fmt: str = "PNG") -> None:
+def save_image(img: Image.Image, path: Path, fmt: str = "PNG") -> None:
     """Save image to disk. PNG for lossless, JPEG for smaller size."""
     path.parent.mkdir(parents=True, exist_ok=True)
     if fmt.upper() == "JPEG":

@@ -9,6 +9,7 @@ When Claude asks for screen context via MCP, we:
 """
 
 import logging
+import threading
 import time
 
 import numpy as np
@@ -19,12 +20,15 @@ logger = logging.getLogger("contextpulse.screen.classifier")
 
 # Lazy-init OCR engine (loads model weights on first call)
 _ocr: RapidOCR | None = None
+_ocr_lock = threading.Lock()
 
 
 def _get_ocr() -> RapidOCR:
     global _ocr
     if _ocr is None:
-        _ocr = RapidOCR()
+        with _ocr_lock:
+            if _ocr is None:
+                _ocr = RapidOCR()
     return _ocr
 
 

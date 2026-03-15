@@ -9,13 +9,16 @@ Tools:
 
 import logging
 import time
-from io import BytesIO
+
+import mss as mss_lib
+from PIL import Image
 
 from mcp.server.fastmcp import FastMCP, Image as MCPImage
 
 from contextpulse_screen import capture
 from contextpulse_screen.buffer import RollingBuffer
-from contextpulse_screen.config import JPEG_QUALITY, OUTPUT_DIR
+from contextpulse_screen.classifier import classify_and_extract
+from contextpulse_screen.config import FILE_LATEST, OUTPUT_DIR
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,22 +27,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger("contextpulse.screen.mcp")
 
-mcp = FastMCP("ContextPulse Screen")
+mcp_app = FastMCP("ContextPulse Screen")
 
 # Shared buffer instance (reads frames written by the daemon)
 _buffer = RollingBuffer()
 
 
-def _pil_to_bytes(img, fmt="JPEG") -> bytes:
-    buf = BytesIO()
-    if img.mode == "RGBA":
-        img = img.convert("RGB")
-    quality = JPEG_QUALITY if fmt.upper() == "JPEG" else None
-    img.save(buf, format=fmt, quality=quality)
-    return buf.getvalue()
-
-
-@mcp.tool()
+@mcp_app.tool()
 def get_screenshot(mode: str = "active") -> MCPImage:
     """Capture the current screen and return as an image.
 
@@ -56,14 +50,13 @@ def get_screenshot(mode: str = "active") -> MCPImage:
     else:
         img = capture.capture_active_monitor()
 
-    from contextpulse_screen.config import FILE_LATEST
     capture.save_image(img, FILE_LATEST)
 
     logger.info("get_screenshot(%s): %dx%d", mode, img.width, img.height)
-    return MCPImage(data=_pil_to_bytes(img), format="jpeg")
+    return MCPImage(data=capture.capture_to_bytes(img, "JPEG"), format="jpeg")
 
 
-@mcp.tool()
+@mcp_app.tool()
 def get_recent(count: int = 3, seconds: int = 60) -> list:
     """Get recent screenshots from the rolling buffer.
 
@@ -76,23 +69,21 @@ def get_recent(count: int = 3, seconds: int = 60) -> list:
 
     Returns images inline so Claude can see them directly.
     """
-    from PIL import Image
-
     frames = _buffer.get_recent(seconds)
     if not frames:
-        return "No frames in buffer. Is the ContextPulse Screen daemon running?"
+        return []
 
     frames = frames[-count:]
 
     results = []
     for frame_path in frames:
         img = Image.open(frame_path)
-        results.append(MCPImage(data=_pil_to_bytes(img), format="jpeg"))
+        results.append(MCPImage(data=capture.capture_to_bytes(img, "JPEG"), format="jpeg"))
 
     return results
 
 
-@mcp.tool()
+@mcp_app.tool()
 def get_screen_text() -> str:
     """OCR the current screen at full resolution and return extracted text.
 
@@ -103,17 +94,13 @@ def get_screen_text() -> str:
     Use this when you think the screen contains mostly text (code, terminal,
     docs, chat). Use get_screenshot() for visual content (diagrams, UIs, etc).
     """
-    import mss as mss_lib
-
     with mss_lib.mss() as sct:
-        from contextpulse_screen.capture import _find_monitor_at_cursor, _mss_to_pil
-        mon = _find_monitor_at_cursor(sct)
+        mon = capture.find_monitor_at_cursor(sct)
         sct_img = sct.grab(mon)
-        img = _mss_to_pil(sct_img)
+        img = capture.mss_to_pil(sct_img)
 
     logger.info("get_screen_text: captured %dx%d for OCR", img.width, img.height)
 
-    from contextpulse_screen.classifier import classify_and_extract
     result = classify_and_extract(img)
 
     if result["type"] == "text" and result["text"]:
@@ -130,7 +117,7 @@ def get_screen_text() -> str:
         )
 
 
-@mcp.tool()
+@mcp_app.tool()
 def get_buffer_status() -> str:
     """Check the status of the rolling screenshot buffer.
 
@@ -155,5 +142,9 @@ def get_buffer_status() -> str:
     )
 
 
+def main():
+    mcp_app.run(transport="stdio")
+
+
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    main()
