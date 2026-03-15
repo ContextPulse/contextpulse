@@ -54,8 +54,10 @@ ContextPulse/
 │   │   └── src/contextpulse_agent/
 │   └── project/                # Project context (future)
 │       └── src/contextpulse_project/
-└── docs/
-    └── NAMING.md               # Brand naming research (80+ candidates evaluated)
+├── docs/
+│   ├── NAMING.md               # Brand naming research (80+ candidates evaluated)
+│   └── DOMAINS.md              # Domain registrations, pricing, DNS strategy
+└── tests/                      # Per-package test suites
 ```
 
 ## Screen Capture Modes
@@ -79,10 +81,12 @@ All files written to `C:\Users\david\screenshots\`.
 | get_buffer_status() | Check daemon/buffer health |
 
 ## Domain Strategy
-- **Primary:** contextpulse.ai (available)
-- **Backup:** contextpulse.dev, contextpulse.io (available)
+- **Primary:** contextpulse.ai — REGISTERED ($80/yr, Cloudflare)
+- **Backup:** contextpulse.dev ($12/yr), contextpulse.io ($34/yr) — REGISTERED (Cloudflare)
+- **Bonus:** context-pulse.com ($10/yr) — REGISTERED (Cloudflare)
 - **contextpulse.com:** GoDaddy squatter, negotiate later
-- Full naming research: `docs/NAMING.md`
+- **Registrar:** Cloudflare (Account 520086e741f5447328d166067320183b)
+- Full naming research: `docs/NAMING.md`, domain details: `docs/DOMAINS.md`
 
 ## Origin
 - Screen capture component evolved from **ScreenContext** (this repo, renamed)
@@ -100,6 +104,10 @@ All files written to `C:\Users\david\screenshots\`.
 - [x] Auto-capture with rolling buffer + change detection
 - [x] OCR classifier for text-heavy screens
 - [x] MCP server with 4 tools
+- [x] Code review + 6 critical bug fixes + 7 warnings resolved
+- [x] Unit test suite (50 tests, all passing, 0.36s)
+- [x] Domain registration (contextpulse.ai, .dev, .io, context-pulse.com)
+- [x] Python 3.14 venv created
 - [ ] End-to-end test: daemon + MCP in same session
 - [ ] Privacy controls (blocklist, auto-pause on lock)
 
