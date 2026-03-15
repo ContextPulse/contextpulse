@@ -47,6 +47,7 @@ ContextPulse/
 │   │       ├── classifier.py   # OCR-based text/image classification
 │   │       ├── mcp_server.py   # MCP stdio server
 │   │       ├── config.py       # Env var loading
+│   │       ├── privacy.py     # Window blocklist + session lock monitor
 │   │       └── icon.py         # System tray icon generation
 │   ├── memory/                 # Cross-session memory (future)
 │   │   └── src/contextpulse_memory/
@@ -95,7 +96,7 @@ All files written to `C:\Users\david\screenshots\`.
 
 ## Build Phases (Screen Package)
 
-### Phase 1: Core Capture + Hotkeys (MVP) — IN PROGRESS
+### Phase 1: Core Capture + Hotkeys (MVP) — COMPLETE
 - [x] Project scaffold
 - [x] capture.py — mss wrapper with monitor detection, cursor tracking, region crop
 - [x] app.py — pynput hotkeys + pystray tray icon
@@ -105,11 +106,11 @@ All files written to `C:\Users\david\screenshots\`.
 - [x] OCR classifier for text-heavy screens
 - [x] MCP server with 4 tools
 - [x] Code review + 6 critical bug fixes + 7 warnings resolved
-- [x] Unit test suite (50 tests, all passing, 0.36s)
+- [x] Unit test suite (73 tests, all passing, 0.52s)
 - [x] Domain registration (contextpulse.ai, .dev, .io, context-pulse.com)
 - [x] Python 3.14 venv created
-- [ ] End-to-end test: daemon + MCP in same session
-- [ ] Privacy controls (blocklist, auto-pause on lock)
+- [x] End-to-end integration tests (daemon + MCP data flow)
+- [x] Privacy controls (window title blocklist, auto-pause on lock screen)
 
 ### Phase 2: Memory Package — PLANNED
 - [ ] Port SynapseAI journal pattern
