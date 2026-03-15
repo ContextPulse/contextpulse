@@ -9,7 +9,10 @@ from pynput import keyboard
 
 from contextpulse_screen import capture
 from contextpulse_screen.buffer import RollingBuffer
-from contextpulse_screen.config import AUTO_INTERVAL, FILE_ALL, FILE_LATEST, FILE_REGION, OUTPUT_DIR
+from contextpulse_screen.config import (
+    AUTO_INTERVAL, BUFFER_MAX_AGE, CHANGE_THRESHOLD,
+    FILE_ALL, FILE_LATEST, FILE_REGION, OUTPUT_DIR,
+)
 from contextpulse_screen.icon import create_icon
 
 logging.basicConfig(
@@ -184,7 +187,10 @@ class ContextPulseScreenApp:
     def run(self):
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         logger.info("ContextPulse Screen starting -- output: %s", OUTPUT_DIR)
-        logger.info("Auto-capture: every %ds, buffer: 3 min, change threshold: 1.5%%", AUTO_INTERVAL)
+        logger.info(
+            "Auto-capture: every %ds, buffer: %ds, change threshold: %.1f%%",
+            AUTO_INTERVAL, BUFFER_MAX_AGE, CHANGE_THRESHOLD,
+        )
 
         self.hotkey_listener = keyboard.Listener(
             on_press=self._on_press,

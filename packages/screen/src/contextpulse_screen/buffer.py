@@ -80,8 +80,8 @@ class RollingBuffer:
                     txt = f.with_suffix(".txt")
                     if txt.exists():
                         txt.unlink()
-            except (ValueError, OSError):
-                pass
+            except (ValueError, OSError) as exc:
+                logger.debug("Skipping invalid buffer file %s: %s", f, exc)
 
     def get_latest(self) -> Path | None:
         """Return path to the most recent frame, or None."""
