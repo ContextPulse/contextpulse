@@ -94,6 +94,16 @@ All files written to `C:\Users\david\screenshots\`.
 - Screen capture component evolved from **ScreenContext** (this repo, renamed)
 - Memory/agent components draw from **SynapseAI** concepts (productized AI assistant setup)
 - SynapseAI's journal pattern, session protocol, and orchestration map to contextpulse-memory and contextpulse-agent
+- SynapseAI name was taken; ContextPulse became the ecosystem brand for all context products
+- Full SynapseAI concept, market research, and elevator pitch ported to `docs/` (2026-03-16)
+
+## Key Docs
+- `docs/ecosystem-roadmap.md` — unified product roadmap with revenue milestones
+- `docs/elevator-pitch.md` — ContextPulse ecosystem pitch (ported from SynapseAI)
+- `docs/market-research.md` — competitive landscape and demand validation
+- `docs/concept-synapseai-original.md` — original three-tier architecture concept
+- `brand/BRAND.md` — brand guide, product suite naming
+- `brand/voice.md` — tone, vocabulary, copy examples
 
 ## Build Phases (Screen Package)
 
