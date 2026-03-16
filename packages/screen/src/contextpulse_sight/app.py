@@ -103,11 +103,15 @@ class ContextPulseSightApp:
         while not self.stop_event.is_set():
             if not self._should_skip("auto-capture"):
                 try:
+                    # Capture active monitor for buffer/change detection
                     img = capture.capture_active_monitor()
                     stored = self.buffer.add(img)
                     if stored:
                         capture.save_image(img, FILE_LATEST)
                         logger.debug("Frame stored (%d in buffer)", self.buffer.frame_count())
+                    # Also capture all monitors so agents always have full context
+                    img_all = capture.capture_all_monitors()
+                    capture.save_image(img_all, FILE_ALL)
                 except Exception:
                     logger.exception("Auto-capture failed")
             self.stop_event.wait(AUTO_INTERVAL)

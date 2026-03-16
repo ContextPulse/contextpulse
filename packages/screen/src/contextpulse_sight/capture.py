@@ -61,11 +61,17 @@ def capture_active_monitor() -> Image.Image:
 
 
 def capture_all_monitors() -> Image.Image:
-    """Capture all monitors stitched together, downscaled."""
+    """Capture all monitors stitched together. Scales so each monitor gets ~MAX_WIDTH pixels."""
     with mss.mss() as sct:
+        num_monitors = max(1, len(sct.monitors) - 1)  # monitors[0] is virtual desktop
         sct_img = sct.grab(sct.monitors[0])
         img = mss_to_pil(sct_img)
-    return _downscale(img)
+    # Give each monitor its own MAX_WIDTH allocation so text stays readable
+    target_width = MAX_WIDTH * num_monitors
+    target_height = MAX_HEIGHT * num_monitors
+    if img.width > target_width or img.height > target_height:
+        img.thumbnail((target_width, target_height), Image.LANCZOS)
+    return img
 
 
 def capture_region(width: int = 800, height: int = 600) -> Image.Image:
