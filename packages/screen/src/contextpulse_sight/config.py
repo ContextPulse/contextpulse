@@ -5,7 +5,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv(override=True)
+load_dotenv(Path.home() / "Projects" / ".env", override=True)  # global workspace credentials
+load_dotenv(override=True)                        # local project overrides
 
 
 def _env(key: str, default: str) -> str:
