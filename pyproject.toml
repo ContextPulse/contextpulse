@@ -6,15 +6,21 @@ build-backend = "setuptools.build_meta"
 name = "contextpulse"
 version = "0.1.0"
 description = "Always-on context for AI agents"
-requires-python = ">=3.14"
+requires-python = ">=3.10"
 dependencies = []
 
 [tool.setuptools.packages.find]
-where = ["packages/*/src"]
+where = [
+    "packages/core/src",
+    "packages/screen/src",
+    "packages/agent/src",
+    "packages/memory/src",
+    "packages/project/src",
+]
 
 [tool.ruff]
 line-length = 100
-target-version = "py314"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
