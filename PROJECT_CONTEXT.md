@@ -134,10 +134,12 @@ All files written to `C:\Users\david\screenshots\`.
 - [x] Add to Claude Code MCP config (`contextpulse-sight` in ~/.claude/settings.json)
 - [x] Create `using-contextpulse-sight` skill for Claude Code
 - [x] Daemon running via `pythonw` (tray icon, auto-capture, hotkeys active)
+- [x] Add to Windows Startup folder for auto-launch on login
+- [x] Watchdog thread restarts auto-capture if it dies silently
+- [x] Auto-capture backoff on repeated failures (e.g. display driver reset after sleep)
 - [ ] Manual user testing across multiple Claude Code sessions
 - [ ] Push to GitHub (junkyard-rules/contextpulse)
 - [ ] Publish to PyPI
-- [ ] Add to Windows Startup folder for auto-launch on login
 
 ### Phase 2: Memory Package — PLANNED
 - [ ] Port SynapseAI journal pattern
