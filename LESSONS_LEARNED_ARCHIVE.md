@@ -18,3 +18,6 @@ Lessons that have been incorporated into skills and no longer need to consume co
 
 ### [2026-03-21] Daemon threads die silently after sleep/wake — need watchdog
 **Archived to:** `developing-python/SKILL.md` (section: Background Daemons & Threading)
+
+### [2026-03-15] SynapseAI has Intel/Habana Labs trademark conflict
+**Archived 2026-03-21:** One-time naming research. SynapseAI project has been renamed. Knowledge encoded in `naming-products` skill trigger for trademark checks.
