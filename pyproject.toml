@@ -27,3 +27,4 @@ select = ["E", "F", "W", "I"]
 
 [tool.pytest.ini_options]
 testpaths = ["packages/*/tests"]
+addopts = "--import-mode=importlib"

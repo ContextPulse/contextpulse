@@ -49,3 +49,19 @@
 ### [2026-03-15] Win32 SendInput doesn't reliably reach pynput's keyboard hook cross-process
 **Context:** Tried to test hotkeys by injecting Ctrl+Shift+S via `SendInput` from the test process to a background daemon using pynput's `WH_KEYBOARD_LL` hook. The keys never reached the daemon's listener.
 **Lesson:** Cross-process keyboard injection via SendInput is unreliable for testing pynput hooks. Instead, test hotkey handler logic in-process by directly calling app methods and simulating the `_pressed_keys` set. Reserve SendInput for UI automation, not unit/acceptance testing.
+
+### [2026-03-21] Stitched multi-monitor screenshots are useless for AI analysis
+**Context:** `capture_all_monitors()` stitched dual 4K monitors into one image, downscaled to 2560x1440. Text was illegible, and Claude got confused by two monitors jammed together.
+**Lesson:** Capture each monitor separately and return as a list of labeled images. Each stays at 1280x720 and remains readable. Buffer filenames include monitor index: `{timestamp}_m{index}.jpg`.
+
+### [2026-03-21] Text-only storage saves 59% disk with no information loss for text-heavy screens
+**Context:** Benchmarked OCR classification across 11 scenarios (Amazon, Reddit, Maps, YouTube, etc.). 45% of captures were text-heavy enough to store text-only. OCR text is ~3-5KB vs ~130KB for the image.
+**Lesson:** Always store OCR text as searchable metadata alongside images. For text-heavy frames (100+ chars, 70%+ confidence), the image can be dropped. But certain apps (thinkorswim, Figma) need both image + text regardless — use app-level overrides.
+
+### [2026-03-21] FastMCP @tool() decorator wraps functions — can't test them directly via import
+**Context:** Tried `from mcp_server import get_screenshot` and calling it in tests. The `@mcp_app.tool()` decorator wraps the function, so the import returns a MagicMock, not the real function.
+**Lesson:** Test MCP tool logic by testing the underlying data layer (ActivityDB, RollingBuffer) directly rather than trying to call the decorated tool functions. The MCP tools are thin wrappers over the data layer.
+
+### [2026-03-21] Automate benchmark tests — never ask the user to cycle through apps manually
+**Context:** Asked the user to manually open 8 different apps and cycle through them while a capture script ran. Had to repeat this twice due to script buffering issues. Very frustrating UX.
+**Lesson:** Write automated benchmark scripts that open URLs/apps via subprocess, capture, classify, and close — zero user effort. `auto_benchmark.py` does this in 90 seconds with 11 scenarios.

@@ -13,7 +13,7 @@ from unittest.mock import patch
 import numpy as np
 from PIL import Image
 
-from contextpulse_sight.buffer import RollingBuffer
+from contextpulse_sight.buffer import RollingBuffer, parse_frame_path
 
 
 def _make_image(width: int = 1280, height: int = 720, color: tuple = (100, 150, 200)) -> Image.Image:
@@ -41,7 +41,7 @@ class TestDaemonToMCPFlow:
             patch("contextpulse_sight.config.BUFFER_DIR", buf_dir),
             patch("contextpulse_sight.config.OUTPUT_DIR", output_dir),
             patch("contextpulse_sight.app.FILE_LATEST", output_dir / "screen_latest.png"),
-            patch("contextpulse_sight.capture.capture_active_monitor", return_value=_make_image()),
+            patch("contextpulse_sight.capture.capture_active_monitor", return_value=(0, _make_image())),
         ):
             from contextpulse_sight.app import ContextPulseSightApp
 
@@ -72,7 +72,7 @@ class TestDaemonToMCPFlow:
             patch("contextpulse_sight.config.BUFFER_DIR", buf_dir),
             patch("contextpulse_sight.config.OUTPUT_DIR", output_dir),
             patch("contextpulse_sight.config.FILE_LATEST", output_dir / "screen_latest.png"),
-            patch("contextpulse_sight.capture.capture_active_monitor", return_value=_make_image()),
+            patch("contextpulse_sight.capture.capture_active_monitor", return_value=(0, _make_image())),
         ):
             # Simulate daemon writing frames
             daemon_buffer = RollingBuffer()
@@ -96,7 +96,7 @@ class TestDaemonToMCPFlow:
                 assert img.height > 0
 
     def test_buffer_status_reflects_daemon_captures(self, tmp_path):
-        """get_buffer_status() correctly reports daemon-written frames."""
+        """Buffer status correctly reports daemon-written frames."""
         buf_dir = tmp_path / "buffer"
 
         with patch("contextpulse_sight.buffer.BUFFER_DIR", buf_dir):
@@ -115,7 +115,9 @@ class TestDaemonToMCPFlow:
             assert latest is not None
 
             # Verify frame timestamps are recent
-            ts = int(latest.stem) / 1000.0
+            parsed = parse_frame_path(latest)
+            assert parsed is not None
+            ts = parsed[0] / 1000.0
             assert time.time() - ts < 5  # within last 5 seconds
 
     def test_ocr_text_shared_between_daemon_and_mcp(self, tmp_path):
@@ -143,8 +145,8 @@ class TestDaemonToMCPFlow:
             buf = RollingBuffer()
             img = _make_image(color=(128, 128, 128))
 
-            assert buf.add(img) is True  # First frame always stored
-            assert buf.add(img) is not True  # Identical frame skipped
+            assert buf.add(img)  # First frame always stored (truthy Path)
+            assert buf.add(img) is False  # Identical frame skipped
             assert buf.frame_count() == 1
 
     def test_multiple_capture_modes_coexist(self, tmp_path):
@@ -158,10 +160,10 @@ class TestDaemonToMCPFlow:
             patch("contextpulse_sight.config.BUFFER_DIR", buf_dir),
             patch("contextpulse_sight.config.OUTPUT_DIR", output_dir),
             patch("contextpulse_sight.app.FILE_LATEST", output_dir / "screen_latest.png"),
-            patch("contextpulse_sight.app.FILE_ALL", output_dir / "screen_all.png"),
             patch("contextpulse_sight.app.FILE_REGION", output_dir / "screen_region.png"),
-            patch("contextpulse_sight.capture.capture_active_monitor", return_value=_make_image(color=(255, 0, 0))),
-            patch("contextpulse_sight.capture.capture_all_monitors", return_value=_make_image(2560, 720, (0, 255, 0))),
+            patch("contextpulse_sight.app.OUTPUT_DIR", output_dir),
+            patch("contextpulse_sight.capture.capture_active_monitor", return_value=(0, _make_image(color=(255, 0, 0)))),
+            patch("contextpulse_sight.capture.capture_all_monitors", return_value=[(0, _make_image(1280, 720, (0, 255, 0))), (1, _make_image(1280, 720, (0, 0, 255)))]),
             patch("contextpulse_sight.capture.capture_region", return_value=_make_image(800, 600, (0, 0, 255))),
         ):
             from contextpulse_sight.app import ContextPulseSightApp
@@ -173,10 +175,12 @@ class TestDaemonToMCPFlow:
             app.do_all_capture()
             app.do_region_capture()
 
-            # All three output files exist
+            # Quick capture and region files exist
             assert (output_dir / "screen_latest.png").exists()
-            assert (output_dir / "screen_all.png").exists()
             assert (output_dir / "screen_region.png").exists()
+            # Per-monitor files from all-capture
+            assert (output_dir / "screen_monitor_0.png").exists()
+            assert (output_dir / "screen_monitor_1.png").exists()
 
             # Buffer got the quick capture frame
             assert app.buffer.frame_count() >= 1
@@ -191,7 +195,7 @@ class TestDaemonToMCPFlow:
             patch("contextpulse_sight.buffer.BUFFER_DIR", buf_dir),
             patch("contextpulse_sight.config.OUTPUT_DIR", output_dir),
             patch("contextpulse_sight.app.FILE_LATEST", output_dir / "screen_latest.png"),
-            patch("contextpulse_sight.capture.capture_active_monitor", return_value=_make_image()),
+            patch("contextpulse_sight.capture.capture_active_monitor", return_value=(0, _make_image())),
         ):
             from contextpulse_sight.app import ContextPulseSightApp
 
@@ -216,12 +220,12 @@ class TestDaemonToMCPFlow:
 
             # Create an artificially old frame
             old_ts = int((time.time() - 10) * 1000)  # 10 seconds ago
-            old_path = buf_dir / f"{old_ts}.jpg"
+            old_path = buf_dir / f"{old_ts}_m0.jpg"
             _make_image().save(old_path, format="JPEG")
 
             # Pruning happens on next add
             buf.add(_make_different_image())
             # Old frame should be pruned
             remaining = buf.list_frames()
-            timestamps = [int(f.stem) for f in remaining]
+            timestamps = [parse_frame_path(f)[0] for f in remaining]
             assert old_ts not in timestamps

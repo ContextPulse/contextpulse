@@ -23,12 +23,54 @@ def get_foreground_window_title() -> str:
     return buf.value
 
 
+def get_foreground_process_name() -> str:
+    """Get the executable name of the foreground window's process."""
+    hwnd = ctypes.windll.user32.GetForegroundWindow()
+    if not hwnd:
+        return ""
+    pid = ctypes.wintypes.DWORD()
+    ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    if not pid.value:
+        return ""
+    # Open process with QUERY_LIMITED_INFORMATION (0x1000)
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    handle = ctypes.windll.kernel32.OpenProcess(
+        PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value
+    )
+    if not handle:
+        return ""
+    try:
+        buf = ctypes.create_unicode_buffer(260)
+        size = ctypes.wintypes.DWORD(260)
+        ok = ctypes.windll.kernel32.QueryFullProcessImageNameW(
+            handle, 0, buf, ctypes.byref(size)
+        )
+        if ok:
+            # Return just the exe filename
+            import os
+            return os.path.basename(buf.value)
+        return ""
+    finally:
+        ctypes.windll.kernel32.CloseHandle(handle)
+
+
 def is_blocked() -> bool:
     """Return True if the foreground window matches any blocklist pattern."""
     if not BLOCKLIST_PATTERNS:
         return False
     title = get_foreground_window_title().lower()
     return any(p.lower() in title for p in BLOCKLIST_PATTERNS)
+
+
+def is_title_blocked(title: str) -> bool:
+    """Return True if a given window title matches any blocklist pattern.
+
+    Used by MCP tools to filter stored history before returning results.
+    """
+    if not BLOCKLIST_PATTERNS or not title:
+        return False
+    title_lower = title.lower()
+    return any(p.lower() in title_lower for p in BLOCKLIST_PATTERNS)
 
 
 # -- Session lock/unlock detection ----------------------------------------
