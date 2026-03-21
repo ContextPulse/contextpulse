@@ -100,6 +100,7 @@ class ContextPulseSightApp:
 
     def _auto_capture_loop(self):
         logger.info("Auto-capture started (interval=%ds)", AUTO_INTERVAL)
+        consecutive_errors = 0
         while not self.stop_event.is_set():
             if not self._should_skip("auto-capture"):
                 try:
@@ -112,10 +113,39 @@ class ContextPulseSightApp:
                     # Also capture all monitors so agents always have full context
                     img_all = capture.capture_all_monitors()
                     capture.save_image(img_all, FILE_ALL)
+                    consecutive_errors = 0  # reset on success
                 except Exception:
-                    logger.exception("Auto-capture failed")
+                    consecutive_errors += 1
+                    logger.exception(
+                        "Auto-capture failed (%d consecutive)", consecutive_errors
+                    )
+                    # Back off on repeated failures (e.g. display driver reset)
+                    if consecutive_errors >= 5:
+                        backoff = min(30, AUTO_INTERVAL * consecutive_errors)
+                        logger.warning(
+                            "Too many capture errors, backing off %ds", backoff
+                        )
+                        self.stop_event.wait(backoff)
+                        continue
             self.stop_event.wait(AUTO_INTERVAL)
         logger.info("Auto-capture stopped")
+
+    # -- Watchdog ----------------------------------------------------------
+
+    def _watchdog_loop(self):
+        """Restart the auto-capture thread if it dies unexpectedly."""
+        logger.info("Watchdog started")
+        while not self.stop_event.is_set():
+            self.stop_event.wait(30)  # check every 30 seconds
+            if self.stop_event.is_set():
+                break
+            if hasattr(self, "_capture_thread") and not self._capture_thread.is_alive():
+                logger.warning("Auto-capture thread died — restarting")
+                self._capture_thread = threading.Thread(
+                    target=self._auto_capture_loop, daemon=True
+                )
+                self._capture_thread.start()
+        logger.info("Watchdog stopped")
 
     # -- Hotkey handling ---------------------------------------------------
 
@@ -245,8 +275,16 @@ class ContextPulseSightApp:
         self._session_monitor.start()
 
         if AUTO_INTERVAL > 0:
-            t = threading.Thread(target=self._auto_capture_loop, daemon=True)
-            t.start()
+            self._capture_thread = threading.Thread(
+                target=self._auto_capture_loop, daemon=True
+            )
+            self._capture_thread.start()
+
+            # Watchdog restarts capture thread if it dies
+            self._watchdog_thread = threading.Thread(
+                target=self._watchdog_loop, daemon=True
+            )
+            self._watchdog_thread.start()
 
         self.tray = pystray.Icon(
             name="ContextPulse Sight",
