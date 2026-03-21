@@ -1,7 +1,9 @@
 .venv/
 __pycache__/
 *.pyc
+*.pyo
 .env
+.env.*
 dist/
 build/
 *.egg-info/
@@ -10,4 +12,21 @@ build/
 packages/*/dist/
 packages/*/build/
 packages/*/src/*.egg-info/
-*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Claude / AI tools
+.claude/settings.local.json
+.claude/plans/
+.claude/projects/
+.claude/worktrees/
+
+# Screenshots (runtime output)
+screenshots/
