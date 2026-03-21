@@ -15,3 +15,6 @@ Lessons that have been incorporated into skills and no longer need to consume co
 
 ### [2026-03-15] MCP stdio transport uses newline-delimited JSON, not Content-Length
 **Archived to:** `managing-mcp-servers/SKILL.md` (section 9: Testing MCP servers via stdio)
+
+### [2026-03-21] Daemon threads die silently after sleep/wake — need watchdog
+**Archived to:** `developing-python/SKILL.md` (section: Background Daemons & Threading)
