@@ -21,10 +21,6 @@
 **Context:** Tried `gcloud domains registrations get-register-parameters contextpulse.ai` — returned `availability: UNSUPPORTED`.
 **Lesson:** Google Cloud Domains has limited TLD support. For .ai, .io, and other exotic TLDs, use Cloudflare or a traditional registrar.
 
-### [2026-03-15] SynapseAI has Intel/Habana Labs trademark conflict
-**Context:** Researched domain availability for SynapseAI. All domains taken, and Intel's Habana Labs has a product called "SynapseAI" (their AI software suite for Gaudi accelerators).
-**Lesson:** Always check trademark conflicts before investing in a product name. Intel's SynapseAI is well-established — rename the project.
-
 ### [2026-03-15] Private Python functions exposed via public API must be renamed
 **Context:** `mcp_server.py` called `capture._find_monitor_at_cursor()` and `capture._mss_to_pil()` — underscore-prefixed functions that are private by convention.
 **Lesson:** If an internal function needs to be called from another module, drop the underscore prefix to make it part of the public API. Private functions should only be used within their own module.
