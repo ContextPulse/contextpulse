@@ -18,8 +18,8 @@ ContextPulse is a platform that provides always-on context for AI agents. Screen
 
 | Package | Description | Status |
 |---------|-------------|--------|
-| **contextpulse-sight** | Always-on screen capture + MCP server | Phase 2.0 COMPLETE: 118 tests, 7 MCP tools, activity DB, smart storage |
-| **contextpulse-core** | Shared config, utilities | Scaffolded |
+| **contextpulse-sight** | Always-on screen capture + MCP server | Phase 2.0 + Security: 118 tests, 7 MCP tools, activity DB, smart storage, OCR redaction, MCP hardening |
+| **contextpulse-core** | Shared config, licensing, settings, GUI theme | Productized: 35 tests, persistent config, Ed25519 licensing, settings panel, first-run |
 | **contextpulse-memory** | Cross-session persistent memory (journal pattern) | Planned — from SynapseAI |
 | **contextpulse-agent** | Agent coordination, session protocol | Planned — from SynapseAI |
 | **contextpulse-project** | Auto-generated project context | Planned |
@@ -33,15 +33,25 @@ ContextPulse is a platform that provides always-on context for AI agents. Screen
 - **OCR:** rapidocr-onnxruntime (on-demand text extraction)
 - **MCP server:** mcp Python SDK (stdio transport)
 - **Database:** SQLite + FTS5 (activity tracking, full-text search)
-- **Config:** python-dotenv
+- **Config:** python-dotenv + JSON persistent config (%APPDATA%/ContextPulse/config.json)
+- **Licensing:** Ed25519 signature verification (PyNaCl)
+- **GUI:** tkinter (settings panel, first-run dialog, license nag)
+- **Lambda:** Gumroad webhook → Ed25519 license key → SES email delivery
 
 ## Architecture
 ```
 ContextPulse/
 ├── pyproject.toml              # Workspace root
 ├── packages/
-│   ├── core/                   # Shared utilities
+│   ├── core/                   # Shared config, licensing, settings, GUI
 │   │   └── src/contextpulse_core/
+│   │       ├── config.py        # Persistent JSON config with env var fallback
+│   │       ├── license.py       # Ed25519 license verification (tiers, expiration)
+│   │       ├── license_dialog.py # Nag dialog for unlicensed/expired Memory
+│   │       ├── gui_theme.py     # Singleton tkinter root, brand colors, dialog factory
+│   │       ├── settings.py      # Full settings panel (capture, hotkeys, privacy, license)
+│   │       └── first_run.py     # Welcome dialog with hotkey reference
+│   │   └── tests/              # 35 tests (config + license)
 │   ├── screen/                 # Screen capture daemon + MCP
 │   │   └── src/contextpulse_sight/
 │   │       ├── app.py          # Main daemon: tray + hotkeys + auto-capture + activity
@@ -54,7 +64,8 @@ ContextPulse/
 │   │       ├── events.py       # Event-driven capture (window focus, idle, monitor cross)
 │   │       ├── activity.py     # SQLite activity DB with FTS5 search
 │   │       ├── ocr_worker.py   # Background OCR processing with smart storage
-│   │       └── icon.py         # System tray icon generation
+│   │       ├── icon.py         # System tray icon generation
+│   │       └── redact.py       # OCR text redaction (API keys, tokens, passwords)
 │   │   └── tests/              # 118 tests across 10 test files
 │   │   └── scripts/
 │   │       ├── auto_benchmark.py  # Automated storage mode benchmarking
@@ -62,6 +73,9 @@ ContextPulse/
 │   ├── memory/                 # Cross-session memory (future)
 │   ├── agent/                  # Agent coordination (future)
 │   └── project/                # Project context (future)
+├── lambda/
+│   ├── license_webhook.py      # Gumroad webhook → Ed25519 license key → SES
+│   └── DEPLOY_NOTES.md         # AWS deployment instructions
 ├── docs/
 │   ├── NAMING.md               # Brand naming research
 │   └── DOMAINS.md              # Domain registrations, pricing, DNS strategy
@@ -148,6 +162,24 @@ Events trigger immediate capture, replacing the next timer tick. Keeps CPU flat.
 - [x] 118 tests passing (up from 73)
 - [ ] Restart daemon with new code
 - [ ] Publish to PyPI
+
+### Phase 2.5: Productization — COMPLETE (2026-03-21)
+- [x] gui_theme.py: singleton tkinter root, brand colors, dialog factory
+- [x] config.py: persistent JSON config at %APPDATA%/ContextPulse with env var fallback
+- [x] license.py: Ed25519 license verification with tiers (starter/pro) and expiration
+- [x] license_dialog.py: nag dialog for unlicensed/expired Memory users
+- [x] first_run.py: welcome dialog with hotkey reference
+- [x] settings.py: full settings panel (capture, hotkeys, privacy, license status)
+- [x] redact.py: OCR text redaction for secrets (opt-in/out)
+- [x] privacy.py: default blocklist for sensitive apps (1Password, KeePass, etc.)
+- [x] lambda/license_webhook.py: Gumroad webhook → Ed25519 key → SES email
+- [x] app.py: settings/license wired into tray menu, first-run check
+- [x] MCP server: input validation, path traversal protection, rate limiting
+- [x] 153 tests passing (118 screen + 35 core)
+- [ ] Deploy Lambda infrastructure (Lambda, DynamoDB, SES, SSM)
+- [ ] Create Gumroad product listings for Memory tiers
+- [ ] End-to-end daemon testing (first-run, settings, blocklist, license)
+- [ ] Add redact_ocr_text boolean to config defaults (opt-in/out toggle)
 
 ### Phase 3: TradingCoPilot Integration — PLANNED
 - [ ] Integrate ContextPulse Sight into TradingCoPilot

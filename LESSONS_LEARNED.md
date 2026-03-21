@@ -65,3 +65,9 @@
 ### [2026-03-21] Automate benchmark tests — never ask the user to cycle through apps manually
 **Context:** Asked the user to manually open 8 different apps and cycle through them while a capture script ran. Had to repeat this twice due to script buffering issues. Very frustrating UX.
 **Lesson:** Write automated benchmark scripts that open URLs/apps via subprocess, capture, classify, and close — zero user effort. `auto_benchmark.py` does this in 90 seconds with 11 scenarios.
+
+<!-- Archived to skills: pytest cross-package name collision → developing-python/references/project-setup.md -->
+
+### [2026-03-21] Local screenshot storage — real security threat is machine compromise, not the screenshots
+**Context:** Debated whether to redact secrets from OCR text since ContextPulse captures everything on screen. Realized that if an attacker has access to the screenshots folder, they already have access to the `.env` files, `~/.aws/`, browser passwords, etc.
+**Lesson:** OCR redaction is defense-in-depth against *accidental exposure* (sharing, cloud sync, backup). It's not the primary security boundary. Make it opt-in/out so power users who want to search for secrets they had on screen can do so.
