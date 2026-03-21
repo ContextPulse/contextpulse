@@ -30,3 +30,9 @@ desktop.ini
 
 # Screenshots (runtime output)
 screenshots/
+
+# Lambda build artifacts (regenerated via pip install)
+lambda/package/
+lambda/*.zip
+*.pem
+*.key

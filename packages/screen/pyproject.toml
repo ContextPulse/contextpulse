@@ -30,6 +30,7 @@ dependencies = [
     "numpy>=1.26",
     "rapidocr-onnxruntime>=1.2",
     "mcp>=1.0",
+    "contextpulse-core>=0.1.0",
 ]
 
 [project.urls]

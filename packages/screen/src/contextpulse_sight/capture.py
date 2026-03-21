@@ -25,17 +25,21 @@ def _get_cursor_pos() -> tuple[int, int]:
     return pt.x, pt.y
 
 
-def find_monitor_at_cursor(sct: mss.mss) -> dict:
-    """Return the mss monitor dict containing the cursor. Falls back to primary."""
+def find_monitor_at_cursor(sct: mss.mss) -> tuple[int, dict]:
+    """Return (index, monitor_dict) for the monitor containing the cursor.
+
+    Index is 0-based across physical monitors (sct.monitors[1:]).
+    Falls back to primary monitor (index 0).
+    """
     cx, cy = _get_cursor_pos()
-    for mon in sct.monitors[1:]:
+    for i, mon in enumerate(sct.monitors[1:]):
         if (mon["left"] <= cx < mon["left"] + mon["width"]
                 and mon["top"] <= cy < mon["top"] + mon["height"]):
-            return mon
+            return i, mon
     # monitors[0] is the virtual desktop; monitors[1:] are physical monitors
     if len(sct.monitors) > 1:
-        return sct.monitors[1]
-    return sct.monitors[0]
+        return 0, sct.monitors[1]
+    return 0, sct.monitors[0]
 
 
 def _downscale(img: Image.Image) -> Image.Image:
@@ -51,27 +55,50 @@ def mss_to_pil(sct_img) -> Image.Image:
     return Image.frombytes("RGB", (sct_img.width, sct_img.height), sct_img.rgb)
 
 
-def capture_active_monitor() -> Image.Image:
-    """Capture the monitor where the cursor currently is, downscaled."""
+def get_monitor_count() -> int:
+    """Return the number of physical monitors."""
     with mss.mss() as sct:
-        mon = find_monitor_at_cursor(sct)
+        return max(1, len(sct.monitors) - 1)
+
+
+def capture_active_monitor() -> tuple[int, Image.Image]:
+    """Capture the monitor where the cursor currently is, downscaled.
+
+    Returns (monitor_index, image).
+    """
+    with mss.mss() as sct:
+        idx, mon = find_monitor_at_cursor(sct)
         sct_img = sct.grab(mon)
+        img = mss_to_pil(sct_img)
+    return idx, _downscale(img)
+
+
+def capture_single_monitor(index: int) -> Image.Image:
+    """Capture a specific monitor by index (0-based), downscaled."""
+    with mss.mss() as sct:
+        physical = sct.monitors[1:]
+        if index < 0 or index >= len(physical):
+            raise ValueError(
+                f"Monitor index {index} out of range (0-{len(physical) - 1})"
+            )
+        sct_img = sct.grab(physical[index])
         img = mss_to_pil(sct_img)
     return _downscale(img)
 
 
-def capture_all_monitors() -> Image.Image:
-    """Capture all monitors stitched together. Scales so each monitor gets ~MAX_WIDTH pixels."""
+def capture_all_monitors() -> list[tuple[int, Image.Image]]:
+    """Capture each monitor individually, downscaled.
+
+    Returns list of (monitor_index, image) pairs.
+    """
     with mss.mss() as sct:
-        num_monitors = max(1, len(sct.monitors) - 1)  # monitors[0] is virtual desktop
-        sct_img = sct.grab(sct.monitors[0])
-        img = mss_to_pil(sct_img)
-    # Give each monitor its own MAX_WIDTH allocation so text stays readable
-    target_width = MAX_WIDTH * num_monitors
-    target_height = MAX_HEIGHT * num_monitors
-    if img.width > target_width or img.height > target_height:
-        img.thumbnail((target_width, target_height), Image.LANCZOS)
-    return img
+        physical = sct.monitors[1:]
+        results = []
+        for i, mon in enumerate(physical):
+            sct_img = sct.grab(mon)
+            img = _downscale(mss_to_pil(sct_img))
+            results.append((i, img))
+    return results
 
 
 def capture_region(width: int = 800, height: int = 600) -> Image.Image:

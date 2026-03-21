@@ -119,8 +119,6 @@ class TestCaptureToBytes:
         img = _make_image(500, 500)
         png_data = capture_to_bytes(img, fmt="PNG")
         jpeg_data = capture_to_bytes(img, fmt="JPEG")
-        # JPEG should generally be smaller for photo-like content
-        # For solid colors this may not always hold, but for real captures it will
         assert isinstance(jpeg_data, bytes)
         assert isinstance(png_data, bytes)
 
@@ -147,7 +145,8 @@ class TestMonitorDetection:
         ]
 
         with patch("contextpulse_sight.capture._get_cursor_pos", return_value=(500, 500)):
-            mon = find_monitor_at_cursor(sct)
+            idx, mon = find_monitor_at_cursor(sct)
+            assert idx == 0
             assert mon == sct.monitors[1]
 
     def test_find_monitor_at_cursor_dual_monitor(self):
@@ -163,7 +162,8 @@ class TestMonitorDetection:
 
         # Cursor on right monitor
         with patch("contextpulse_sight.capture._get_cursor_pos", return_value=(2500, 500)):
-            mon = find_monitor_at_cursor(sct)
+            idx, mon = find_monitor_at_cursor(sct)
+            assert idx == 1
             assert mon == sct.monitors[2]
 
     def test_find_monitor_fallback_to_primary(self):
@@ -178,7 +178,8 @@ class TestMonitorDetection:
 
         # Cursor way outside any monitor
         with patch("contextpulse_sight.capture._get_cursor_pos", return_value=(9999, 9999)):
-            mon = find_monitor_at_cursor(sct)
+            idx, mon = find_monitor_at_cursor(sct)
+            assert idx == 0
             assert mon == sct.monitors[1]
 
     def test_find_monitor_only_virtual_desktop(self):
@@ -192,6 +193,89 @@ class TestMonitorDetection:
         ]
 
         with patch("contextpulse_sight.capture._get_cursor_pos", return_value=(500, 500)):
-            mon = find_monitor_at_cursor(sct)
+            idx, mon = find_monitor_at_cursor(sct)
             # Should return monitors[0] as fallback since monitors[1] doesn't exist
+            assert idx == 0
             assert mon == sct.monitors[0]
+
+    def test_capture_single_monitor_valid(self):
+        from unittest.mock import MagicMock, patch
+        from contextpulse_sight.capture import capture_single_monitor
+
+        mock_sct = MagicMock()
+        mock_sct.monitors = [
+            {"left": 0, "top": 0, "width": 3840, "height": 1080},
+            {"left": 0, "top": 0, "width": 1920, "height": 1080},
+            {"left": 1920, "top": 0, "width": 1920, "height": 1080},
+        ]
+        mock_sct_img = MagicMock()
+        mock_sct_img.width = 1920
+        mock_sct_img.height = 1080
+        mock_sct_img.rgb = b"\x00" * (1920 * 1080 * 3)
+        mock_sct.grab.return_value = mock_sct_img
+
+        with patch("contextpulse_sight.capture.mss.mss", return_value=mock_sct):
+            mock_sct.__enter__ = MagicMock(return_value=mock_sct)
+            mock_sct.__exit__ = MagicMock(return_value=False)
+            img = capture_single_monitor(0)
+            assert img.width <= 1280
+            assert img.height <= 720
+
+    def test_capture_single_monitor_invalid_raises(self):
+        from unittest.mock import MagicMock, patch
+        from contextpulse_sight.capture import capture_single_monitor
+        import pytest
+
+        mock_sct = MagicMock()
+        mock_sct.monitors = [
+            {"left": 0, "top": 0, "width": 1920, "height": 1080},
+            {"left": 0, "top": 0, "width": 1920, "height": 1080},
+        ]
+
+        with patch("contextpulse_sight.capture.mss.mss", return_value=mock_sct):
+            mock_sct.__enter__ = MagicMock(return_value=mock_sct)
+            mock_sct.__exit__ = MagicMock(return_value=False)
+            with pytest.raises(ValueError, match="out of range"):
+                capture_single_monitor(5)
+
+    def test_get_monitor_count(self):
+        from unittest.mock import MagicMock, patch
+        from contextpulse_sight.capture import get_monitor_count
+
+        mock_sct = MagicMock()
+        mock_sct.monitors = [
+            {"left": 0, "top": 0, "width": 3840, "height": 1080},
+            {"left": 0, "top": 0, "width": 1920, "height": 1080},
+            {"left": 1920, "top": 0, "width": 1920, "height": 1080},
+        ]
+
+        with patch("contextpulse_sight.capture.mss.mss", return_value=mock_sct):
+            mock_sct.__enter__ = MagicMock(return_value=mock_sct)
+            mock_sct.__exit__ = MagicMock(return_value=False)
+            assert get_monitor_count() == 2
+
+    def test_capture_all_monitors_returns_list(self):
+        from unittest.mock import MagicMock, patch
+        from contextpulse_sight.capture import capture_all_monitors
+
+        mock_sct = MagicMock()
+        mock_sct.monitors = [
+            {"left": 0, "top": 0, "width": 3840, "height": 1080},
+            {"left": 0, "top": 0, "width": 1920, "height": 1080},
+            {"left": 1920, "top": 0, "width": 1920, "height": 1080},
+        ]
+        mock_sct_img = MagicMock()
+        mock_sct_img.width = 1920
+        mock_sct_img.height = 1080
+        mock_sct_img.rgb = b"\x00" * (1920 * 1080 * 3)
+        mock_sct.grab.return_value = mock_sct_img
+
+        with patch("contextpulse_sight.capture.mss.mss", return_value=mock_sct):
+            mock_sct.__enter__ = MagicMock(return_value=mock_sct)
+            mock_sct.__exit__ = MagicMock(return_value=False)
+            result = capture_all_monitors()
+            assert isinstance(result, list)
+            assert len(result) == 2
+            assert result[0][0] == 0  # monitor index
+            assert result[1][0] == 1
+            assert result[0][1].width <= 1280

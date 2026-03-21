@@ -5,18 +5,31 @@ import logging
 import subprocess
 import sys
 import threading
+import time
+from pathlib import Path
 
 import pystray
 from pynput import keyboard
 
 from contextpulse_sight import capture
+from contextpulse_sight.activity import ActivityDB
 from contextpulse_sight.buffer import RollingBuffer
 from contextpulse_sight.config import (
     AUTO_INTERVAL, BUFFER_MAX_AGE, CHANGE_THRESHOLD,
-    FILE_ALL, FILE_LATEST, FILE_REGION, OUTPUT_DIR,
+    FILE_LATEST, FILE_REGION, OUTPUT_DIR,
 )
+from contextpulse_sight.events import EventDetector
 from contextpulse_sight.icon import _COLORS, create_icon
-from contextpulse_sight.privacy import SessionMonitor, is_blocked
+from contextpulse_sight.ocr_worker import OCRWorker
+from contextpulse_sight.privacy import (
+    SessionMonitor, get_foreground_process_name, get_foreground_window_title, is_blocked,
+)
+
+# Core productization imports (settings, first-run, licensing)
+from contextpulse_core.first_run import is_first_run, show_welcome_dialog
+from contextpulse_core.settings import show_settings
+from contextpulse_core.license import is_licensed, has_memory_access
+from contextpulse_core.license_dialog import show_nag_dialog
 
 _WARNING_COLOR = _COLORS.get("dark", {}).get("warning", "#F0B429")
 
@@ -35,6 +48,9 @@ class ContextPulseSightApp:
         self.stop_event = threading.Event()
         self._pressed_keys: set = set()
         self.buffer = RollingBuffer()
+        self.activity_db = ActivityDB()
+        self._event_detector = EventDetector()
+        self._ocr_worker = OCRWorker(self.activity_db, self.buffer)
 
     # -- Privacy guard -----------------------------------------------------
 
@@ -53,9 +69,9 @@ class ContextPulseSightApp:
         if self._should_skip("quick capture"):
             return
         try:
-            img = capture.capture_active_monitor()
+            idx, img = capture.capture_active_monitor()
             capture.save_image(img, FILE_LATEST)
-            self.buffer.add(img)
+            self.buffer.add(img, monitor_index=idx)
         except Exception:
             logger.exception("Quick capture failed")
 
@@ -63,8 +79,10 @@ class ContextPulseSightApp:
         if self._should_skip("all-monitor capture"):
             return
         try:
-            img = capture.capture_all_monitors()
-            capture.save_image(img, FILE_ALL)
+            monitors = capture.capture_all_monitors()
+            for idx, img in monitors:
+                path = OUTPUT_DIR / f"screen_monitor_{idx}.png"
+                capture.save_image(img, path)
         except Exception:
             logger.exception("All-monitor capture failed")
 
@@ -98,36 +116,85 @@ class ContextPulseSightApp:
 
     # -- Auto-capture loop -------------------------------------------------
 
+    def _do_auto_capture(self):
+        """Capture all monitors, store in buffer, record activity. Returns True on success."""
+        monitors = capture.capture_all_monitors()
+        cursor_idx = monitors[0][0] if monitors else 0
+        try:
+            import mss as _mss
+            with _mss.mss() as sct:
+                cursor_idx, _ = capture.find_monitor_at_cursor(sct)
+        except Exception:
+            pass
+
+        # Get current window info for activity tracking
+        window_title = get_foreground_window_title()
+        app_name = get_foreground_process_name()
+        if is_blocked():
+            window_title = "[BLOCKED]"
+
+        now = time.time()
+        for idx, img in monitors:
+            stored = self.buffer.add(img, monitor_index=idx)
+            if stored:
+                frame_path = stored  # buffer.add returns Path when stored
+                # Record activity
+                row_id = self.activity_db.record(
+                    timestamp=now,
+                    window_title=window_title,
+                    app_name=app_name,
+                    monitor_index=idx,
+                    frame_path=str(frame_path) if frame_path else None,
+                )
+                # Queue for background OCR
+                if frame_path and isinstance(frame_path, Path):
+                    self._ocr_worker.enqueue(frame_path, row_id, app_name)
+
+                if idx == cursor_idx:
+                    capture.save_image(img, FILE_LATEST)
+                    logger.debug(
+                        "Frame stored m%d (%d in buffer)",
+                        idx, self.buffer.frame_count(),
+                    )
+
+        # Prune old activity records alongside buffer pruning
+        self.activity_db.prune()
+        return True
+
     def _auto_capture_loop(self):
         logger.info("Auto-capture started (interval=%ds)", AUTO_INTERVAL)
         consecutive_errors = 0
+        last_capture_time = 0.0
         while not self.stop_event.is_set():
             if not self._should_skip("auto-capture"):
-                try:
-                    # Capture active monitor for buffer/change detection
-                    img = capture.capture_active_monitor()
-                    stored = self.buffer.add(img)
-                    if stored:
-                        capture.save_image(img, FILE_LATEST)
-                        logger.debug("Frame stored (%d in buffer)", self.buffer.frame_count())
-                    # Also capture all monitors so agents always have full context
-                    img_all = capture.capture_all_monitors()
-                    capture.save_image(img_all, FILE_ALL)
-                    consecutive_errors = 0  # reset on success
-                except Exception:
-                    consecutive_errors += 1
-                    logger.exception(
-                        "Auto-capture failed (%d consecutive)", consecutive_errors
-                    )
-                    # Back off on repeated failures (e.g. display driver reset)
-                    if consecutive_errors >= 5:
-                        backoff = min(30, AUTO_INTERVAL * consecutive_errors)
-                        logger.warning(
-                            "Too many capture errors, backing off %ds", backoff
+                now = time.time()
+                event_fired = self._event_detector.has_pending_event()
+                timer_expired = (now - last_capture_time) >= AUTO_INTERVAL
+
+                if event_fired or timer_expired:
+                    try:
+                        if event_fired:
+                            reason = self._event_detector.get_pending_reason()
+                            logger.debug("Event-driven capture: %s", reason)
+                            self._event_detector.clear_pending()
+
+                        self._do_auto_capture()
+                        last_capture_time = time.time()
+                        consecutive_errors = 0
+                    except Exception:
+                        consecutive_errors += 1
+                        logger.exception(
+                            "Auto-capture failed (%d consecutive)", consecutive_errors
                         )
-                        self.stop_event.wait(backoff)
-                        continue
-            self.stop_event.wait(AUTO_INTERVAL)
+                        if consecutive_errors >= 5:
+                            backoff = min(30, AUTO_INTERVAL * consecutive_errors)
+                            logger.warning(
+                                "Too many capture errors, backing off %ds", backoff
+                            )
+                            self.stop_event.wait(backoff)
+                            continue
+            # Check more frequently than AUTO_INTERVAL to catch events promptly
+            self.stop_event.wait(1)
         logger.info("Auto-capture stopped")
 
     # -- Watchdog ----------------------------------------------------------
@@ -231,12 +298,27 @@ class ContextPulseSightApp:
                 lambda: subprocess.Popen(["explorer", str(OUTPUT_DIR)]),
             ),
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem(
+                "Settings",
+                lambda: threading.Thread(target=show_settings, daemon=True).start(),
+            ),
+            pystray.MenuItem(
+                "Enter License Key",
+                lambda: threading.Thread(target=show_nag_dialog, daemon=True).start(),
+            ),
+            pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit", self._quit),
         )
 
     def _quit(self):
         logger.info("Shutting down")
         self.stop_event.set()
+        self._event_detector.stop()
+        self._ocr_worker.stop()
+        self.activity_db.close()
+        # Clean up tkinter root used by settings/dialogs
+        from contextpulse_core.gui_theme import destroy_root
+        destroy_root()
         if hasattr(self, "hotkey_listener") and self.hotkey_listener:
             self.hotkey_listener.stop()
         if hasattr(self, "_mutex") and self._mutex:
@@ -256,6 +338,12 @@ class ContextPulseSightApp:
             sys.exit(1)
 
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+        # First-run welcome dialog
+        if is_first_run():
+            logger.info("First run detected — showing welcome dialog")
+            show_welcome_dialog()
+
         logger.info("ContextPulse Sight starting -- output: %s", OUTPUT_DIR)
         logger.info(
             "Auto-capture: every %ds, buffer: %ds, change threshold: %.1f%%",
@@ -273,6 +361,9 @@ class ContextPulseSightApp:
             on_unlock=self._on_session_unlock,
         )
         self._session_monitor.start()
+
+        self._event_detector.start()
+        self._ocr_worker.start()
 
         if AUTO_INTERVAL > 0:
             self._capture_thread = threading.Thread(
