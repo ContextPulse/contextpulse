@@ -814,6 +814,50 @@ class LearningEngine:
     # Attention scoring: pointer dwell + event density → frame relevance
 ```
 
+### Heart Module
+
+```python
+class HeartModule:
+    """Values, mission, and priority weighting for the entire ecosystem."""
+    # NOT a ModalityModule — Heart doesn't capture events, it weights them
+    # Reads: heart_profile, heart_goals, heart_boundaries tables
+    # Provides: relevance_score(event) → float 0-1 based on user's stated priorities
+    # Provides: check_boundary(timestamp) → whether current time/app violates user boundaries
+    # Provides: drift_report() → how daily activity aligns with declared goals
+    # Simple to build (~400 LOC), massive impact — transforms spine from storage to judgment
+```
+
+Heart is the compass. It answers: "Given everything I know about this person's values and goals, should I surface this event or suppress it?" Every other module benefits from Heart's weighting without code changes — the EventBus just calls `heart.relevance_score(event)` before storage.
+
+### Contacts Module
+
+```python
+class ContactsModule:
+    """Personal CRM powered by the spine's event stream."""
+    # Reads events from: Sight (OCR name mentions), Voice (spoken names), email/calendar integrations
+    # PersonEntity extractor: NER on text payloads, fuzzy match against contacts table
+    # Interaction logger: auto-populates from detected mentions + email/calendar APIs
+    # Relationship graph: frequency, recency, sentiment scoring per contact
+    # Follow-up tracker: pending conversations, last interaction, cadence alerts
+```
+
+Payload: `{contact_id, interaction_type, channel, summary, sentiment}`
+
+### Signals Module
+
+```python
+class SignalsModule(ModalityModule):
+    """External intelligence — the outward-facing antenna."""
+    # Implements ModalityModule — external events ARE ContextEvents
+    # Emits: SIGNAL event_type with source-specific payloads
+    # SignalSource protocol: each integration (Gmail, GitHub, RSS, Slack) implements poll + parse
+    # Heart-weighted filtering: only store/alert signals above relevance threshold
+    # Project auto-tagging: keyword match against active project names/descriptions
+    # Deduplication: same signal from multiple sources collapsed
+```
+
+Payload: `{source, signal_type, title, body, relevance_score, project_tag}`
+
 ### Memory Tiers (Deferred)
 
 Current SQLite (events table) is sufficient through Phase 2. When volume justifies:
