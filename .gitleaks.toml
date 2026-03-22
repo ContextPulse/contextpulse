@@ -1,0 +1,11 @@
+# ContextPulse gitleaks configuration
+# Suppress false positives from business plan prose text
+
+[allowlist]
+  description = "Allow business plan prose and documentation"
+  paths = [
+    '''business-plan/.*\.md$''',
+    '''docs/.*\.md$''',
+    '''brand/.*\.md$''',
+    '''\.venv/.*''',
+  ]
