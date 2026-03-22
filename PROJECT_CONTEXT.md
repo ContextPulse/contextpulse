@@ -18,11 +18,22 @@ ContextPulse is a platform that provides always-on context for AI agents. Screen
 
 | Package | Description | Status |
 |---------|-------------|--------|
-| **contextpulse-sight** | Always-on screen capture + MCP server | Phase 2.0 + Security: 118 tests, 7 MCP tools, activity DB, smart storage, OCR redaction, MCP hardening |
+| **contextpulse-sight** | Always-on screen capture + MCP server | Phase 3.0: 145 tests, 10 MCP tools, activity DB, smart storage, OCR redaction, clipboard capture, diff-aware capture, token estimation, agent stats, MCP config generator |
 | **contextpulse-core** | Shared config, licensing, settings, GUI theme | Productized: 35 tests, persistent config, Ed25519 licensing, settings panel, first-run |
-| **contextpulse-memory** | Cross-session persistent memory (journal pattern) | Planned — from SynapseAI |
-| **contextpulse-agent** | Agent coordination, session protocol | Planned — from SynapseAI |
-| **contextpulse-project** | Auto-generated project context | Planned |
+| **contextpulse-voice** | Voice/audio capture + transcription | Planned — port from Voiceasy, Phase 2 |
+| **contextpulse-keys** | Keyboard capture + fatigue detection | Planned — Phase 3 |
+| **contextpulse-flow** | Pointer/mouse capture + attention tracking | Planned — Phase 4 |
+| **contextpulse-heart** | Values, goals, mission weighting layer | Planned — Phase 6, ~400 LOC |
+| **contextpulse-contacts** | Personal CRM + people intelligence | Planned — Phase 7, ~1200 LOC |
+| **contextpulse-signals** | External intelligence antenna | Planned — Phase 8, ~2500 LOC |
+| **contextpulse-memory** | Cross-session persistent memory | Planned — from SynapseAI |
+| **spine** | ContextEvent + EventBus + ModalityModule | P1 — define contracts before Voice |
+
+## Strategic Decisions (2026-03-22)
+- **Build sequence:** Spine contract → Adapt Sight → Ship Pro → Voice on contract → Keys → Flow → Heart → Contacts → Signals
+- **Open-source:** Under evaluation. Open core + hosted service model. Decision deferred to Q3 2026 after Sight Pro revenue.
+- **IP:** Provisional patent ready to file ($65). Trademark pending TESS search. Filing instructions at ip/FILING_INSTRUCTIONS.md.
+- **Heart is foundational:** Not a separate product — it's the compass that weights everything. Build with spine.
 
 ## Tech Stack
 - **Language:** Python 3.14
@@ -62,11 +73,13 @@ ContextPulse/
 │   │       ├── config.py       # Env var loading (20+ settings)
 │   │       ├── privacy.py      # Window blocklist + session lock + process name
 │   │       ├── events.py       # Event-driven capture (window focus, idle, monitor cross)
-│   │       ├── activity.py     # SQLite activity DB with FTS5 search
+│   │       ├── activity.py     # SQLite activity DB with FTS5 + clipboard + MCP call tracking
 │   │       ├── ocr_worker.py   # Background OCR processing with smart storage
+│   │       ├── clipboard.py    # Win32 clipboard monitoring with deduplication
+│   │       ├── setup.py        # MCP config generator (--setup claude-code/cursor/gemini)
 │   │       ├── icon.py         # System tray icon generation
 │   │       └── redact.py       # OCR text redaction (API keys, tokens, passwords)
-│   │   └── tests/              # 118 tests across 10 test files
+│   │   └── tests/              # 145 tests across 12 test files
 │   │   └── scripts/
 │   │       ├── auto_benchmark.py  # Automated storage mode benchmarking
 │   │       └── benchmark_storage.py  # Manual capture benchmarking
@@ -98,12 +111,15 @@ All files written to `C:\Users\david\screenshots\`.
 | Tool | Description |
 |------|-------------|
 | get_screenshot(mode, monitor_index) | Capture screen (active/all/monitor/region) |
-| get_recent(count, seconds) | Recent frames from rolling buffer |
+| get_recent(count, seconds, min_diff) | Recent frames from rolling buffer with diff filtering |
 | get_screen_text() | OCR current screen at full resolution |
-| get_buffer_status() | Check daemon/buffer health + monitor count |
+| get_buffer_status() | Check daemon/buffer health + token cost estimates |
 | get_activity_summary(hours) | App usage distribution over last N hours |
 | search_history(query, minutes_ago) | FTS5 search across window titles + OCR text |
 | get_context_at(minutes_ago) | Frame + metadata from N minutes ago |
+| get_clipboard_history(count) | Recent clipboard text (error messages, URLs, stack traces) |
+| search_clipboard(query, minutes_ago) | Search clipboard history by text content |
+| get_agent_stats(hours) | MCP client usage statistics per agent |
 
 ## Storage Modes
 
@@ -181,13 +197,31 @@ Events trigger immediate capture, replacing the next timer tick. Keeps CPU flat.
 - [ ] End-to-end daemon testing (first-run, settings, blocklist, license)
 - [ ] Add redact_ocr_text boolean to config defaults (opt-in/out toggle)
 
-### Phase 3: TradingCoPilot Integration — PLANNED
+### Phase 3.0: Feature Differentiation — COMPLETE (2026-03-21)
+- [x] Token cost estimation (image tokens via Claude tile formula, text tokens via char count)
+- [x] get_buffer_status() shows total/avg token costs and text-vs-image savings %
+- [x] Diff-aware capture (0-100% pixel diff score per frame)
+- [x] diff_score column in activity DB with migration for existing databases
+- [x] get_recent(min_diff=N) filters frames by visual change magnitude
+- [x] MCP config generator (`contextpulse-sight --setup claude-code|cursor|gemini|all|print`)
+- [x] Multi-agent awareness (mcp_calls table, per-client tool call tracking)
+- [x] get_agent_stats() MCP tool shows which agents are consuming context
+- [x] @_track_call decorator on all 10 MCP tools
+- [x] Clipboard context capture (Win32 clipboard monitoring, deduplication, debounce)
+- [x] clipboard table in activity DB with text storage
+- [x] get_clipboard_history() and search_clipboard() MCP tools
+- [x] ClipboardMonitor wired into daemon lifecycle (start/stop)
+- [x] 145 tests passing (up from 118/153)
+- [ ] Restart daemon with new code
+- [ ] Update landing page copy to highlight new features
+
+### Phase 4: TradingCoPilot Integration — PLANNED
 - [ ] Integrate ContextPulse Sight into TradingCoPilot
 - [ ] Auto-capture thinkorswim charts with OCR metadata
 - [ ] Correlate trade timestamps with chart screenshots
 - [ ] Visual pattern analysis + numerical indicator data
 
-### Phase 4: Memory Package — PLANNED
+### Phase 5: Memory Package — PLANNED
 - [ ] Port SynapseAI journal pattern
 - [ ] Cross-session context persistence
 
@@ -198,6 +232,26 @@ Events trigger immediate capture, replacing the next timer tick. Keeps CPU flat.
 | RAM | <20 MB |
 | Disk writes | <2 MB/min |
 | Startup time | <2s |
+
+## Logo & Visual Identity
+- **Responsive logo system** selected 2026-03-21
+- **A1 (Full mark):** Bold eye + pulse wave — use at 64px+ (website, social, README)
+- **A3 (Simplified):** Thinner clean eye + pulse — use at 16-48px (tray icon, favicon)
+- Monochrome and reversed variants generated for both
+- All assets in `brand/logo/`
+- **Still needed:** SVG traces, ICO files, sized PNGs
+
+## Feature Ideas (documented, pending technical feasibility)
+1. Clipboard context capture (DONE - Phase 3.0)
+2. MCP config generator (DONE - Phase 3.0)
+3. Multi-agent awareness (DONE - Phase 3.0)
+4. Diff-aware capture (DONE - Phase 3.0)
+5. Contextual annotations (hotkey + voice/text tagging)
+6. Project-aware capture (auto-tag by repo/IDE)
+7. Token cost estimation (DONE - Phase 3.0)
+8. Capture webhooks / event stream
+9. Screen narration (local vision model summaries)
+10. Cross-machine sync (metadata only, images stay local)
 
 ## Key Docs
 - `docs/ecosystem-roadmap.md` — unified product roadmap with revenue milestones
