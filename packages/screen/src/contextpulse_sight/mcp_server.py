@@ -16,6 +16,7 @@ import logging
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import mss as mss_lib
 from PIL import Image
@@ -59,7 +60,7 @@ def _track_call(func):
 
 @mcp_app.tool()
 @_track_call
-def get_screenshot(mode: str = "active", monitor_index: int | None = None) -> list | MCPImage:
+def get_screenshot(mode: str = "active", monitor_index: int | None = None) -> Any:
     """Capture the current screen and return as an image.
 
     Args:
