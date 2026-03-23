@@ -40,3 +40,4 @@ lambda/*.zip
 # Confidential IP documents (trade secrets)
 ip/
 .wrangler/
+leak.json

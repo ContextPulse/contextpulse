@@ -73,6 +73,14 @@ class SightModule(ModalityModule):
             "error": self._error,
         }
 
+    def get_config_schema(self) -> dict[str, Any]:
+        return {
+            "capture_interval": {"type": "number", "default": 5, "description": "Seconds between captures"},
+            "ocr_enabled": {"type": "boolean", "default": True, "description": "Enable OCR on captured frames"},
+            "clipboard_enabled": {"type": "boolean", "default": True, "description": "Monitor clipboard changes"},
+            "diff_threshold": {"type": "number", "default": 0.01, "description": "Minimum diff score to emit event"},
+        }
+
     def _emit(self, event: ContextEvent) -> None:
         """Emit an event via the registered callback. Swallows errors."""
         if not self._callback or not self._running:
