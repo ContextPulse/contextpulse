@@ -103,6 +103,94 @@ class TestActivityDB:
         assert db.count() == 1
         db.close()
 
+    def test_record_with_diff_score(self, tmp_path):
+        db = ActivityDB(db_path=tmp_path / "test.db")
+        row_id = db.record(
+            timestamp=time.time(),
+            window_title="VS Code",
+            app_name="Code.exe",
+            diff_score=85.3,
+        )
+        result = db.get_context_at(minutes_ago=1)
+        assert result is not None
+        assert result["diff_score"] == 85.3
+        db.close()
+
+    def test_search_by_frame(self, tmp_path):
+        db = ActivityDB(db_path=tmp_path / "test.db")
+        db.record(
+            timestamp=time.time(),
+            window_title="Test",
+            app_name="test.exe",
+            frame_path="/tmp/frame_123.jpg",
+            diff_score=42.0,
+        )
+        result = db.search_by_frame("/tmp/frame_123.jpg")
+        assert result is not None
+        assert result["diff_score"] == 42.0
+
+        assert db.search_by_frame("/nonexistent.jpg") is None
+        db.close()
+
+    def test_record_mcp_call(self, tmp_path):
+        db = ActivityDB(db_path=tmp_path / "test.db")
+        row_id = db.record_mcp_call("get_screenshot", "claude-code")
+        assert row_id > 0
+        db.record_mcp_call("get_screen_text", "claude-code")
+        db.record_mcp_call("get_screenshot", "cursor")
+
+        stats = db.get_agent_stats(hours=1)
+        assert stats["total_calls"] == 3
+        assert "claude-code" in stats["clients"]
+        assert stats["clients"]["claude-code"]["get_screenshot"] == 1
+        assert stats["clients"]["claude-code"]["get_screen_text"] == 1
+        assert stats["clients"]["cursor"]["get_screenshot"] == 1
+        db.close()
+
+    def test_get_agent_stats_empty(self, tmp_path):
+        db = ActivityDB(db_path=tmp_path / "test.db")
+        stats = db.get_agent_stats(hours=1)
+        assert stats["total_calls"] == 0
+        assert stats["clients"] == {}
+        db.close()
+
+    def test_record_clipboard(self, tmp_path):
+        db = ActivityDB(db_path=tmp_path / "test.db")
+        row_id = db.record_clipboard(time.time(), "ERROR: connection refused on port 8080")
+        assert row_id > 0
+        history = db.get_clipboard_history(count=5)
+        assert len(history) == 1
+        assert "connection refused" in history[0]["text"]
+        db.close()
+
+    def test_clipboard_history_order(self, tmp_path):
+        db = ActivityDB(db_path=tmp_path / "test.db")
+        now = time.time()
+        db.record_clipboard(now - 10, "first clip")
+        db.record_clipboard(now - 5, "second clip")
+        db.record_clipboard(now, "third clip")
+        history = db.get_clipboard_history(count=2)
+        assert len(history) == 2
+        assert history[0]["text"] == "third clip"  # most recent first
+        assert history[1]["text"] == "second clip"
+        db.close()
+
+    def test_search_clipboard(self, tmp_path):
+        db = ActivityDB(db_path=tmp_path / "test.db")
+        now = time.time()
+        db.record_clipboard(now, "Traceback: ValueError at line 42")
+        db.record_clipboard(now, "https://github.com/some/repo")
+        results = db.search_clipboard("ValueError", minutes_ago=5)
+        assert len(results) == 1
+        assert "ValueError" in results[0]["text"]
+        db.close()
+
+    def test_search_clipboard_empty(self, tmp_path):
+        db = ActivityDB(db_path=tmp_path / "test.db")
+        results = db.search_clipboard("nonexistent", minutes_ago=5)
+        assert results == []
+        db.close()
+
     def test_multiple_records_and_search(self, tmp_path):
         db = ActivityDB(db_path=tmp_path / "test.db")
         now = time.time()

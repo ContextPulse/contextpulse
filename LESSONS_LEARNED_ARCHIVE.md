@@ -21,3 +21,13 @@ Lessons that have been incorporated into skills and no longer need to consume co
 
 ### [2026-03-15] SynapseAI has Intel/Habana Labs trademark conflict
 **Archived 2026-03-21:** One-time naming research. SynapseAI project has been renamed. Knowledge encoded in `naming-products` skill trigger for trademark checks.
+
+### [2026-03-21] Changing a function's return type requires updating all callers AND tests
+**Archived to:** `developing-python` skill (references/windows-gotchas.md)
+**Context:** Changed `buffer.add()` return type; callers and tests broke.
+**Lesson:** Grep all callers and `isinstance` assertions when changing return types.
+
+### [2026-03-21] SQLite schema migrations — use ALTER TABLE with try/except for backward compat
+**Archived to:** `developing-python` skill (references/windows-gotchas.md)
+**Context:** Added diff_score column to existing activity table.
+**Lesson:** Use `_MIGRATIONS` list with try/except on startup for idempotent schema changes.

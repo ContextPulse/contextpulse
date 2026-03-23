@@ -26,6 +26,7 @@ ContextPulse is a platform that provides always-on context for AI agents. Screen
 | **contextpulse-heart** | Values, goals, mission weighting layer | Planned — Phase 6, ~400 LOC |
 | **contextpulse-contacts** | Personal CRM + people intelligence | Planned — Phase 7, ~1200 LOC |
 | **contextpulse-signals** | External intelligence antenna | Planned — Phase 8, ~2500 LOC |
+| **contextpulse-project** | Project-aware routing layer + MCP tools | **v0.1 DONE** (2026-03-22): 5 MCP tools (identify_project, get_active_project, list_projects, get_project_context, route_to_journal), 38 tests, keyword-based routing, registered as global MCP server |
 | **contextpulse-memory** | Cross-session persistent memory | Planned — from SynapseAI |
 | **spine** | ContextEvent + EventBus + ModalityModule | P1 — define contracts before Voice |
 

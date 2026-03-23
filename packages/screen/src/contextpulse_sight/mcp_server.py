@@ -4,12 +4,14 @@ Tools:
   get_screenshot       — capture current screen (active, all, specific monitor, or region)
   get_recent           — last N frames from rolling buffer
   get_screen_text      — OCR the current screen (full-res, on-demand)
-  get_buffer_status    — check daemon/buffer health
+  get_buffer_status    — check daemon/buffer health + token cost estimates
   get_activity_summary — app usage distribution over last N hours
   search_history       — full-text search across window titles and OCR text
   get_context_at       — retrieve frame + metadata from N minutes ago
+  get_agent_stats      — MCP client usage statistics
 """
 
+import functools
 import logging
 import time
 from datetime import datetime
@@ -22,7 +24,12 @@ from mcp.server.fastmcp import FastMCP, Image as MCPImage
 
 from contextpulse_sight import capture
 from contextpulse_sight.activity import ActivityDB
-from contextpulse_sight.buffer import RollingBuffer, parse_frame_path
+from contextpulse_sight.buffer import (
+    RollingBuffer,
+    estimate_image_tokens,
+    estimate_text_tokens,
+    parse_frame_path,
+)
 from contextpulse_sight.classifier import classify_and_extract
 from contextpulse_sight.config import FILE_LATEST, OUTPUT_DIR
 from contextpulse_sight.privacy import is_blocked, is_title_blocked
@@ -41,7 +48,17 @@ _buffer = RollingBuffer()
 _activity_db = ActivityDB()
 
 
+def _track_call(func):
+    """Decorator to log MCP tool calls for agent awareness tracking."""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        _activity_db.record_mcp_call(tool_name=func.__name__)
+        return func(*args, **kwargs)
+    return wrapper
+
+
 @mcp_app.tool()
+@_track_call
 def get_screenshot(mode: str = "active", monitor_index: int | None = None) -> list | MCPImage:
     """Capture the current screen and return as an image.
 
@@ -89,7 +106,8 @@ def get_screenshot(mode: str = "active", monitor_index: int | None = None) -> li
 
 
 @mcp_app.tool()
-def get_recent(count: int = 3, seconds: int = 60) -> list:
+@_track_call
+def get_recent(count: int = 3, seconds: int = 60, min_diff: float = 0.0) -> list:
     """Get recent screenshots from the rolling buffer.
 
     The daemon auto-captures every few seconds. This returns the most recent
@@ -98,12 +116,29 @@ def get_recent(count: int = 3, seconds: int = 60) -> list:
     Args:
         count: Max number of frames to return (default 3).
         seconds: Look back this many seconds (default 60).
+        min_diff: Minimum visual diff score (0-100) to include. Use to filter
+                  out minor changes. E.g. min_diff=50 returns only frames where
+                  the screen changed significantly (app switch, new page).
 
     Returns images inline so Claude can see them directly.
     """
     frames = _buffer.get_recent(seconds)
     if not frames:
         return []
+
+    # Filter by diff score if requested — look up from activity DB
+    if min_diff > 0:
+        filtered = []
+        for f in frames:
+            parsed = parse_frame_path(f)
+            if parsed:
+                # Search activity DB for this frame's diff score
+                results = _activity_db.search_by_frame(str(f))
+                if results and results.get("diff_score", 0) >= min_diff:
+                    filtered.append(f)
+                elif not results:
+                    filtered.append(f)  # no record, include by default
+        frames = filtered
 
     frames = frames[-count:]
 
@@ -119,6 +154,7 @@ def get_recent(count: int = 3, seconds: int = 60) -> list:
 
 
 @mcp_app.tool()
+@_track_call
 def get_screen_text() -> str:
     """OCR the current screen at full resolution and return extracted text.
 
@@ -156,6 +192,7 @@ def get_screen_text() -> str:
 
 
 @mcp_app.tool()
+@_track_call
 def get_buffer_status() -> str:
     """Check the status of the rolling screenshot buffer.
 
@@ -177,23 +214,58 @@ def get_buffer_status() -> str:
     newest_ts = newest_parsed[0] / 1000.0
     age = time.time() - newest_ts
 
-    # Count unique monitors in buffer
+    # Count unique monitors and estimate token costs
     monitor_indices = set()
+    total_image_tokens = 0
+    total_text_tokens = 0
+    text_frames = 0
+    image_frames = 0
     for f in frames:
         parsed = parse_frame_path(f)
         if parsed:
             monitor_indices.add(parsed[1])
+        txt_path = f.with_suffix(".txt") if f.suffix == ".jpg" else f
+        if f.suffix == ".jpg":
+            image_frames += 1
+            try:
+                img = Image.open(f)
+                total_image_tokens += estimate_image_tokens(img.width, img.height)
+            except Exception:
+                pass
+        if txt_path.exists():
+            try:
+                import json
+                meta = json.loads(txt_path.read_text(encoding="utf-8"))
+                text = meta.get("text", "")
+                if text:
+                    text_frames += 1
+                    total_text_tokens += estimate_text_tokens(text)
+            except Exception:
+                pass
 
-    return (
-        f"Buffer: {count} frames across {len(monitor_indices)} monitor(s)\n"
-        f"Monitors: {sorted(monitor_indices)}\n"
-        f"Span: {newest_ts - oldest_ts:.0f}s of history\n"
-        f"Latest frame: {age:.0f}s ago\n"
-        f"Directory: {OUTPUT_DIR / 'buffer'}"
-    )
+    lines = [
+        f"Buffer: {count} frames across {len(monitor_indices)} monitor(s)",
+        f"Monitors: {sorted(monitor_indices)}",
+        f"Span: {newest_ts - oldest_ts:.0f}s of history",
+        f"Latest frame: {age:.0f}s ago",
+    ]
+
+    if image_frames:
+        avg_img = total_image_tokens // image_frames
+        lines.append(f"Token cost (images): ~{total_image_tokens:,} total, ~{avg_img:,} avg/frame")
+    if text_frames:
+        avg_txt = total_text_tokens // text_frames
+        lines.append(f"Token cost (text):   ~{total_text_tokens:,} total, ~{avg_txt:,} avg/frame")
+    if image_frames and text_frames:
+        savings = (1 - total_text_tokens / max(1, total_image_tokens)) * 100
+        lines.append(f"Text vs image savings: {savings:.0f}% fewer tokens using text")
+
+    lines.append(f"Directory: {OUTPUT_DIR / 'buffer'}")
+    return "\n".join(lines)
 
 
 @mcp_app.tool()
+@_track_call
 def get_activity_summary(hours: float = 8.0) -> str:
     """Summarize which apps and websites were used over the last N hours.
 
@@ -235,6 +307,7 @@ def get_activity_summary(hours: float = 8.0) -> str:
 
 
 @mcp_app.tool()
+@_track_call
 def search_history(query: str, minutes_ago: int = 60) -> str:
     """Search screen history via OCR text and window titles.
 
@@ -269,6 +342,7 @@ def search_history(query: str, minutes_ago: int = 60) -> str:
 
 
 @mcp_app.tool()
+@_track_call
 def get_context_at(minutes_ago: float = 5.0) -> list:
     """Get the frame + window title + OCR text from approximately N minutes ago.
 
@@ -312,6 +386,103 @@ def get_context_at(minutes_ago: float = 5.0) -> list:
         results.append(f"\nOCR Text:\n{record['ocr_text'][:500]}")
 
     return results
+
+
+@mcp_app.tool()
+@_track_call
+def get_clipboard_history(count: int = 10) -> str:
+    """Get recent clipboard contents captured by ContextPulse.
+
+    Returns the last N clipboard entries (text that was copied). Useful for
+    retrieving error messages, URLs, code snippets, or stack traces that
+    were copied but may have been overwritten since.
+
+    Args:
+        count: Number of recent entries to return (default 10).
+    """
+    entries = _activity_db.get_clipboard_history(count)
+    if not entries:
+        return "No clipboard history recorded. Is the daemon running?"
+
+    lines = [f"=== Clipboard History ({len(entries)} entries) ===\n"]
+    for entry in entries:
+        ts_str = datetime.fromtimestamp(entry["timestamp"]).strftime("%H:%M:%S")
+        text = entry["text"]
+        # Show first 200 chars with line count
+        line_count = text.count("\n") + 1
+        preview = text[:200].replace("\n", " \\n ")
+        if len(text) > 200:
+            preview += "..."
+        lines.append(f"[{ts_str}] ({len(text)} chars, {line_count} lines)")
+        lines.append(f"  {preview}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+@mcp_app.tool()
+@_track_call
+def search_clipboard(query: str, minutes_ago: int = 60) -> str:
+    """Search clipboard history for specific text.
+
+    Searches through captured clipboard contents. Useful for finding a
+    specific error message, URL, or code snippet that was copied earlier.
+
+    Args:
+        query: Text to search for in clipboard history.
+        minutes_ago: How far back to search (default 60 minutes).
+    """
+    results = _activity_db.search_clipboard(query, minutes_ago)
+    if not results:
+        return f"No clipboard entries matching '{query}' in the last {minutes_ago} minutes."
+
+    lines = [f"=== Clipboard Search: '{query}' ({len(results)} results) ===\n"]
+    for entry in results:
+        ts_str = datetime.fromtimestamp(entry["timestamp"]).strftime("%H:%M:%S")
+        text = entry["text"]
+        preview = text[:300].replace("\n", " \\n ")
+        if len(text) > 300:
+            preview += "..."
+        lines.append(f"[{ts_str}] ({len(text)} chars)")
+        lines.append(f"  {preview}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+@mcp_app.tool()
+@_track_call
+def get_agent_stats(hours: float = 24.0) -> str:
+    """Show which MCP clients have called ContextPulse tools and how often.
+
+    Tracks tool usage per client. Useful for understanding which AI agents
+    are actively consuming context from ContextPulse Sight.
+
+    Args:
+        hours: How many hours back to report (default 24).
+    """
+    stats = _activity_db.get_agent_stats(hours)
+    if not stats["total_calls"]:
+        return f"No MCP tool calls recorded in the last {hours:.0f} hours."
+
+    lines = [f"=== Agent Stats (last {hours:.0f}h) ===\n"]
+    lines.append(f"Total tool calls: {stats['total_calls']}")
+
+    start, end = stats["time_range"]
+    if start and end:
+        lines.append(
+            f"Time range: {datetime.fromtimestamp(start).strftime('%H:%M')} - "
+            f"{datetime.fromtimestamp(end).strftime('%H:%M')}\n"
+        )
+
+    for client_id, tools in stats["clients"].items():
+        total_for_client = sum(tools.values())
+        lines.append(f"{client_id}: {total_for_client} calls")
+        for tool_name, count in sorted(tools.items(), key=lambda x: -x[1]):
+            lines.append(f"  {tool_name}: {count}")
+        lines.append("")
+
+    return "\n".join(lines)
 
 
 def main():

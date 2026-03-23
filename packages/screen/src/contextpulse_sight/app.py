@@ -20,6 +20,7 @@ from contextpulse_sight.config import (
 )
 from contextpulse_sight.events import EventDetector
 from contextpulse_sight.icon import _COLORS, create_icon
+from contextpulse_sight.clipboard import ClipboardMonitor
 from contextpulse_sight.ocr_worker import OCRWorker
 from contextpulse_sight.privacy import (
     SessionMonitor, get_foreground_process_name, get_foreground_window_title, is_blocked,
@@ -33,10 +34,16 @@ from contextpulse_core.license_dialog import show_nag_dialog
 
 _WARNING_COLOR = _COLORS.get("dark", {}).get("warning", "#F0B429")
 
+_LOG_FILE = OUTPUT_DIR / "contextpulse_sight.log"
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(message)s",
+    format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
     datefmt="%H:%M:%S",
+    handlers=[
+        logging.FileHandler(_LOG_FILE, encoding="utf-8"),
+        logging.StreamHandler(),
+    ],
 )
 logger = logging.getLogger("contextpulse.sight")
 
@@ -51,6 +58,7 @@ class ContextPulseSightApp:
         self.activity_db = ActivityDB()
         self._event_detector = EventDetector()
         self._ocr_worker = OCRWorker(self.activity_db, self.buffer)
+        self._clipboard_monitor = ClipboardMonitor(self.activity_db)
 
     # -- Privacy guard -----------------------------------------------------
 
@@ -135,16 +143,17 @@ class ContextPulseSightApp:
 
         now = time.time()
         for idx, img in monitors:
-            stored = self.buffer.add(img, monitor_index=idx)
-            if stored:
-                frame_path = stored  # buffer.add returns Path when stored
-                # Record activity
+            result = self.buffer.add(img, monitor_index=idx)
+            if result:
+                frame_path, diff_pct = result  # buffer.add returns (Path, diff_pct)
+                # Record activity with diff score
                 row_id = self.activity_db.record(
                     timestamp=now,
                     window_title=window_title,
                     app_name=app_name,
                     monitor_index=idx,
                     frame_path=str(frame_path) if frame_path else None,
+                    diff_score=diff_pct,
                 )
                 # Queue for background OCR
                 if frame_path and isinstance(frame_path, Path):
@@ -200,18 +209,56 @@ class ContextPulseSightApp:
     # -- Watchdog ----------------------------------------------------------
 
     def _watchdog_loop(self):
-        """Restart the auto-capture thread if it dies unexpectedly."""
-        logger.info("Watchdog started")
+        """Restart daemon threads if they die unexpectedly."""
+        logger.info("Watchdog started (monitoring all threads)")
         while not self.stop_event.is_set():
-            self.stop_event.wait(30)  # check every 30 seconds
+            self.stop_event.wait(15)  # check every 15 seconds
             if self.stop_event.is_set():
                 break
+            # Auto-capture thread
             if hasattr(self, "_capture_thread") and not self._capture_thread.is_alive():
                 logger.warning("Auto-capture thread died — restarting")
                 self._capture_thread = threading.Thread(
                     target=self._auto_capture_loop, daemon=True
                 )
                 self._capture_thread.start()
+            # Event detector
+            if hasattr(self, "_event_detector") and self._event_detector is not None:
+                if not self._event_detector.is_alive():
+                    logger.warning("Event detector died — restarting")
+                    try:
+                        self._event_detector = EventDetector(self._on_event_capture, self.stop_event)
+                        self._event_detector.start()
+                    except Exception:
+                        logger.exception("Failed to restart event detector")
+            # OCR worker
+            if hasattr(self, "_ocr_worker") and self._ocr_worker is not None:
+                if not self._ocr_worker.is_alive():
+                    logger.warning("OCR worker died — restarting")
+                    try:
+                        self._ocr_worker = OCRWorker(self.activity_db)
+                        self._ocr_worker.start()
+                    except Exception:
+                        logger.exception("Failed to restart OCR worker")
+            # Clipboard monitor
+            if hasattr(self, "_clipboard_monitor") and self._clipboard_monitor is not None:
+                if not self._clipboard_monitor.is_alive():
+                    logger.warning("Clipboard monitor died — restarting")
+                    try:
+                        self._clipboard_monitor = ClipboardMonitor(self.activity_db)
+                        self._clipboard_monitor.start()
+                    except Exception:
+                        logger.exception("Failed to restart clipboard monitor")
+            # Hotkey listener
+            if hasattr(self, "hotkey_listener") and not self.hotkey_listener.is_alive():
+                logger.warning("Hotkey listener died — restarting")
+                try:
+                    self.hotkey_listener = keyboard.Listener(
+                        on_press=self._on_press, on_release=self._on_release
+                    )
+                    self.hotkey_listener.start()
+                except Exception:
+                    logger.exception("Failed to restart hotkey listener")
         logger.info("Watchdog stopped")
 
     # -- Hotkey handling ---------------------------------------------------
@@ -315,6 +362,7 @@ class ContextPulseSightApp:
         self.stop_event.set()
         self._event_detector.stop()
         self._ocr_worker.stop()
+        self._clipboard_monitor.stop()
         self.activity_db.close()
         # Clean up tkinter root used by settings/dialogs
         from contextpulse_core.gui_theme import destroy_root
@@ -364,6 +412,7 @@ class ContextPulseSightApp:
 
         self._event_detector.start()
         self._ocr_worker.start()
+        self._clipboard_monitor.start()
 
         if AUTO_INTERVAL > 0:
             self._capture_thread = threading.Thread(
@@ -388,8 +437,33 @@ class ContextPulseSightApp:
 
 
 def main():
-    app = ContextPulseSightApp()
-    app.run()
+    import sys as _sys
+
+    # Handle --setup flag for MCP config generation
+    if "--setup" in _sys.argv:
+        from contextpulse_sight.setup import setup_client, setup_all, print_config
+
+        idx = _sys.argv.index("--setup")
+        if idx + 1 < len(_sys.argv):
+            target = _sys.argv[idx + 1]
+            if target == "all":
+                setup_all()
+            elif target == "print":
+                print_config()
+            else:
+                setup_client(target)
+        else:
+            print("Usage: contextpulse-sight --setup {claude-code|cursor|gemini|all|print}")
+            _sys.exit(1)
+        return
+
+    try:
+        logger.info("ContextPulse Sight starting (pid=%d)", __import__("os").getpid())
+        app = ContextPulseSightApp()
+        app.run()
+    except Exception:
+        logger.exception("Fatal error — daemon crashed")
+        raise
 
 
 if __name__ == "__main__":

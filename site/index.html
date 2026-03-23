@@ -1,0 +1,1359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ContextPulse — Always-on context for AI agents</title>
+  <meta name="description" content="ContextPulse gives AI coding assistants persistent awareness of your screen, your work history, and your project state. Local-first, privacy-focused, MCP-native.">
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="ContextPulse — Always-on context for AI agents">
+  <meta property="og:description" content="Give your AI coding assistant persistent awareness. Screen capture, shared memory, and agent coordination via MCP. Local-first, privacy-focused.">
+  <meta property="og:url" content="https://contextpulse.ai">
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="ContextPulse — Always-on context for AI agents">
+  <meta name="twitter:description" content="Give your AI coding assistant persistent awareness via MCP. Local-first, privacy-focused.">
+
+  <link rel="icon" type="image/png" href="favicon.png">
+
+  <style>
+    /* === RESET & CUSTOM PROPERTIES === */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --primary: #0A6E8A;
+      --primary-light: #12B5E0;
+      --secondary: #1B4965;
+      --accent: #00CC66;
+      --accent-glow: rgba(0, 204, 102, 0.15);
+      --bg: #0D1117;
+      --bg-elevated: #0F1419;
+      --surface: #161B22;
+      --surface-2: #1C2330;
+      --surface-3: #21283B;
+      --text: #E6EDF3;
+      --text-secondary: #C9D1D9;
+      --text-muted: #8B949E;
+      --border: #30363D;
+      --border-light: #3D444D;
+      --success: #00E676;
+      --warning: #FFB800;
+      --radius: 10px;
+      --radius-lg: 16px;
+      --max-width: 1120px;
+      --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      --font-mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      overflow-x: hidden;
+    }
+
+    a { color: var(--primary-light); text-decoration: none; transition: color 0.2s; }
+    a:hover { color: var(--accent); }
+
+    code, .mono { font-family: var(--font-mono); }
+
+    .container { max-width: var(--max-width); margin: 0 auto; padding: 0 24px; }
+
+    /* === NAVIGATION === */
+    .nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      background: rgba(13, 17, 23, 0.8);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-inner {
+      display: flex; align-items: center; justify-content: space-between;
+      max-width: var(--max-width); margin: 0 auto; padding: 12px 24px;
+    }
+    .nav-brand {
+      display: flex; align-items: center; gap: 10px;
+      font-weight: 700; font-size: 20px; color: var(--text);
+      letter-spacing: -0.01em;
+    }
+    .nav-brand:hover { color: var(--text); }
+    .nav-logo { width: 36px; height: 36px; border-radius: 8px; }
+    .nav-links { display: flex; gap: 24px; align-items: center; }
+    .nav-links a {
+      color: var(--text-muted); font-size: 14px; font-weight: 500;
+      transition: color 0.2s;
+    }
+    .nav-links a:hover { color: var(--text); }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      font-weight: 600; border-radius: 8px; border: none; cursor: pointer;
+      transition: all 0.2s ease; text-decoration: none; gap: 8px;
+    }
+    .btn-sm { padding: 8px 18px; font-size: 14px; }
+    .btn-md { padding: 12px 28px; font-size: 15px; }
+    .btn-lg { padding: 14px 36px; font-size: 16px; }
+    .btn-accent {
+      background: var(--accent); color: var(--bg);
+    }
+    .btn-accent:hover { background: #00b85c; color: var(--bg); transform: translateY(-1px); }
+    .btn-outline {
+      background: transparent; color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-outline:hover { border-color: var(--text-muted); color: var(--text); transform: translateY(-1px); }
+    .btn-ghost { background: transparent; color: var(--text-muted); }
+    .btn-ghost:hover { color: var(--text); }
+
+    .nav-mobile-toggle {
+      display: none; background: none; border: none; cursor: pointer;
+      color: var(--text-muted); padding: 4px;
+    }
+    .nav-mobile-toggle svg { width: 24px; height: 24px; }
+
+    /* === HERO === */
+    .hero {
+      padding: 140px 0 60px;
+      text-align: center;
+      position: relative;
+    }
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 50%;
+      transform: translateX(-50%);
+      width: 800px; height: 600px;
+      background: radial-gradient(ellipse at center, rgba(10, 110, 138, 0.12) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 100px;
+      padding: 6px 16px 6px 8px;
+      font-size: 13px;
+      color: var(--text-secondary);
+      font-weight: 500;
+      margin-bottom: 32px;
+      position: relative;
+    }
+    .hero-badge-dot {
+      width: 8px; height: 8px;
+      background: var(--accent);
+      border-radius: 50%;
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    .hero h1 {
+      font-size: clamp(36px, 5.5vw, 60px);
+      font-weight: 800;
+      line-height: 1.1;
+      margin-bottom: 24px;
+      letter-spacing: -0.03em;
+      color: var(--text);
+    }
+    .hero h1 .highlight {
+      background: linear-gradient(135deg, var(--accent) 0%, var(--primary-light) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero-sub {
+      font-size: 18px;
+      color: var(--text-muted);
+      max-width: 600px;
+      margin: 0 auto 40px;
+      line-height: 1.7;
+    }
+    .hero-actions {
+      display: flex; gap: 14px; justify-content: center; flex-wrap: wrap;
+      margin-bottom: 32px;
+    }
+    .hero-install {
+      display: inline-flex; align-items: center; gap: 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 20px;
+      font-family: var(--font-mono);
+      font-size: 14px;
+      color: var(--accent);
+      cursor: pointer;
+      transition: border-color 0.2s;
+      position: relative;
+    }
+    .hero-install:hover { border-color: var(--accent); }
+    .hero-install .copy-icon {
+      color: var(--text-muted);
+      transition: color 0.2s;
+      flex-shrink: 0;
+    }
+    .hero-install:hover .copy-icon { color: var(--text); }
+    .hero-install .copied-msg {
+      position: absolute;
+      top: -32px; left: 50%;
+      transform: translateX(-50%);
+      background: var(--accent);
+      color: var(--bg);
+      padding: 4px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-family: var(--font-sans);
+      opacity: 0;
+      transition: opacity 0.2s;
+      pointer-events: none;
+    }
+    .hero-install .copied-msg.show { opacity: 1; }
+
+    /* === STATS BAR === */
+    .stats-bar {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 1px;
+      background: var(--border);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    .stat-item {
+      background: var(--surface);
+      padding: 20px 16px;
+      text-align: center;
+    }
+    .stat-value {
+      font-size: 24px; font-weight: 700;
+      color: var(--accent);
+      font-family: var(--font-mono);
+      line-height: 1.2;
+    }
+    .stat-label {
+      font-size: 12px; color: var(--text-muted);
+      margin-top: 4px; text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    /* === SECTION STYLES === */
+    section { padding: 100px 0; }
+    .section-label {
+      font-size: 12px; font-weight: 700; color: var(--primary-light);
+      text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 12px;
+    }
+    .section-title {
+      font-size: clamp(28px, 3.5vw, 42px);
+      font-weight: 800; line-height: 1.15;
+      margin-bottom: 16px;
+      letter-spacing: -0.02em;
+    }
+    .section-sub {
+      font-size: 16px; color: var(--text-muted);
+      max-width: 560px; line-height: 1.7;
+    }
+    .section-header { margin-bottom: 56px; }
+    .section-header.center { text-align: center; }
+    .section-header.center .section-sub { margin: 0 auto; }
+
+    /* === PROBLEM SECTION === */
+    .problem { background: var(--bg-elevated); }
+    .problem-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+    }
+    .problem-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 32px;
+      position: relative;
+      overflow: hidden;
+    }
+    .problem-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--primary) 0%, var(--primary-light) 100%);
+      opacity: 0.6;
+    }
+    .problem-icon {
+      width: 44px; height: 44px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px;
+      margin-bottom: 16px;
+    }
+    .problem-card h3 {
+      font-size: 17px; font-weight: 700; margin-bottom: 8px;
+      letter-spacing: -0.01em;
+    }
+    .problem-card p { font-size: 14px; color: var(--text-muted); line-height: 1.65; }
+
+    /* === PRODUCT SUITE === */
+    .products-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 20px;
+    }
+    .product-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 28px;
+      transition: border-color 0.25s, transform 0.25s;
+      position: relative;
+    }
+    .product-card:hover { border-color: var(--border-light); transform: translateY(-2px); }
+    .product-card.featured {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent), 0 4px 24px rgba(0, 204, 102, 0.08);
+    }
+    .product-badge {
+      display: inline-block;
+      font-size: 11px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.06em;
+      padding: 3px 10px; border-radius: 100px;
+      margin-bottom: 16px;
+    }
+    .badge-live { background: var(--accent-glow); color: var(--accent); }
+    .badge-soon { background: rgba(18, 181, 224, 0.12); color: var(--primary-light); }
+    .badge-planned { background: rgba(139, 148, 158, 0.1); color: var(--text-muted); }
+    .product-icon {
+      width: 48px; height: 48px;
+      border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: 16px;
+      font-size: 22px;
+    }
+    .product-icon.sight { background: linear-gradient(135deg, rgba(0, 204, 102, 0.15), rgba(18, 181, 224, 0.15)); }
+    .product-icon.memory { background: linear-gradient(135deg, rgba(18, 181, 224, 0.15), rgba(94, 173, 208, 0.15)); }
+    .product-icon.agent { background: linear-gradient(135deg, rgba(255, 184, 0, 0.12), rgba(240, 180, 41, 0.12)); }
+    .product-icon.voice { background: linear-gradient(135deg, rgba(139, 148, 158, 0.12), rgba(94, 173, 208, 0.12)); }
+    .product-card h3 { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
+    .product-card p { font-size: 14px; color: var(--text-muted); line-height: 1.65; }
+
+    /* === SIGHT DETAIL === */
+    .sight-section {
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+    .sight-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 56px;
+      align-items: start;
+    }
+    .feature-list { list-style: none; }
+    .feature-list li {
+      padding: 10px 0;
+      font-size: 15px;
+      display: flex; align-items: flex-start; gap: 12px;
+      color: var(--text-secondary);
+      line-height: 1.55;
+    }
+    .feature-dot {
+      width: 7px; height: 7px;
+      background: var(--accent);
+      border-radius: 50%;
+      margin-top: 7px;
+      flex-shrink: 0;
+    }
+    .mcp-tools-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 24px;
+    }
+    .mcp-tool {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+      font-size: 13px;
+    }
+    .mcp-tool-name {
+      font-family: var(--font-mono);
+      color: var(--accent);
+      font-size: 12px;
+      display: block;
+      margin-bottom: 2px;
+    }
+    .mcp-tool-desc { color: var(--text-muted); font-size: 12px; }
+
+    /* === HOW IT WORKS === */
+    .steps-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 32px;
+      counter-reset: step;
+    }
+    .step-card {
+      position: relative;
+      counter-increment: step;
+    }
+    .step-number {
+      width: 48px; height: 48px;
+      background: var(--surface);
+      border: 2px solid var(--accent);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--font-mono);
+      font-size: 18px; font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 20px;
+    }
+    .step-card h3 { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
+    .step-card p { font-size: 14px; color: var(--text-muted); line-height: 1.65; margin-bottom: 16px; }
+    .step-code {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+      font-family: var(--font-mono);
+      font-size: 13px;
+      color: var(--accent);
+      overflow-x: auto;
+    }
+    .step-connector {
+      display: none;
+    }
+
+    /* === PRICING === */
+    .pricing-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    .price-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 32px;
+      display: flex;
+      flex-direction: column;
+    }
+    .price-card.featured {
+      border-color: var(--accent);
+      position: relative;
+    }
+    .price-card.featured::before {
+      content: 'Most popular';
+      position: absolute;
+      top: -12px; left: 50%;
+      transform: translateX(-50%);
+      background: var(--accent);
+      color: var(--bg);
+      padding: 4px 14px;
+      border-radius: 100px;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .price-card h3 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+    .price-amount {
+      font-size: 40px; font-weight: 800; margin: 12px 0 4px;
+      font-family: var(--font-mono);
+      letter-spacing: -0.02em;
+    }
+    .price-note { font-size: 13px; color: var(--text-muted); margin-bottom: 24px; }
+    .price-features { list-style: none; flex: 1; }
+    .price-features li {
+      padding: 7px 0; font-size: 14px; color: var(--text-secondary);
+      display: flex; align-items: center; gap: 10px;
+    }
+    .price-features li::before {
+      content: '';
+      display: inline-block;
+      width: 16px; height: 16px;
+      flex-shrink: 0;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='%2300CC66'%3E%3Cpath d='M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z'/%3E%3C/svg%3E");
+      background-size: contain;
+      background-repeat: no-repeat;
+    }
+    .price-features li.disabled {
+      color: var(--text-muted);
+    }
+    .price-features li.disabled::before {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='%233D444D'%3E%3Cpath d='M3 8a.75.75 0 01.75-.75h8.5a.75.75 0 010 1.5h-8.5A.75.75 0 013 8z'/%3E%3C/svg%3E");
+    }
+    .price-cta { margin-top: 24px; width: 100%; text-align: center; }
+
+    /* === COMPARISON === */
+    .comparison-section { background: var(--bg-elevated); }
+    .comparison-table {
+      width: 100%; border-collapse: collapse;
+      font-size: 14px;
+    }
+    .comparison-table th, .comparison-table td {
+      padding: 14px 16px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    .comparison-table th {
+      font-weight: 700; font-size: 12px;
+      color: var(--text-muted); text-transform: uppercase;
+      letter-spacing: 0.06em;
+      position: sticky; top: 0;
+      background: var(--bg-elevated);
+    }
+    .comparison-table th:nth-child(2) { color: var(--accent); }
+    .comparison-table td:first-child { font-weight: 600; color: var(--text); }
+    .comparison-table td:nth-child(2) { color: var(--accent); }
+    .check-icon { color: var(--accent); }
+    .cross-icon { color: var(--text-muted); }
+    .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+    /* === PRIVACY === */
+    .privacy-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 20px;
+    }
+    .privacy-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      transition: border-color 0.2s;
+    }
+    .privacy-card:hover { border-color: var(--border-light); }
+    .privacy-icon {
+      width: 40px; height: 40px;
+      background: var(--surface-2);
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+      margin-bottom: 14px;
+    }
+    .privacy-card h4 { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
+    .privacy-card p { font-size: 13px; color: var(--text-muted); line-height: 1.6; }
+
+    /* === FAQ === */
+    .faq-list { max-width: 720px; margin: 0 auto; }
+    .faq-item {
+      border-bottom: 1px solid var(--border);
+    }
+    .faq-question {
+      width: 100%;
+      background: none; border: none; cursor: pointer;
+      color: var(--text);
+      font-size: 16px; font-weight: 600;
+      font-family: var(--font-sans);
+      padding: 20px 0;
+      text-align: left;
+      display: flex; justify-content: space-between; align-items: center;
+      gap: 16px;
+    }
+    .faq-question:hover { color: var(--accent); }
+    .faq-chevron {
+      width: 20px; height: 20px;
+      flex-shrink: 0;
+      transition: transform 0.25s ease;
+      color: var(--text-muted);
+    }
+    .faq-item.open .faq-chevron { transform: rotate(180deg); }
+    .faq-answer {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.3s ease;
+    }
+    .faq-answer-inner {
+      padding: 0 0 20px;
+      font-size: 15px;
+      color: var(--text-muted);
+      line-height: 1.7;
+    }
+
+    /* === EARLY ACCESS / WAITLIST === */
+    .waitlist-section {
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+    .waitlist-inner {
+      text-align: center;
+      max-width: 560px;
+      margin: 0 auto;
+    }
+    .waitlist-form {
+      display: flex; gap: 10px;
+      margin-top: 28px;
+      justify-content: center;
+    }
+    .waitlist-input {
+      flex: 1;
+      max-width: 320px;
+      padding: 12px 16px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 15px;
+      font-family: var(--font-sans);
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .waitlist-input::placeholder { color: var(--text-muted); }
+    .waitlist-input:focus { border-color: var(--accent); }
+    .waitlist-note {
+      font-size: 13px; color: var(--text-muted);
+      margin-top: 14px;
+    }
+
+    /* === CTA BANNER === */
+    .cta-banner {
+      padding: 120px 0;
+      text-align: center;
+      position: relative;
+    }
+    .cta-banner::before {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 50%;
+      transform: translateX(-50%);
+      width: 600px; height: 400px;
+      background: radial-gradient(ellipse at center, rgba(0, 204, 102, 0.06) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .cta-banner .section-title { margin-bottom: 16px; }
+    .cta-banner .section-sub { margin: 0 auto 36px; }
+
+    /* === FOOTER === */
+    .footer {
+      border-top: 1px solid var(--border);
+      padding: 48px 0 40px;
+    }
+    .footer-inner {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 48px;
+      flex-wrap: wrap;
+    }
+    .footer-brand {
+      display: flex; align-items: center; gap: 10px;
+      font-weight: 700; font-size: 18px; color: var(--text);
+      margin-bottom: 8px;
+    }
+    .footer-brand img { width: 28px; height: 28px; border-radius: 6px; }
+    .footer-tagline { font-size: 13px; color: var(--text-muted); max-width: 240px; }
+    .footer-col h4 {
+      font-size: 12px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.08em;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+    }
+    .footer-col a {
+      display: block;
+      font-size: 14px; color: var(--text-muted);
+      padding: 4px 0;
+      transition: color 0.2s;
+    }
+    .footer-col a:hover { color: var(--text); }
+    .footer-bottom {
+      border-top: 1px solid var(--border);
+      margin-top: 36px;
+      padding-top: 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 13px;
+      color: var(--text-muted);
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    /* === RESPONSIVE === */
+    @media (max-width: 1024px) {
+      .products-grid { grid-template-columns: repeat(2, 1fr); }
+      .privacy-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 768px) {
+      section { padding: 72px 0; }
+
+      .nav-links { display: none; }
+      .nav-mobile-toggle { display: block; }
+
+      .nav-links.open {
+        display: flex;
+        flex-direction: column;
+        position: absolute;
+        top: 100%; left: 0; right: 0;
+        background: var(--surface);
+        border-bottom: 1px solid var(--border);
+        padding: 16px 24px;
+        gap: 12px;
+      }
+
+      .hero { padding: 120px 0 48px; }
+      .hero h1 { font-size: clamp(30px, 7vw, 44px); }
+
+      .stats-bar {
+        grid-template-columns: repeat(3, 1fr);
+      }
+      .stats-bar .stat-item:nth-child(4),
+      .stats-bar .stat-item:nth-child(5) {
+        /* keep visible but on second row */
+      }
+
+      .problem-grid { grid-template-columns: 1fr; }
+      .products-grid { grid-template-columns: 1fr; }
+      .sight-grid { grid-template-columns: 1fr; gap: 32px; }
+      .mcp-tools-grid { grid-template-columns: 1fr; }
+      .steps-grid { grid-template-columns: 1fr; gap: 40px; }
+      .pricing-grid { grid-template-columns: 1fr; max-width: 400px; }
+      .privacy-grid { grid-template-columns: 1fr; }
+
+      .footer-inner { flex-direction: column; gap: 32px; }
+      .footer-bottom { flex-direction: column; text-align: center; }
+
+      .waitlist-form { flex-direction: column; align-items: center; }
+      .waitlist-input { max-width: 100%; width: 100%; }
+    }
+
+    @media (max-width: 480px) {
+      .stats-bar { grid-template-columns: repeat(2, 1fr); }
+      .hero-actions { flex-direction: column; align-items: center; }
+    }
+
+    /* === UTILITIES === */
+    .sr-only {
+      position: absolute; width: 1px; height: 1px;
+      padding: 0; margin: -1px; overflow: hidden;
+      clip: rect(0,0,0,0); border: 0;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- NAVIGATION -->
+  <nav class="nav" role="navigation">
+    <div class="nav-inner">
+      <a href="#" class="nav-brand">
+        <img src="logo.png" alt="" class="nav-logo" width="36" height="36">
+        ContextPulse
+      </a>
+      <button class="nav-mobile-toggle" aria-label="Toggle navigation" onclick="document.querySelector('.nav-links').classList.toggle('open')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
+      <div class="nav-links">
+        <a href="#products">Products</a>
+        <a href="#sight">Sight</a>
+        <a href="#how-it-works">Setup</a>
+        <a href="#pricing">Pricing</a>
+        <a href="#sight" class="btn btn-sm btn-accent">Get Started</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="container">
+      <div class="hero-badge">
+        <span class="hero-badge-dot"></span>
+        ContextPulse Sight available now &mdash; 10 MCP tools, 145 tests
+      </div>
+      <h1>Your AI can write code.<br><span class="highlight">It can't see your screen.</span></h1>
+      <p class="hero-sub">ContextPulse captures your desktop continuously and serves it to any MCP-compatible AI agent. Install in 30 seconds. No cloud, no API keys, no cost.</p>
+      <div class="hero-actions">
+        <a href="#how-it-works" class="btn btn-md btn-accent">Get started</a>
+        <a href="#products" class="btn btn-md btn-outline">See the platform</a>
+      </div>
+      <div class="hero-install" onclick="copyInstall(this)" title="Click to copy">
+        <span>pip install contextpulse-sight</span>
+        <svg class="copy-icon" width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25v-7.5z"/><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25v-7.5zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25h-7.5z"/></svg>
+        <span class="copied-msg">Copied</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- STATS -->
+  <div class="container" style="padding-bottom: 40px;">
+    <div class="stats-bar">
+      <div class="stat-item">
+        <div class="stat-value">&lt;3ms</div>
+        <div class="stat-label">Per capture</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value">&lt;1%</div>
+        <div class="stat-label">CPU usage</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value">0</div>
+        <div class="stat-label">Cloud deps</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value">10</div>
+        <div class="stat-label">MCP tools</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value">145</div>
+        <div class="stat-label">Tests</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PROBLEM -->
+  <section class="problem" id="problem">
+    <div class="container">
+      <div class="section-header center">
+        <div class="section-label">The problem</div>
+        <h2 class="section-title">Every AI conversation starts blind</h2>
+        <p class="section-sub">Your AI assistant can refactor your codebase but has no idea what's on your screen. You're the bottleneck.</p>
+      </div>
+      <div class="problem-grid">
+        <div class="problem-card">
+          <div class="problem-icon">&#9986;</div>
+          <h3>Manual screenshots</h3>
+          <p>Snip Tool, paste, wait for processing. Every question. Every session. It breaks your flow and costs you minutes each time.</p>
+        </div>
+        <div class="problem-card">
+          <div class="problem-icon">&#128683;</div>
+          <h3>Context amnesia</h3>
+          <p>New session, blank slate. Your AI doesn't know what you were looking at 10 minutes ago, let alone yesterday. You re-explain everything.</p>
+        </div>
+        <div class="problem-card">
+          <div class="problem-icon">&#128274;</div>
+          <h3>Agent silos</h3>
+          <p>Claude Code, Cursor, Gemini CLI, Copilot &mdash; none of them share visual context. Your tools work in isolation.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PRODUCT SUITE -->
+  <section id="products">
+    <div class="container">
+      <div class="section-header center">
+        <div class="section-label">Platform</div>
+        <h2 class="section-title">Composable context, one package at a time</h2>
+        <p class="section-sub">Install what you need. Each package works standalone. Together, they compound.</p>
+      </div>
+      <div class="products-grid">
+        <div class="product-card featured">
+          <span class="product-badge badge-live">Available</span>
+          <div class="product-icon sight">&#128065;</div>
+          <h3>Sight</h3>
+          <p>Always-on screen capture. Runs in your system tray, captures every 5 seconds with change detection, serves every frame to any MCP-compatible AI agent via 10 built-in tools.</p>
+        </div>
+        <div class="product-card">
+          <span class="product-badge badge-soon">Coming soon</span>
+          <div class="product-icon memory">&#129504;</div>
+          <h3>Memory</h3>
+          <p>Cross-session persistent memory so your AI agents don't start from zero. Decisions, preferences, and project context that accumulates over time across all your AI tools.</p>
+        </div>
+        <div class="product-card">
+          <span class="product-badge badge-planned">Planned</span>
+          <div class="product-icon agent">&#129302;</div>
+          <h3>Agent</h3>
+          <p>Multi-agent coordination so your AI tools work as a team. Session handoff, shared project state, and conflict detection when agents edit the same files.</p>
+        </div>
+        <div class="product-card">
+          <span class="product-badge badge-planned">Planned</span>
+          <div class="product-icon voice">&#127908;</div>
+          <h3>Voice</h3>
+          <p>Voice-to-text for AI workflows. Dictate to your agents, transcribe meetings, and capture spoken context &mdash; all local, all private.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SIGHT DETAIL -->
+  <section class="sight-section" id="sight">
+    <div class="container">
+      <div class="section-header">
+        <div class="section-label">ContextPulse Sight</div>
+        <h2 class="section-title">Continuous context for MCP agents</h2>
+        <p class="section-sub">Sight captures your desktop and serves it to Claude Code, Cursor, Gemini CLI, or any MCP-compatible agent. No manual screenshots. No broken flow.</p>
+      </div>
+      <div class="sight-grid">
+        <div>
+          <ul class="feature-list">
+            <li><span class="feature-dot"></span>Always-on daemon &mdash; auto-captures every 5 seconds in the background</li>
+            <li><span class="feature-dot"></span>Per-monitor capture with rolling buffer and change detection</li>
+            <li><span class="feature-dot"></span>Built-in OCR &mdash; extract text from any screen without sending images</li>
+            <li><span class="feature-dot"></span>Activity database with full-text search across window titles and OCR</li>
+            <li><span class="feature-dot"></span>Time-travel context &mdash; "what was on my screen 10 minutes ago?"</li>
+            <li><span class="feature-dot"></span>Clipboard monitoring with history and search</li>
+            <li><span class="feature-dot"></span>Diff-aware capture with pixel-level change scoring</li>
+            <li><span class="feature-dot"></span>Token cost estimation &mdash; know what each capture costs before sending</li>
+            <li><span class="feature-dot"></span>Multi-agent awareness &mdash; tracks which agents consume your context</li>
+            <li><span class="feature-dot"></span>OCR redaction &mdash; API keys, tokens, and passwords are automatically stripped</li>
+          </ul>
+        </div>
+        <div>
+          <div class="mcp-tools-grid">
+            <div class="mcp-tool">
+              <span class="mcp-tool-name">get_screenshot()</span>
+              <span class="mcp-tool-desc">Capture active, all, or specific monitor</span>
+            </div>
+            <div class="mcp-tool">
+              <span class="mcp-tool-name">get_screen_text()</span>
+              <span class="mcp-tool-desc">OCR current screen at full resolution</span>
+            </div>
+            <div class="mcp-tool">
+              <span class="mcp-tool-name">get_recent()</span>
+              <span class="mcp-tool-desc">Recent buffer frames with diff filtering</span>
+            </div>
+            <div class="mcp-tool">
+              <span class="mcp-tool-name">get_buffer_status()</span>
+              <span class="mcp-tool-desc">Health check + token cost estimates</span>
+            </div>
+            <div class="mcp-tool">
+              <span class="mcp-tool-name">get_activity_summary()</span>
+              <span class="mcp-tool-desc">App usage distribution over time</span>
+            </div>
+            <div class="mcp-tool">
+              <span class="mcp-tool-name">search_history()</span>
+              <span class="mcp-tool-desc">FTS5 search across titles + OCR text</span>
+            </div>
+            <div class="mcp-tool">
+              <span class="mcp-tool-name">get_context_at()</span>
+              <span class="mcp-tool-desc">Frame + metadata from N minutes ago</span>
+            </div>
+            <div class="mcp-tool">
+              <span class="mcp-tool-name">get_clipboard_history()</span>
+              <span class="mcp-tool-desc">Recent clipboard text entries</span>
+            </div>
+            <div class="mcp-tool">
+              <span class="mcp-tool-name">search_clipboard()</span>
+              <span class="mcp-tool-desc">Search clipboard history by content</span>
+            </div>
+            <div class="mcp-tool">
+              <span class="mcp-tool-name">get_agent_stats()</span>
+              <span class="mcp-tool-desc">Per-agent MCP usage statistics</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- HOW IT WORKS -->
+  <section id="how-it-works">
+    <div class="container">
+      <div class="section-header center">
+        <div class="section-label">Setup</div>
+        <h2 class="section-title">Three commands. That's it.</h2>
+        <p class="section-sub">Python 3.10+. No GPU. No cloud account. No API key.</p>
+      </div>
+      <div class="steps-grid">
+        <div class="step-card">
+          <div class="step-number">1</div>
+          <h3>Install</h3>
+          <p>One package, no extra dependencies. Works on any Windows machine with Python.</p>
+          <div class="step-code">pip install contextpulse-sight</div>
+        </div>
+        <div class="step-card">
+          <div class="step-number">2</div>
+          <h3>Run</h3>
+          <p>Starts in your system tray. Auto-captures every 5 seconds. Under 1% CPU, under 20MB RAM.</p>
+          <div class="step-code">contextpulse-sight</div>
+        </div>
+        <div class="step-card">
+          <div class="step-number">3</div>
+          <h3>Connect</h3>
+          <p>Auto-generates MCP config for your AI tool. Then just ask your agent what's on screen.</p>
+          <div class="step-code">contextpulse-sight --setup claude-code</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PRICING -->
+  <section id="pricing">
+    <div class="container">
+      <div class="section-header center">
+        <div class="section-label">Pricing</div>
+        <h2 class="section-title">Start free. Upgrade when you need more.</h2>
+        <p class="section-sub">Sight Free gets you always-on capture with core MCP tools. Pro unlocks the full toolkit.</p>
+      </div>
+      <div class="pricing-grid">
+        <div class="price-card">
+          <h3>Sight Free</h3>
+          <div class="price-amount">$0</div>
+          <div class="price-note">Core screen capture, forever free</div>
+          <ul class="price-features">
+            <li>Always-on auto-capture</li>
+            <li>3 core MCP tools</li>
+            <li>Basic rolling buffer</li>
+            <li>Privacy controls + blocklist</li>
+            <li>Hotkey capture modes</li>
+            <li class="disabled">OCR + text search</li>
+            <li class="disabled">Activity database</li>
+            <li class="disabled">Smart storage modes</li>
+            <li class="disabled">Clipboard monitoring</li>
+            <li class="disabled">Multi-agent stats</li>
+          </ul>
+          <a href="#how-it-works" class="btn btn-md btn-outline price-cta">Install free</a>
+        </div>
+        <div class="price-card featured">
+          <h3>Sight Pro</h3>
+          <div class="price-amount" style="color: var(--accent);">$29</div>
+          <div class="price-note">One-time purchase. All updates included.</div>
+          <ul class="price-features">
+            <li>Everything in Free</li>
+            <li>All 10 MCP tools</li>
+            <li>Built-in OCR + text extraction</li>
+            <li>Full-text activity search</li>
+            <li>Smart storage (4 modes)</li>
+            <li>Clipboard history + search</li>
+            <li>Time-travel context</li>
+            <li>Multi-agent usage stats</li>
+            <li>Token cost estimation</li>
+            <li>Diff-aware capture</li>
+          </ul>
+          <a href="#waitlist" class="btn btn-md btn-accent price-cta">Get Sight Pro</a>
+        </div>
+        <div class="price-card">
+          <h3>Memory</h3>
+          <div class="price-amount" style="color: var(--primary-light);">TBD</div>
+          <div class="price-note">Coming soon</div>
+          <ul class="price-features">
+            <li>Cross-session persistent memory</li>
+            <li>Shared across all agents</li>
+            <li>Outcome-based learning</li>
+            <li>SQLite-backed, portable</li>
+          </ul>
+          <a href="#waitlist" class="btn btn-md btn-outline price-cta">Join waitlist</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- COMPARISON -->
+  <section class="comparison-section">
+    <div class="container">
+      <div class="section-header center">
+        <div class="section-label">Comparison</div>
+        <h2 class="section-title">Built for developers who use AI agents</h2>
+        <p class="section-sub">Lightweight, MCP-native, and privacy-first. Not a heavyweight screen recorder.</p>
+      </div>
+      <div class="table-wrap">
+        <table class="comparison-table">
+          <thead>
+            <tr>
+              <th></th>
+              <th>ContextPulse Sight</th>
+              <th>Screenpipe</th>
+              <th>MCP Screenshot Tools</th>
+              <th>Manual Snip Tool</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Always-on capture</td>
+              <td class="check-icon">&#10003; Every 5s + events</td>
+              <td class="check-icon">&#10003; Continuous</td>
+              <td class="cross-icon">&#10005; On-demand only</td>
+              <td class="cross-icon">&#10005; Manual</td>
+            </tr>
+            <tr>
+              <td>Activity search</td>
+              <td class="check-icon">&#10003; FTS5 (titles + OCR)</td>
+              <td class="check-icon">&#10003;</td>
+              <td class="cross-icon">&#10005;</td>
+              <td class="cross-icon">&#10005;</td>
+            </tr>
+            <tr>
+              <td>Time-travel context</td>
+              <td class="check-icon">&#10003; get_context_at()</td>
+              <td class="cross-icon">&#10005;</td>
+              <td class="cross-icon">&#10005;</td>
+              <td class="cross-icon">&#10005;</td>
+            </tr>
+            <tr>
+              <td>Storage modes</td>
+              <td class="check-icon">&#10003; 4 modes, -59% disk</td>
+              <td class="cross-icon">&#10005; Full recording</td>
+              <td class="cross-icon">&#10005;</td>
+              <td class="cross-icon">&#10005;</td>
+            </tr>
+            <tr>
+              <td>MCP tools</td>
+              <td class="check-icon">10 tools</td>
+              <td>Add-on</td>
+              <td>1-2 tools</td>
+              <td class="cross-icon">&#10005;</td>
+            </tr>
+            <tr>
+              <td>Clipboard capture</td>
+              <td class="check-icon">&#10003; History + search</td>
+              <td class="cross-icon">&#10005;</td>
+              <td class="cross-icon">&#10005;</td>
+              <td class="cross-icon">&#10005;</td>
+            </tr>
+            <tr>
+              <td>CPU / RAM</td>
+              <td class="check-icon">&lt;1% / &lt;20MB</td>
+              <td>5-15% / 200-500MB</td>
+              <td>0% (idle)</td>
+              <td>0% (idle)</td>
+            </tr>
+            <tr>
+              <td>Price</td>
+              <td class="check-icon">Free / $29 Pro</td>
+              <td>$400</td>
+              <td>Free</td>
+              <td>Free</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- PRIVACY -->
+  <section>
+    <div class="container">
+      <div class="section-header center">
+        <div class="section-label">Privacy</div>
+        <h2 class="section-title">Your screen stays on your machine</h2>
+        <p class="section-sub">ContextPulse runs 100% locally. No cloud. No accounts. No telemetry. No data ever leaves your computer.</p>
+      </div>
+      <div class="privacy-grid">
+        <div class="privacy-card">
+          <div class="privacy-icon">&#128274;</div>
+          <h4>100% local</h4>
+          <p>All captures stay on disk. No network calls. Works fully offline.</p>
+        </div>
+        <div class="privacy-card">
+          <div class="privacy-icon">&#128683;</div>
+          <h4>Window blocklist</h4>
+          <p>Automatically skip sensitive apps. Banking, password managers, private browsing.</p>
+        </div>
+        <div class="privacy-card">
+          <div class="privacy-icon">&#9208;</div>
+          <h4>Auto-pause on lock</h4>
+          <p>Captures stop instantly when you lock your screen or switch users.</p>
+        </div>
+        <div class="privacy-card">
+          <div class="privacy-icon">&#128100;</div>
+          <h4>OCR redaction</h4>
+          <p>API keys, tokens, and passwords detected in OCR text are automatically stripped before delivery.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section id="faq">
+    <div class="container">
+      <div class="section-header center">
+        <div class="section-label">FAQ</div>
+        <h2 class="section-title">Common questions</h2>
+      </div>
+      <div class="faq-list">
+        <div class="faq-item">
+          <button class="faq-question" onclick="toggleFaq(this)">
+            Does this slow down my machine?
+            <svg class="faq-chevron" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"/></svg>
+          </button>
+          <div class="faq-answer">
+            <div class="faq-answer-inner">Under 1% CPU and under 20MB RAM. The daemon uses mss for capture (3ms per frame) and only stores frames that actually changed. You'll forget it's running.</div>
+          </div>
+        </div>
+        <div class="faq-item">
+          <button class="faq-question" onclick="toggleFaq(this)">
+            What about sensitive information on my screen?
+            <svg class="faq-chevron" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"/></svg>
+          </button>
+          <div class="faq-answer">
+            <div class="faq-answer-inner">Window blocklist lets you skip specific apps (banking, password managers). Captures auto-pause on lock screen. OCR redaction strips API keys, tokens, and passwords from extracted text. Everything stays local &mdash; no cloud, no telemetry.</div>
+          </div>
+        </div>
+        <div class="faq-item">
+          <button class="faq-question" onclick="toggleFaq(this)">
+            Does it work with Cursor / Copilot / my tool?
+            <svg class="faq-chevron" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"/></svg>
+          </button>
+          <div class="faq-answer">
+            <div class="faq-answer-inner">Any MCP-compatible tool. That includes Claude Code, Cursor, Gemini CLI, and any custom agent using the MCP SDK. The <code>--setup</code> flag auto-generates the right config for each.</div>
+          </div>
+        </div>
+        <div class="faq-item">
+          <button class="faq-question" onclick="toggleFaq(this)">
+            How is this different from Screenpipe?
+            <svg class="faq-chevron" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"/></svg>
+          </button>
+          <div class="faq-answer">
+            <div class="faq-answer-inner">Screenpipe records everything you see, say, and hear &mdash; full video and audio. ContextPulse captures only what your AI agents need: screen context. That's why it uses &lt;1% CPU vs Screenpipe's 5-15%, and &lt;20MB RAM vs 200-500MB. It's also $29 vs $400.</div>
+          </div>
+        </div>
+        <div class="faq-item">
+          <button class="faq-question" onclick="toggleFaq(this)">
+            Is this Windows-only?
+            <svg class="faq-chevron" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"/></svg>
+          </button>
+          <div class="faq-answer">
+            <div class="faq-answer-inner">Windows-first, but the capture library (mss) is cross-platform. macOS and Linux support are planned for a future release.</div>
+          </div>
+        </div>
+        <div class="faq-item">
+          <button class="faq-question" onclick="toggleFaq(this)">
+            What capture modes are available?
+            <svg class="faq-chevron" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"/></svg>
+          </button>
+          <div class="faq-answer">
+            <div class="faq-answer-inner">Four modes: active monitor (Ctrl+Shift+S), all monitors (Ctrl+Shift+A), cursor region (Ctrl+Shift+Z), and auto-timer (every 5 seconds with event-driven triggers on window focus change, monitor boundary cross, and activity after idle).</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- WAITLIST -->
+  <section class="waitlist-section" id="waitlist">
+    <div class="container">
+      <div class="waitlist-inner">
+        <div class="section-label">Early access</div>
+        <h2 class="section-title">Get notified when Memory ships</h2>
+        <p class="section-sub" style="margin: 0 auto;">Sight is available now. Join the waitlist for ContextPulse Memory &mdash; cross-session persistent context for all your AI agents.</p>
+        <div class="waitlist-form">
+          <input type="email" class="waitlist-input" placeholder="you@example.com" aria-label="Email address">
+          <a href="mailto:david@jerardventures.com?subject=ContextPulse%20Memory%20Waitlist&body=Please%20add%20me%20to%20the%20ContextPulse%20Memory%20waitlist." class="btn btn-md btn-accent" id="waitlist-btn" onclick="handleWaitlist(event)">Join waitlist</a>
+        </div>
+        <p class="waitlist-note">No spam. One email when Memory is ready.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- FINAL CTA -->
+  <section class="cta-banner">
+    <div class="container">
+      <h2 class="section-title">Stop screenshotting. Start building.</h2>
+      <p class="section-sub">Your AI agent sees what you see. Under 1% CPU. Under 20MB RAM. 30 seconds to install.</p>
+      <a href="#how-it-works" class="btn btn-lg btn-accent">Get ContextPulse Sight</a>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-inner">
+        <div>
+          <div class="footer-brand">
+            <img src="logo.png" alt="" width="28" height="28">
+            ContextPulse
+          </div>
+          <p class="footer-tagline">Always-on context for AI agents. Local-first, privacy-focused, MCP-native.</p>
+        </div>
+        <div class="footer-col">
+          <h4>Product</h4>
+          <a href="#sight">Sight</a>
+          <a href="#products">Memory</a>
+          <a href="#products">Agent</a>
+          <a href="#pricing">Pricing</a>
+        </div>
+        <div class="footer-col">
+          <h4>Resources</h4>
+          <a href="#how-it-works">Getting started</a>
+          <a href="#faq">FAQ</a>
+          <a href="https://github.com/junkyard-rules/contextpulse">GitHub</a>
+        </div>
+        <div class="footer-col">
+          <h4>Connect</h4>
+          <a href="mailto:david@jerardventures.com">Contact</a>
+          <a href="https://contextpulse.dev">contextpulse.dev</a>
+          <a href="https://contextpulse.io">contextpulse.io</a>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>&copy; 2026 Jerard Ventures LLC. All rights reserved.</span>
+        <span>Your screen never leaves your machine.</span>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // Copy install command
+    function copyInstall(el) {
+      const text = 'pip install contextpulse-sight';
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(text).then(function() {
+          showCopied(el);
+        });
+      } else {
+        // Fallback
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        showCopied(el);
+      }
+    }
+
+    function showCopied(el) {
+      var msg = el.querySelector('.copied-msg');
+      msg.classList.add('show');
+      setTimeout(function() { msg.classList.remove('show'); }, 1500);
+    }
+
+    // FAQ toggle
+    function toggleFaq(btn) {
+      var item = btn.parentElement;
+      var answer = item.querySelector('.faq-answer');
+      var isOpen = item.classList.contains('open');
+
+      // Close all
+      document.querySelectorAll('.faq-item.open').forEach(function(el) {
+        el.classList.remove('open');
+        el.querySelector('.faq-answer').style.maxHeight = '0';
+      });
+
+      if (!isOpen) {
+        item.classList.add('open');
+        answer.style.maxHeight = answer.scrollHeight + 'px';
+      }
+    }
+
+    // Waitlist mailto fallback
+    function handleWaitlist(e) {
+      var input = document.querySelector('.waitlist-input');
+      var email = input.value.trim();
+      if (email) {
+        e.preventDefault();
+        window.location.href = 'mailto:david@jerardventures.com?subject=ContextPulse%20Memory%20Waitlist&body=Email%3A%20' + encodeURIComponent(email);
+      }
+    }
+
+    // Nav hide on scroll (subtle)
+    var lastScroll = 0;
+    var nav = document.querySelector('.nav');
+    window.addEventListener('scroll', function() {
+      var curr = window.pageYOffset;
+      if (curr > lastScroll && curr > 100) {
+        nav.style.transform = 'translateY(-100%)';
+        nav.style.transition = 'transform 0.3s ease';
+      } else {
+        nav.style.transform = 'translateY(0)';
+      }
+      lastScroll = curr;
+    }, { passive: true });
+  </script>
+
+</body>
+</html>
