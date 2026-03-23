@@ -5,11 +5,24 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "contextpulse-project"
 version = "0.1.0"
-description = "Auto-generated project context for AI agents"
+description = "Project-aware routing layer for AI agents — scores content against your portfolio and routes insights to the right project."
 requires-python = ">=3.12"
 dependencies = [
     "contextpulse-core",
+    "mcp>=1.0",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+contextpulse-project-mcp = "contextpulse_project.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

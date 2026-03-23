@@ -17,13 +17,13 @@
 
 | Package | What It Does | Target | Revenue Model | Priority |
 |---------|-------------|--------|---------------|----------|
-| **Sight** | Always-on screen capture + MCP server | Developers using AI coding assistants | Free / open source (acquisition funnel) | NOW — nearly shippable |
+| **Sight** | Always-on screen capture + MCP server | Developers using AI coding assistants | Free tier + Sight Pro ($29 one-time) | NOW — nearly shippable |
 | **Memory** | Cross-session persistent memory for agents | Power users with 2+ AI tools | $29-49 one-time starter kit (Gumroad) | NEXT — port SynapseAI journal pattern |
 | **Agent** | Multi-agent coordination + shared context | Solo founders / small teams | $49-99/mo cloud platform | LATER — requires Memory first |
 | **Project** | Auto-generated project context | Developers | Bundled with Memory or free | LATER — nice-to-have |
 | **Cloud** | Hosted infrastructure for all packages | Teams, enterprises | $49-99/mo per seat | FUTURE — requires proven self-hosted demand |
 
-**Key insight from market research:** The framework itself has LOW willingness-to-pay. Value is in integrations, hosted infrastructure, and pre-built templates. Sight should be free to build community. Memory is the first revenue product.
+**Key insight from market research:** The framework itself has LOW willingness-to-pay. Value is in integrations, hosted infrastructure, and pre-built templates. Sight Free builds community; Sight Pro ($29) monetizes power users immediately. Memory is the second revenue product.
 
 ---
 
@@ -33,13 +33,12 @@
 **Status:** Phase 1.5 in progress, 44/44 UAT passing
 
 - [ ] Manual user testing across multiple Claude Code sessions
-- [ ] Push to GitHub (public repo)
-- [ ] Publish to PyPI
+- [ ] Publish to PyPI (private repo stays private)
 - [ ] Add to Windows Startup for auto-launch
 - [ ] Landing page on contextpulse.ai (even a single page)
 - [ ] Product Hunt launch for Sight alone
 
-**Revenue:** $0 — this is the funnel. Gets ContextPulse known in the MCP/developer community.
+**Revenue:** Sight Free drives adoption; Sight Pro ($29 one-time) monetizes power users. Gets ContextPulse known in the MCP/developer community.
 
 ### Phase 2: Memory (April-May 2026)
 **The first revenue product.** Port SynapseAI's journal pattern + shared knowledge layer.
@@ -122,9 +121,9 @@ The product is the system, extracted and made installable.
 
 | Channel | Product | Timing |
 |---------|---------|--------|
-| Product Hunt | Sight (free launch) | As soon as Phase 1.5 is complete |
+| Product Hunt | Sight launch (free + pro) | As soon as Phase 1.5 is complete |
 | PyPI | Sight package | Same time as PH launch |
-| GitHub | All packages (open source) | Ongoing |
+| PyPI | Sight package (closed source, license-gated pro features) | Same as PH |
 | Gumroad | Memory starter kit ($29-49) | Phase 2 launch |
 | contextpulse.ai | Landing page + docs | Phase 1.5 |
 | Reddit (r/ClaudeAI, r/ChatGPT, r/artificial) | Sight launch + Memory launch | Staggered |

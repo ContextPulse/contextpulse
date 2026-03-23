@@ -9,6 +9,10 @@
 
 ---
 
+### [2026-03-22] Keyword routing needs stop words and raw-count scoring
+**Context:** First version of contextpulse-project used sqrt-normalized scoring. Projects with tiny keyword sets (StockTrader: 8 keywords) dominated everything because any single generic match scored disproportionately high. Also, overview text extraction pulled in English stop words ("with", "your", "have") that caused false matches.
+**Lesson:** (1) Use raw match count as primary sort, proportion as tiebreaker — not sqrt normalization. (2) Always filter stop words from keyword extraction. (3) Test routing against the real portfolio, not just unit test fixtures.
+
 ### [2026-03-15] Cloudflare Account API tokens vs User API tokens
 **Context:** Created a Cloudflare API token from the Account-level page, but Registrar API calls returned unauthorized. Needed a User-level token from My Profile → API Tokens instead.
 **Lesson:** Cloudflare has two separate token systems. Account tokens (dash.cloudflare.com/ACCT_ID/profile/api-tokens) scope to one account. User tokens (dash.cloudflare.com/profile/api-tokens) scope to the user across all accounts. Registrar/Domains endpoints require User tokens.
@@ -71,3 +75,15 @@
 ### [2026-03-21] Local screenshot storage — real security threat is machine compromise, not the screenshots
 **Context:** Debated whether to redact secrets from OCR text since ContextPulse captures everything on screen. Realized that if an attacker has access to the screenshots folder, they already have access to the `.env` files, `~/.aws/`, browser passwords, etc.
 **Lesson:** OCR redaction is defense-in-depth against *accidental exposure* (sharing, cloud sync, backup). It's not the primary security boundary. Make it opt-in/out so power users who want to search for secrets they had on screen can do so.
+
+<!-- Archived to skills: return type ripple → developing-python/references/windows-gotchas.md -->
+
+<!-- Archived 2026-03-22: Duplicate of GLOBAL_LESSONS_LEARNED.md "[2026-03-21] Google AI Studio vs Cloud Console have separate billing" -->
+
+<!-- Archived 2026-03-22: Duplicate of GLOBAL_LESSONS_LEARNED.md "[2026-03-21] One session per agent prompt — never combine two plans" -->
+
+### [2026-03-21] AI logo generation — Gemini ignores "no inner ring" edits
+**Context:** Tried to edit an eye logo to remove the inner iris ring via gemini_edit_image. Despite explicit prompts saying "no inner rings," Gemini kept adding them back.
+**Lesson:** Gemini's edit mode preserves too much of the original image structure. For significant structural changes, generate a new image from scratch with the desired constraints rather than trying to edit away unwanted elements.
+
+<!-- Archived to skills: SQLite migrations → developing-python/references/windows-gotchas.md -->

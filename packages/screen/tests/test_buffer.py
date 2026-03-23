@@ -63,9 +63,12 @@ class TestRollingBuffer:
             buf = RollingBuffer()
             img = _make_image()
             result = buf.add(img, monitor_index=1)
-            assert result  # truthy Path
-            assert isinstance(result, Path)
-            parsed = parse_frame_path(result)
+            assert result  # truthy tuple
+            path, diff_pct = result
+            assert isinstance(path, Path)
+            assert isinstance(diff_pct, float)
+            assert diff_pct == 100.0  # first frame always 100%
+            parsed = parse_frame_path(path)
             assert parsed is not None
             assert parsed[1] == 1  # monitor index
 
@@ -274,3 +277,76 @@ class TestOCRText:
             ctx = buf.get_latest_context()
             assert ctx["type"] == "image"
             assert ctx["path"] == frame_path
+
+
+class TestTokenEstimation:
+    """Test token cost estimation functions."""
+
+    def test_estimate_image_tokens_standard(self):
+        from contextpulse_sight.buffer import estimate_image_tokens
+        # 1280x720 → ceil(1280/768)=2, ceil(720/768)=1 → 2*1*258 = 516
+        assert estimate_image_tokens(1280, 720) == 516
+
+    def test_estimate_image_tokens_4k(self):
+        from contextpulse_sight.buffer import estimate_image_tokens
+        # 3840x2160 → ceil(3840/768)=5, ceil(2160/768)=3 → 5*3*258 = 3870
+        assert estimate_image_tokens(3840, 2160) == 3870
+
+    def test_estimate_image_tokens_small(self):
+        from contextpulse_sight.buffer import estimate_image_tokens
+        # 100x100 → ceil(100/768)=1, ceil(100/768)=1 → 1*1*258 = 258
+        assert estimate_image_tokens(100, 100) == 258
+
+    def test_estimate_text_tokens(self):
+        from contextpulse_sight.buffer import estimate_text_tokens
+        assert estimate_text_tokens("hello world") == 2  # 11 chars // 4 = 2
+        assert estimate_text_tokens("") == 1  # minimum 1
+
+    def test_estimate_text_tokens_long(self):
+        from contextpulse_sight.buffer import estimate_text_tokens
+        text = "x" * 400
+        assert estimate_text_tokens(text) == 100
+
+
+class TestDiffScore:
+    """Test diff percentage computation."""
+
+    def test_diff_pct_identical(self, tmp_buffer_dir):
+        with patch("contextpulse_sight.buffer.BUFFER_DIR", tmp_buffer_dir):
+            from contextpulse_sight.buffer import RollingBuffer
+            buf = RollingBuffer()
+            arr = np.full((100, 100, 3), 128, dtype=np.uint8)
+            assert buf._diff_pct(arr, arr) == 0.0
+
+    def test_diff_pct_max(self, tmp_buffer_dir):
+        with patch("contextpulse_sight.buffer.BUFFER_DIR", tmp_buffer_dir):
+            from contextpulse_sight.buffer import RollingBuffer
+            buf = RollingBuffer()
+            arr1 = np.zeros((100, 100, 3), dtype=np.uint8)
+            arr2 = np.full((100, 100, 3), 255, dtype=np.uint8)
+            assert buf._diff_pct(arr2, arr1) == 100.0
+
+    def test_diff_pct_different_shape(self, tmp_buffer_dir):
+        with patch("contextpulse_sight.buffer.BUFFER_DIR", tmp_buffer_dir):
+            from contextpulse_sight.buffer import RollingBuffer
+            buf = RollingBuffer()
+            arr1 = np.zeros((100, 100, 3), dtype=np.uint8)
+            arr2 = np.zeros((200, 200, 3), dtype=np.uint8)
+            assert buf._diff_pct(arr2, arr1) == 100.0
+
+    def test_add_returns_diff_pct(self, tmp_buffer_dir):
+        with patch("contextpulse_sight.buffer.BUFFER_DIR", tmp_buffer_dir):
+            from contextpulse_sight.buffer import RollingBuffer
+            buf = RollingBuffer()
+            img1 = _make_image(color=(0, 0, 0))
+            img2 = _make_image(color=(255, 255, 255))
+            result1 = buf.add(img1)
+            assert result1  # truthy
+            _, diff1 = result1
+            assert diff1 == 100.0  # first frame
+
+            time.sleep(0.01)
+            result2 = buf.add(img2)
+            assert result2
+            _, diff2 = result2
+            assert diff2 == 100.0  # black to white = 100%

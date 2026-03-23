@@ -33,6 +33,22 @@ logger = logging.getLogger("contextpulse.sight.buffer")
 _FRAME_RE = re.compile(r"^(\d+)_m(\d+)\.(jpg|txt)$")
 
 
+def estimate_image_tokens(width: int, height: int) -> int:
+    """Estimate Claude API token cost for sending an image.
+
+    Uses Claude's public formula: ceil(width/768) * ceil(height/768) * 258.
+    """
+    import math
+    tiles_w = math.ceil(width / 768)
+    tiles_h = math.ceil(height / 768)
+    return tiles_w * tiles_h * 258
+
+
+def estimate_text_tokens(text: str) -> int:
+    """Estimate Claude API token cost for sending text (~4 chars per token)."""
+    return max(1, len(text) // 4)
+
+
 def parse_frame_path(path: Path) -> tuple[int, int] | None:
     """Extract (timestamp_ms, monitor_index) from a buffer frame path.
 
@@ -57,16 +73,21 @@ class RollingBuffer:
         self._last_frames: dict[int, np.ndarray] = {}  # per-monitor
         self._prune()
 
-    def add(self, img: Image.Image, monitor_index: int = 0) -> bool | Path:
+    def add(self, img: Image.Image, monitor_index: int = 0) -> tuple[Path, float] | bool:
         """Add a frame if it differs from the last one for this monitor.
 
-        Returns the frame Path if stored, False if skipped.
+        Returns (frame_path, diff_pct) if stored, False if skipped.
+        diff_pct is the percentage of pixel difference (0-100).
         """
         arr = np.asarray(img)
 
         last = self._last_frames.get(monitor_index)
-        if last is not None and not self._has_changed(arr, last):
-            return False
+        if last is not None:
+            diff_pct = self._diff_pct(arr, last)
+            if diff_pct < CHANGE_THRESHOLD:
+                return False
+        else:
+            diff_pct = 100.0  # first frame for this monitor
 
         self._last_frames[monitor_index] = arr
         ts = int(time.time() * 1000)
@@ -75,7 +96,7 @@ class RollingBuffer:
             img = img.convert("RGB")
         img.save(path, format="JPEG", quality=JPEG_QUALITY)
         self._prune()
-        return path
+        return path, round(diff_pct, 1)
 
     def add_text_only(self, text: str, confidence: float, monitor_index: int = 0) -> Path:
         """Store a text-only frame (no image). Returns the .txt path."""
@@ -103,14 +124,17 @@ class RollingBuffer:
         }
         txt_path.write_text(json.dumps(meta), encoding="utf-8")
 
-    def _has_changed(self, current: np.ndarray, last: np.ndarray) -> bool:
-        """Compare current frame to last. Returns True if meaningfully different."""
+    def _diff_pct(self, current: np.ndarray, last: np.ndarray) -> float:
+        """Compute the percentage of pixel difference between two frames (0-100)."""
         if last.shape != current.shape:
-            return True
+            return 100.0
 
         diff = np.mean(np.abs(current.astype(np.int16) - last.astype(np.int16)))
-        pct = diff / 255.0 * 100.0
-        return pct >= CHANGE_THRESHOLD
+        return diff / 255.0 * 100.0
+
+    def _has_changed(self, current: np.ndarray, last: np.ndarray) -> bool:
+        """Compare current frame to last. Returns True if meaningfully different."""
+        return self._diff_pct(current, last) >= CHANGE_THRESHOLD
 
     def _prune(self):
         """Remove frames older than BUFFER_MAX_AGE seconds."""
