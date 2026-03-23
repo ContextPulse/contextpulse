@@ -36,3 +36,7 @@ lambda/package/
 lambda/*.zip
 *.pem
 *.key
+
+# Confidential IP documents (trade secrets)
+ip/
+.wrangler/
