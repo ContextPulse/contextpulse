@@ -1,16 +1,16 @@
-"""Tests for Memory MCP tools."""
+"""Tests for Memory MCP tools (new 3-tier API with tags + TTL)."""
+
+from __future__ import annotations
 
 import json
-import os
 
 import pytest
 
-# Set memory dir before importing mcp_server to control where DB lands
+
 @pytest.fixture(autouse=True)
 def _set_memory_dir(tmp_path, monkeypatch):
     """Point MemoryStore at tmp_path for all tests, reset singleton."""
     monkeypatch.setenv("CONTEXTPULSE_MEMORY_DIR", str(tmp_path))
-    # Reset the module-level singleton before each test
     import contextpulse_memory.mcp_server as mod
     mod._store = None
     yield
@@ -32,16 +32,26 @@ class TestMemoryStoreTool:
     def test_store_returns_success(self):
         result = json.loads(memory_store("test_key", "test_value"))
         assert result["success"] is True
-        assert result["memory"]["key"] == "test_key"
+        assert result["key"] == "test_key"
 
-    def test_store_with_modality(self):
-        result = json.loads(memory_store("voice_note", "hello", modality="voice"))
-        assert result["memory"]["modality"] == "voice"
+    def test_store_with_tags(self):
+        result = json.loads(memory_store("tagged", "value", tags=["project", "urgent"]))
+        assert result["success"] is True
+        assert result["tags"] == ["project", "urgent"]
+
+    def test_store_with_ttl(self):
+        result = json.loads(memory_store("timed", "expires soon", ttl_hours=1.0))
+        assert result["success"] is True
+        assert result["ttl_hours"] == 1.0
+
+    def test_store_permanent(self):
+        result = json.loads(memory_store("permanent", "keeps forever", ttl_hours=0))
+        assert result["success"] is True
 
     def test_store_overwrite(self):
         memory_store("dup", "first")
         result = json.loads(memory_store("dup", "second"))
-        assert result["memory"]["value"] == "second"
+        assert result["success"] is True
 
 
 class TestMemoryRecallTool:
@@ -49,21 +59,28 @@ class TestMemoryRecallTool:
         memory_store("recall_test", "found_me")
         result = json.loads(memory_recall("recall_test"))
         assert result["found"] is True
-        assert result["memory"]["value"] == "found_me"
+        assert result["value"] == "found_me"
 
     def test_recall_nonexistent(self):
         result = json.loads(memory_recall("no_such_key"))
         assert result["found"] is False
 
+    def test_recall_overwritten_value(self):
+        memory_store("changing", "first")
+        memory_store("changing", "second")
+        result = json.loads(memory_recall("changing"))
+        assert result["found"] is True
+        assert result["value"] == "second"
+
 
 class TestMemorySearchTool:
     def test_search_finds_match(self):
-        memory_store("search_key", "unique_content_alpha")
-        result = json.loads(memory_search("unique_content_alpha"))
+        memory_store("search_key", "unique_content_alpha_xyz")
+        result = json.loads(memory_search("alpha"))
         assert result["count"] >= 1
 
     def test_search_no_match(self):
-        result = json.loads(memory_search("zzz_impossible_zzz"))
+        result = json.loads(memory_search("zzz_impossible_zzz_never"))
         assert result["count"] == 0
 
     def test_search_with_limit(self):
@@ -71,6 +88,11 @@ class TestMemorySearchTool:
             memory_store(f"batch_{i}", f"searchable data {i}")
         result = json.loads(memory_search("searchable", limit=2))
         assert result["count"] <= 2
+
+    def test_search_by_key_name(self):
+        memory_store("project_context", "ContextPulse is a memory engine")
+        result = json.loads(memory_search("project"))
+        assert result["count"] >= 1
 
 
 class TestMemoryListTool:
@@ -80,17 +102,22 @@ class TestMemoryListTool:
         result = json.loads(memory_list())
         assert result["count"] == 2
 
-    def test_list_filter_modality(self):
-        memory_store("sight_mem", "data", modality="sight")
-        memory_store("voice_mem", "data", modality="voice")
-        result = json.loads(memory_list(modality="sight"))
+    def test_list_filter_by_tag(self):
+        memory_store("sight_mem", "data", tags=["sight"])
+        memory_store("voice_mem", "data", tags=["voice"])
+        result = json.loads(memory_list(tag="sight"))
         assert result["count"] == 1
-        assert result["memories"][0]["modality"] == "sight"
 
-    def test_list_filter_tier(self):
-        memory_store("hot_one", "data")
-        result = json.loads(memory_list(tier="hot"))
-        assert result["count"] == 1
+    def test_list_no_matches_for_unknown_tag(self):
+        memory_store("plain", "no tags")
+        result = json.loads(memory_list(tag="nonexistent_tag"))
+        assert result["count"] == 0
+
+    def test_list_with_limit(self):
+        for i in range(10):
+            memory_store(f"item_{i}", f"value_{i}")
+        result = json.loads(memory_list(limit=3))
+        assert result["count"] <= 3
 
 
 class TestMemoryForgetTool:
@@ -108,3 +135,8 @@ class TestMemoryForgetTool:
         memory_forget("ephemeral")
         result = json.loads(memory_recall("ephemeral"))
         assert result["found"] is False
+
+    def test_forget_returns_key(self):
+        memory_store("key_to_forget", "value")
+        result = json.loads(memory_forget("key_to_forget"))
+        assert result["key"] == "key_to_forget"
