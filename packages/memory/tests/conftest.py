@@ -2,7 +2,7 @@
 
 import pytest
 
-from contextpulse_memory.store import MemoryStore
+from contextpulse_memory.storage import MemoryStore
 
 
 @pytest.fixture
@@ -11,12 +11,3 @@ def store(tmp_path):
     s = MemoryStore(tmp_path)
     yield s
     s.close()
-
-
-@pytest.fixture
-def populated_store(store):
-    """A MemoryStore pre-loaded with sample data."""
-    store.store("user_name", "David", modality="system")
-    store.store("project_focus", "ContextPulse is the priority", modality="voice")
-    store.store("api_key_pattern", "Always use env vars for secrets", modality="sight")
-    return store
