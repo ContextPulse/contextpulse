@@ -29,9 +29,7 @@
 **Context:** `mcp_server.py` called `capture._find_monitor_at_cursor()` and `capture._mss_to_pil()` — underscore-prefixed functions that are private by convention.
 **Lesson:** If an internal function needs to be called from another module, drop the underscore prefix to make it part of the public API. Private functions should only be used within their own module.
 
-### [2026-03-15] numpy bool comparison: use truthiness, not `is True`
-**Context:** Tests like `assert buf._has_changed(arr) is True` failed because numpy returns `np.True_` (a numpy bool), not Python's `True`. `np.True_ is True` evaluates to `False`.
-**Lesson:** Never use `is True`/`is False` with values that might be numpy bools. Use `assert expr` or `assert not expr` instead, which works with any truthy/falsy value.
+<!-- Archived 2026-03-23: numpy bool identity check → developing-python skill (Anti-patterns) + validating-dataframes skill. Already in GLOBAL_LESSONS_LEARNED_ARCHIVE.md 2026-03-15 -->
 
 
 ### [2026-03-15] PEP 639 — don't mix license field with license classifiers
