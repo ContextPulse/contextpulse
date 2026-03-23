@@ -21,9 +21,8 @@ class Modality(Enum):
     VOICE = "voice"
     CLIPBOARD = "clipboard"
     SYSTEM = "system"
-    # Future:
-    # KEYS = "keys"
-    # FLOW = "flow"
+    KEYS = "keys"
+    FLOW = "flow"
 
 
 class EventType(Enum):
@@ -48,14 +47,17 @@ class EventType(Enum):
     SESSION_LOCK = "session_lock"
     SESSION_UNLOCK = "session_unlock"
 
-    # Future:
-    # KEYSTROKE = "keystroke"
-    # TYPING_BURST = "typing_burst"
-    # TYPING_PAUSE = "typing_pause"
-    # SHORTCUT = "shortcut"
-    # CLICK = "click"
-    # SCROLL = "scroll"
-    # HOVER_DWELL = "hover_dwell"
+    # Keys
+    KEYSTROKE = "keystroke"
+    TYPING_BURST = "typing_burst"
+    TYPING_PAUSE = "typing_pause"
+    SHORTCUT = "shortcut"
+
+    # Flow
+    CLICK = "click"
+    SCROLL = "scroll"
+    HOVER_DWELL = "hover_dwell"
+    DRAG = "drag"
 
 
 # Keys for extracting searchable text from payloads
@@ -87,6 +89,7 @@ class ContextEvent:
     # Engine-populated fields (defaults until correlation/learning engine exists)
     correlation_id: str | None = None
     attention_score: float = 0.0
+    cognitive_load: float = 0.0
 
     def validate(self) -> bool:
         """Check that required fields are present and valid."""
@@ -113,6 +116,7 @@ class ContextEvent:
             "payload": json.dumps(self.payload),
             "correlation_id": self.correlation_id,
             "attention_score": self.attention_score,
+            "cognitive_load": self.cognitive_load,
         }
 
     def text_content(self) -> str:
@@ -141,4 +145,5 @@ class ContextEvent:
             payload=payload,
             correlation_id=row.get("correlation_id"),
             attention_score=row.get("attention_score", 0.0),
+            cognitive_load=row.get("cognitive_load", 0.0),
         )
