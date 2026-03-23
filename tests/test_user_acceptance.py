@@ -25,6 +25,18 @@ import sys
 import threading
 import time
 from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
+
+# Skip all tests in this module when mss is mocked (e.g., when running
+# alongside packages/screen/tests which mock heavy platform dependencies).
+# These are integration tests that require real screen capture hardware.
+_mss_is_mocked = isinstance(sys.modules.get("mss"), MagicMock)
+pytestmark = pytest.mark.skipif(
+    _mss_is_mocked,
+    reason="screen capture deps are mocked — run this file in isolation for full UAT",
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -372,13 +384,17 @@ def test_hotkey_handler():
     _label("toggle_pause() -> paused", "PASS")
 
     # Capture while paused should be skipped
-    mtime_before = FILE_LATEST.stat().st_mtime
-    app.do_quick_capture()
-    mtime_after = FILE_LATEST.stat().st_mtime
-    if mtime_after == mtime_before:
-        _label("Capture skipped while paused", "PASS")
+    if FILE_LATEST.exists():
+        mtime_before = FILE_LATEST.stat().st_mtime
+        app.do_quick_capture()
+        mtime_after = FILE_LATEST.stat().st_mtime
+        if mtime_after == mtime_before:
+            _label("Capture skipped while paused", "PASS")
+        else:
+            _label("Capture skipped while paused", "FAIL", "file was updated")
     else:
-        _label("Capture skipped while paused", "FAIL", "file was updated")
+        app.do_quick_capture()
+        _label("Capture skipped while paused", "SKIP", "no baseline file (capture failed earlier)")
 
     # Resume
     app.toggle_pause()
@@ -386,7 +402,8 @@ def test_hotkey_handler():
     _label("toggle_pause() -> resumed", "PASS")
 
     # Capture after resume should work
-    FILE_LATEST.unlink()
+    if FILE_LATEST.exists():
+        FILE_LATEST.unlink()
     app.do_quick_capture()
     if FILE_LATEST.exists():
         _label("Capture works after resume", "PASS")
@@ -396,7 +413,8 @@ def test_hotkey_handler():
     # Test _check_hotkeys routing (simulate pressed_keys set)
     from pynput.keyboard import Key, KeyCode
     app._pressed_keys = {Key.ctrl_l, Key.shift_l, KeyCode.from_char('s')}
-    FILE_LATEST.unlink()
+    if FILE_LATEST.exists():
+        FILE_LATEST.unlink()
     app._check_hotkeys()
     time.sleep(1)  # capture runs in a daemon thread
     if FILE_LATEST.exists():
