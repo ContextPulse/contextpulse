@@ -2,7 +2,7 @@
 
 **Author:** Claw (OpenClaw agent)
 **Requested by:** David Jerard
-**Status:** IN PROGRESS
+**Status:** COMPLETE (Tasks 2+3 done 2026-03-22)
 
 ---
 
@@ -19,24 +19,24 @@ David spent today building clipboard monitoring, agent stats, diff scoring, the 
 - **Output:** Clean git status, commit SHA logged
 
 ### Task 2: Spine Contract Audit + Hardening ✅
-- Review existing spine at `packages/core/src/contextpulse_core/spine/` against `CENTRAL_MEMORY_ENGINE.md` spec
-- Verify `ContextEvent` schema matches the architecture doc (event_id, timestamp, modality, data, metadata, correlation_hints)
-- Verify `EventBus` supports: subscribe/publish, filtering by modality, async delivery, back-pressure
-- Verify `ModalityModule` ABC has: start/stop lifecycle, event emission, health check
-- Add tests for spine contracts if missing (`packages/core/tests/test_spine/`)
-- Fix any gaps between spec and implementation
-- **Output:** Spine passes all contract tests, README updated with usage examples
+- Added `cognitive_load: float = 0.0` to `ContextEvent` (was missing vs spec §3)
+- Uncommented `KEYS` and `FLOW` modalities + 8 new EventTypes (KEYSTROKE, TYPING_BURST, TYPING_PAUSE, SHORTCUT, CLICK, SCROLL, HOVER_DWELL, DRAG)
+- Added `cognitive_load` column to EventBus DB schema + INSERT statement
+- Fixed FTS tokenizer: `tokenize='porter unicode61'` (was missing)
+- Added `get_config_schema()` abstract method to `ModalityModule` (per spec §7)
+- Enhanced `test_spine/` with new tests for cognitive_load, KEYS/FLOW modalities, get_config_schema contract
+- **Result:** 95 core tests passing
 
 ### Task 3: Memory MVP (`contextpulse-memory`) ✅
-- Build the memory package at `packages/memory/` with:
-  - **Storage:** SQLite-backed key-value + semantic memory store
-  - **MCP tools:** `memory_store`, `memory_recall`, `memory_search`, `memory_list`, `memory_forget`
-  - **Event integration:** Subscribe to EventBus, auto-store significant events
-  - **Memory tiers:** Hot (in-memory dict, 5 min TTL) → Warm (SQLite WAL, 24h) → Cold (FTS5 summarized, 30+ days)
-  - **Cross-modal tagging:** Events tagged with modality source for correlation queries
-- Write tests for all MCP tools and storage layer
-- Reference: `business-plan/CENTRAL_MEMORY_ENGINE.md` sections 4 (Memory Tiers) and 8 (MCP Tool Design)
-- **Output:** Working memory package with tests passing, installable via `pip install -e packages/memory`
+- Built `packages/memory/src/contextpulse_memory/storage.py`:
+  - `HotTier`: in-memory OrderedDict, 5 min TTL, max 500 entries, tag filtering, eviction
+  - `WarmTier`: SQLite WAL, FTS5 (porter unicode61), tags, TTL, prune_expired, upsert
+  - `ColdTier`: FTS5 summarized archive, 15-min windows, separate memory_cold.db
+  - `MemoryStore`: orchestrates all three tiers with cross-modal tagging
+- Updated `mcp_server.py` to use new MemoryStore (tags + ttl_hours params on all tools)
+- Updated `pyproject.toml` with dev deps, entry point `contextpulse-memory-mcp`
+- Tests: 88 memory tests passing (test_storage.py + test_mcp.py)
+- **Result:** 221 total tests passing (core + memory + project)
 
 ### Task 4: Open-Source Prep (if time permits) ⬜
 - Audit repo for sensitive files (`leak.json`, credentials, API keys, `.env`)

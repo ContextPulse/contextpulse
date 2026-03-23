@@ -12,5 +12,17 @@ dependencies = [
     "mcp[cli]",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+contextpulse-memory-mcp = "contextpulse_memory.mcp_server:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

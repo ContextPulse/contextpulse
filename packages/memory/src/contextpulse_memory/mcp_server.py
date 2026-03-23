@@ -1,20 +1,23 @@
 """MCP stdio server exposing persistent memory tools to Claude Code.
 
 Tools:
-  memory_store  — store a key-value memory
-  memory_recall — retrieve a memory by key (updates access stats)
-  memory_search — full-text search across all memories
-  memory_list   — list memories with optional filters
-  memory_forget — delete a memory by key
+  memory_store   — store a key-value memory with tags and TTL
+  memory_recall  — retrieve a memory by key
+  memory_search  — full-text search across all memories (warm + cold)
+  memory_list    — list memories with optional tag filter
+  memory_forget  — delete a memory by key
 """
+
+from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-from contextpulse_memory.store import MemoryStore
+from contextpulse_memory.storage import MemoryStore
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,16 +28,13 @@ logger = logging.getLogger("contextpulse.memory.mcp")
 
 mcp_app = FastMCP("ContextPulse Memory")
 
-# Default memory directory — can be overridden via environment variable
 _DEFAULT_DIR = Path.home() / ".contextpulse" / "memory"
 _store: MemoryStore | None = None
 
 
 def _get_store() -> MemoryStore:
-    """Lazy-init the MemoryStore singleton."""
     global _store
     if _store is None:
-        import os
         db_dir = Path(os.environ.get("CONTEXTPULSE_MEMORY_DIR", str(_DEFAULT_DIR)))
         _store = MemoryStore(db_dir)
         logger.info("MemoryStore initialized at %s", db_dir)
@@ -42,68 +42,107 @@ def _get_store() -> MemoryStore:
 
 
 @mcp_app.tool()
-def memory_store(key: str, value: str, modality: str = "") -> str:
+def memory_store(
+    key: str,
+    value: str,
+    tags: list[str] | None = None,
+    ttl_hours: float = 24.0,
+) -> str:
     """Store a key-value memory. Overwrites if key already exists.
 
-    Use this to persist insights, facts, preferences, or any context
-    that should survive across sessions.
+    Memories persist in warm tier (SQLite WAL) and hot tier (in-memory, 5 min).
+    Use tags to group related memories; set ttl_hours=0 for permanent storage.
+
+    Args:
+        key: Unique identifier (e.g., "user/preferences", "project/deadline")
+        value: Content to store (free text, JSON, code snippets, etc.)
+        tags: Optional grouping tags (e.g., ["project", "contextpulse"])
+        ttl_hours: Time-to-live in hours (default 24h, 0 = permanent)
     """
     store = _get_store()
-    result = store.store(key, value, modality=modality or None)
-    return json.dumps({"success": True, "memory": result}, indent=2, default=str)
+    tags = tags or []
+    ttl = ttl_hours if ttl_hours > 0 else None
+    try:
+        store.store(key=key, value=value, tags=tags, ttl_hours=ttl)
+        return json.dumps({"success": True, "key": key, "tags": tags, "ttl_hours": ttl_hours})
+    except Exception as exc:
+        logger.exception("memory_store failed: %s", key)
+        return json.dumps({"success": False, "error": str(exc)})
 
 
 @mcp_app.tool()
 def memory_recall(key: str) -> str:
-    """Retrieve a memory by exact key. Updates access stats and may promote tier.
+    """Retrieve a memory by exact key. Checks hot tier first, then warm tier.
 
-    Returns the memory dict if found, or a not-found message.
+    Returns the memory value and metadata, or not-found if missing/expired.
+
+    Args:
+        key: The exact key used when the memory was stored
     """
     store = _get_store()
     result = store.recall(key)
     if result is None:
         return json.dumps({"found": False, "key": key})
-    return json.dumps({"found": True, "memory": result}, indent=2, default=str)
+    return json.dumps({"found": True, **result}, default=str)
 
 
 @mcp_app.tool()
-def memory_search(query: str, limit: int = 10) -> str:
+def memory_search(query: str, limit: int = 20) -> str:
     """Full-text search across all stored memories.
 
-    Searches both keys and values. Returns up to `limit` results
-    ranked by relevance.
+    Searches key names, values, and tags using FTS5 with porter stemming.
+    Results span warm tier (recent) and cold tier (older summaries).
+    Supports FTS5 syntax: "word1 AND word2", "phrase", "word*".
+
+    Args:
+        query: Search terms (FTS5 syntax supported)
+        limit: Maximum results to return (default 20)
     """
     store = _get_store()
     results = store.search(query, limit=limit)
-    return json.dumps({"count": len(results), "results": results}, indent=2, default=str)
+    return json.dumps({
+        "count": len(results),
+        "results": results,
+        "query": query,
+    }, default=str)
 
 
 @mcp_app.tool()
-def memory_list(modality: str = "", tier: str = "", limit: int = 50) -> str:
-    """List stored memories with optional filters.
+def memory_list(tag: str | None = None, limit: int = 50) -> str:
+    """List stored memories, optionally filtered by tag.
 
-    Filter by modality (e.g. "sight", "voice") and/or tier ("hot", "warm", "cold").
+    Returns non-expired memories ordered by most recently updated first.
+
+    Args:
+        tag: Optional tag to filter by (e.g., "project", "deadline")
+        limit: Maximum entries to return (default 50)
     """
     store = _get_store()
-    results = store.list_memories(
-        modality=modality or None,
-        tier=tier or None,
-        limit=limit,
-    )
-    return json.dumps({"count": len(results), "memories": results}, indent=2, default=str)
+    entries = store.list_all(tag=tag, limit=limit)
+    return json.dumps({
+        "count": len(entries),
+        "memories": entries,
+        "filter_tag": tag,
+    }, default=str)
 
 
 @mcp_app.tool()
 def memory_forget(key: str) -> str:
-    """Delete a memory by key. Returns whether the deletion was successful."""
+    """Delete a memory by key. Returns whether deletion succeeded.
+
+    Removes from hot and warm tiers immediately.
+
+    Args:
+        key: The exact key of the memory to delete
+    """
     store = _get_store()
     deleted = store.forget(key)
     return json.dumps({"success": deleted, "key": key})
 
 
-def main():
+def main() -> None:
     logger.info("Starting ContextPulse Memory MCP server")
-    _get_store()  # Initialize eagerly
+    _get_store()
     mcp_app.run(transport="stdio")
 
 
