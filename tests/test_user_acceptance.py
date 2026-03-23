@@ -128,7 +128,7 @@ def test_preflight():
         else:
             _label(f"Entry point: {ep}", "FAIL", f"not at {script}")
 
-    return imports_ok
+    assert imports_ok, "One or more imports failed"
 
 
 # ---------------------------------------------------------------------------
