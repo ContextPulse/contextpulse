@@ -35,7 +35,9 @@ CREATE TABLE IF NOT EXISTS events (
     monitor_index INTEGER DEFAULT 0,
     payload TEXT NOT NULL,
     correlation_id TEXT,
-    attention_score REAL DEFAULT 0.0
+    attention_score REAL DEFAULT 0.0,
+    cognitive_load REAL DEFAULT 0.0,
+    created_at REAL NOT NULL DEFAULT (unixepoch('subsec'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp DESC);
@@ -47,7 +49,8 @@ CREATE INDEX IF NOT EXISTS idx_events_app ON events(app_name, timestamp DESC);
 _FTS_SQL = """
 CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
     window_title, app_name, text_content,
-    content='events', content_rowid=rowid
+    content='events', content_rowid='rowid',
+    tokenize='porter unicode61'
 );
 """
 
@@ -146,10 +149,10 @@ class EventBus:
                 """INSERT OR IGNORE INTO events
                    (event_id, timestamp, modality, event_type, app_name,
                     window_title, monitor_index, payload, correlation_id,
-                    attention_score)
+                    attention_score, cognitive_load)
                    VALUES (:event_id, :timestamp, :modality, :event_type,
                            :app_name, :window_title, :monitor_index, :payload,
-                           :correlation_id, :attention_score)""",
+                           :correlation_id, :attention_score, :cognitive_load)""",
                 row,
             )
             self._conn.commit()

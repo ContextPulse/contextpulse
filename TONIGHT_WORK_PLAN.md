@@ -18,7 +18,7 @@ David spent today building clipboard monitoring, agent stats, diff scoring, the 
 - Push to remote
 - **Output:** Clean git status, commit SHA logged
 
-### Task 2: Spine Contract Audit + Hardening ⬜
+### Task 2: Spine Contract Audit + Hardening ✅
 - Review existing spine at `packages/core/src/contextpulse_core/spine/` against `CENTRAL_MEMORY_ENGINE.md` spec
 - Verify `ContextEvent` schema matches the architecture doc (event_id, timestamp, modality, data, metadata, correlation_hints)
 - Verify `EventBus` supports: subscribe/publish, filtering by modality, async delivery, back-pressure
@@ -27,7 +27,7 @@ David spent today building clipboard monitoring, agent stats, diff scoring, the 
 - Fix any gaps between spec and implementation
 - **Output:** Spine passes all contract tests, README updated with usage examples
 
-### Task 3: Memory MVP (`contextpulse-memory`) ⬜
+### Task 3: Memory MVP (`contextpulse-memory`) ✅
 - Build the memory package at `packages/memory/` with:
   - **Storage:** SQLite-backed key-value + semantic memory store
   - **MCP tools:** `memory_store`, `memory_recall`, `memory_search`, `memory_list`, `memory_forget`

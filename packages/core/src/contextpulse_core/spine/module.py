@@ -59,3 +59,11 @@ class ModalityModule(ABC):
             - last_event_timestamp: float | None
             - error: str | None
         """
+
+    @abstractmethod
+    def get_config_schema(self) -> dict[str, Any]:
+        """Return JSON schema for this module's configuration.
+
+        Used by the settings panel to render module-specific controls.
+        Keys are config param names; values are dicts with type, default, etc.
+        """
