@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "contextpulse-touch"
+version = "0.1.0"
+description = "Keyboard and mouse input capture for AI agents — ContextPulse platform"
+requires-python = ">=3.12"
+dependencies = [
+    "contextpulse-core>=0.1.0",
+    "mcp>=1.0",
+    "pynput>=1.7",
+]
+
+[project.scripts]
+contextpulse-touch-mcp = "contextpulse_touch.mcp_server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
