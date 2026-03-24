@@ -36,6 +36,7 @@ class VoiceasyBridge:
 
     def __init__(self, learned_file: Path | None = None) -> None:
         self._learned_file = learned_file or LEARNED_VOCAB_FILE
+        self._write_lock = threading.Lock()
 
     def add_correction(self, original: str, corrected: str) -> bool:
         """Add a correction to vocabulary_learned.json.
@@ -46,49 +47,44 @@ class VoiceasyBridge:
         if not original or not corrected or original.strip() == corrected.strip():
             return False
 
-        try:
-            # Ensure directory exists
-            self._learned_file.parent.mkdir(parents=True, exist_ok=True)
+        with self._write_lock:
+            try:
+                self._learned_file.parent.mkdir(parents=True, exist_ok=True)
 
-            # Load existing
-            learned: dict[str, str] = {}
-            if self._learned_file.exists():
-                try:
-                    learned = json.loads(self._learned_file.read_text(encoding="utf-8"))
-                    if not isinstance(learned, dict):
+                learned: dict[str, str] = {}
+                if self._learned_file.exists():
+                    try:
+                        learned = json.loads(self._learned_file.read_text(encoding="utf-8"))
+                        if not isinstance(learned, dict):
+                            learned = {}
+                    except (json.JSONDecodeError, OSError):
                         learned = {}
-                except (json.JSONDecodeError, OSError):
-                    learned = {}
 
-            # Check for duplicates (also check user vocab)
-            key = original.lower().strip()
-            if key in learned:
+                key = original.lower().strip()
+                if key in learned:
+                    return False
+
+                user_vocab_file = self._learned_file.parent / "vocabulary.json"
+                if user_vocab_file.exists():
+                    try:
+                        user_vocab = json.loads(user_vocab_file.read_text(encoding="utf-8"))
+                        if key in user_vocab:
+                            return False
+                    except (json.JSONDecodeError, OSError):
+                        pass
+
+                learned[key] = corrected
+                # Write directly with lock held (atomic rename fails on Windows under contention)
+                self._learned_file.write_text(
+                    json.dumps(learned, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+
+                logger.info("Learned correction: %r -> %r", original, corrected)
+                return True
+            except Exception:
+                logger.exception("Failed to write correction")
                 return False
-
-            # Also check user vocabulary
-            user_vocab_file = self._learned_file.parent / "vocabulary.json"
-            if user_vocab_file.exists():
-                try:
-                    user_vocab = json.loads(user_vocab_file.read_text(encoding="utf-8"))
-                    if key in user_vocab:
-                        return False
-                except (json.JSONDecodeError, OSError):
-                    pass
-
-            # Add and write atomically
-            learned[key] = corrected
-            tmp_file = self._learned_file.with_suffix(".tmp")
-            tmp_file.write_text(
-                json.dumps(learned, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
-            tmp_file.replace(self._learned_file)
-
-            logger.info("Learned correction: %r -> %r", original, corrected)
-            return True
-        except Exception:
-            logger.exception("Failed to write correction")
-            return False
 
     def get_recent_corrections(self, limit: int = 20) -> list[dict]:
         """Read recent corrections from the learned vocabulary file."""
