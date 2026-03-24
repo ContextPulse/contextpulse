@@ -80,8 +80,6 @@
 
 <!-- Archived 2026-03-22: Duplicate of GLOBAL_LESSONS_LEARNED.md "[2026-03-21] One session per agent prompt — never combine two plans" -->
 
-### [2026-03-21] AI logo generation — Gemini ignores "no inner ring" edits
-**Context:** Tried to edit an eye logo to remove the inner iris ring via gemini_edit_image. Despite explicit prompts saying "no inner rings," Gemini kept adding them back.
-**Lesson:** Gemini's edit mode preserves too much of the original image structure. For significant structural changes, generate a new image from scratch with the desired constraints rather than trying to edit away unwanted elements.
+<!-- Archived 2026-03-24: Incorporated into designing-logos skill (structural edit limitation section) -->
 
 <!-- Archived to skills: SQLite migrations → developing-python/references/windows-gotchas.md -->

@@ -16,6 +16,7 @@ where = [
     "packages/agent/src",
     "packages/memory/src",
     "packages/project/src",
+    "packages/voice/src",
 ]
 
 [tool.ruff]
