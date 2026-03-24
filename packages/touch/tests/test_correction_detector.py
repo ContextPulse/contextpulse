@@ -25,9 +25,9 @@ class TestVoiceasyBridge:
     def test_duplicate_rejected(self, tmp_path):
         learned_file = tmp_path / "voice" / "vocabulary_learned.json"
         bridge = VoiceasyBridge(learned_file=learned_file)
-        bridge.add_correction("test", "Test")
-        result = bridge.add_correction("test", "Test2")
-        assert result is False  # Already exists
+        bridge.add_correction("gerard", "Jerard")
+        result = bridge.add_correction("gerard", "Jerard2")
+        assert result is False  # Already exists (same key)
 
     def test_same_word_rejected(self, tmp_path):
         learned_file = tmp_path / "voice" / "vocabulary_learned.json"
@@ -55,8 +55,8 @@ class TestVoiceasyBridge:
     def test_get_recent_corrections(self, tmp_path):
         learned_file = tmp_path / "voice" / "vocabulary_learned.json"
         bridge = VoiceasyBridge(learned_file=learned_file)
-        bridge.add_correction("a", "A")
-        bridge.add_correction("b", "B")
+        bridge.add_correction("gerard", "Jerard")
+        bridge.add_correction("cube control", "kubectl")
         corrections = bridge.get_recent_corrections()
         assert len(corrections) == 2
 

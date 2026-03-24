@@ -20,9 +20,8 @@ ContextPulse is a platform that provides always-on context for AI agents. Screen
 |---------|-------------|--------|
 | **contextpulse-sight** | Always-on screen capture + MCP server | Phase 3.0: 145 tests, 10 MCP tools, activity DB, smart storage, OCR redaction, clipboard capture, diff-aware capture, token estimation, agent stats, MCP config generator |
 | **contextpulse-core** | Shared config, licensing, settings, GUI theme | Productized: 35 tests, persistent config, Ed25519 licensing, settings panel, first-run |
-| **contextpulse-voice** | Voice/audio capture + transcription | Planned — port from Voiceasy, Phase 2 |
-| **contextpulse-keys** | Keyboard capture + fatigue detection | Planned — Phase 3 |
-| **contextpulse-flow** | Pointer/mouse capture + attention tracking | Planned — Phase 4 |
+| **contextpulse-voice** | Voice capture + transcription | **v0.1 DONE** (2026-03-24): 9 modules ported from Voiceasy, 105 tests, VoiceModule on spine contract, 3 MCP tools, EventBus-backed history, vocabulary hot-reload |
+| **contextpulse-touch** | Keyboard + mouse capture + correction detection | **v0.1 DONE** (2026-03-24): 6 modules, 56 tests, dual-modality (KEYS+FLOW), BurstTracker (privacy-safe), CorrectionDetector + VoiceasyBridge, 3 MCP tools. Replaces planned contextpulse-keys + contextpulse-flow as combined package. |
 | **contextpulse-heart** | Values, goals, mission weighting layer | Planned — Phase 6, ~400 LOC |
 | **contextpulse-contacts** | Personal CRM + people intelligence | Planned — Phase 7, ~1200 LOC |
 | **contextpulse-signals** | External intelligence antenna | Planned — Phase 8, ~2500 LOC |
