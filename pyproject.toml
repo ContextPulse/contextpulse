@@ -17,6 +17,7 @@ where = [
     "packages/memory/src",
     "packages/project/src",
     "packages/voice/src",
+    "packages/touch/src",
 ]
 
 [tool.ruff]

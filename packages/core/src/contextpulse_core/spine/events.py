@@ -52,6 +52,8 @@ class EventType(Enum):
     TYPING_BURST = "typing_burst"
     TYPING_PAUSE = "typing_pause"
     SHORTCUT = "shortcut"
+    PASTE_DETECTED = "paste_detected"
+    CORRECTION_DETECTED = "correction_detected"
 
     # Flow
     CLICK = "click"
@@ -61,7 +63,7 @@ class EventType(Enum):
 
 
 # Keys for extracting searchable text from payloads
-_TEXT_PAYLOAD_KEYS = ("ocr_text", "transcript", "text", "burst_text")
+_TEXT_PAYLOAD_KEYS = ("ocr_text", "transcript", "text", "burst_text", "correction_text")
 
 
 @dataclass(frozen=True, slots=True)
