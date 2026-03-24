@@ -73,6 +73,13 @@ _DEFAULTS: dict = {
     # Memory — feature flags (future)
     "memory_enabled": False,
     "memory_tier": "",            # "" | "starter" | "pro"
+
+    # Voice — dictation settings
+    "voice_hotkey": "ctrl+space",
+    "voice_fix_hotkey": "ctrl+shift+space",
+    "voice_whisper_model": "base",     # base | small | medium | large
+    "voice_always_use_llm": False,
+    "voice_anthropic_api_key": "",
 }
 
 # ── Env var mapping ──────────────────────────────────────────────────
@@ -93,6 +100,10 @@ _ENV_MAP: dict[str, str] = {
     "event_poll_interval": "CONTEXTPULSE_EVENT_POLL_INTERVAL",
     "event_movement_threshold": "CONTEXTPULSE_EVENT_MOVEMENT_THRESHOLD",
     "event_idle_threshold": "CONTEXTPULSE_EVENT_IDLE_THRESHOLD",
+    "voice_hotkey": "CONTEXTPULSE_VOICE_HOTKEY",
+    "voice_fix_hotkey": "CONTEXTPULSE_VOICE_FIX_HOTKEY",
+    "voice_whisper_model": "CONTEXTPULSE_VOICE_MODEL",
+    "voice_always_use_llm": "CONTEXTPULSE_VOICE_ALWAYS_LLM",
 }
 
 
