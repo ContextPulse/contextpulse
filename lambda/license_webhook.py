@@ -1,6 +1,7 @@
-"""AWS Lambda: Gumroad webhook → generate Ed25519 license key → email via SES.
+"""AWS Lambda: Gumroad webhook -> generate Ed25519 license key -> email via SES.
 
-Adapted from Voiceasy's proven pattern, extended with tier + expiration support.
+Receives Gumroad sale (ping) webhook, validates the request, generates a signed
+license key with tier/feature info, stores in DynamoDB, and emails the buyer.
 
 Environment variables:
     PRIVATE_KEY_HEX: Ed25519 private key (hex-encoded, 64 chars)
@@ -9,6 +10,8 @@ Environment variables:
 """
 
 import base64
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -23,23 +26,61 @@ logger.setLevel(logging.INFO)
 
 ses = boto3.client("ses", region_name="us-east-1")
 dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-usage_table = dynamodb.Table("contextpulse-usage")
+licenses_table = dynamodb.Table("contextpulse-licenses")
 
 PRIVATE_KEY_HEX = os.environ["PRIVATE_KEY_HEX"]
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "license@contextpulse.ai")
 GUMROAD_PRODUCT_ID = os.environ.get("GUMROAD_PRODUCT_ID", "")
 
-# Tier mapping: Gumroad variant name → tier string
+# Tier mapping: Gumroad variant name -> tier string
 TIER_MAP = {
-    "Memory Starter": "starter",
-    "Memory Pro": "pro",
-    "starter": "starter",
     "pro": "pro",
+    "memory pro": "pro",
+    "starter": "starter",
+    "memory starter": "starter",
+}
+
+# Features unlocked per tier
+TIER_FEATURES = {
+    "starter": ["search_all_events", "get_event_timeline"],
+    "pro": ["search_all_events", "get_event_timeline"],
 }
 
 # Default license duration: 1 year from purchase
 LICENSE_DURATION_DAYS = 365
 
+
+# -- Gumroad webhook signature validation ------------------------------------
+
+def _verify_gumroad_signature(body_raw: str, signature_header: str | None) -> bool:
+    """Verify the Gumroad webhook signature if present.
+
+    Gumroad signs webhooks with HMAC-SHA256 using the seller's API secret.
+    If no signature header is present (older Gumroad config), we allow the
+    request through but log a warning. In production, set GUMROAD_WEBHOOK_SECRET
+    to enforce validation.
+    """
+    webhook_secret = os.environ.get("GUMROAD_WEBHOOK_SECRET", "")
+
+    if not webhook_secret:
+        # No secret configured -- skip validation but warn
+        logger.warning("GUMROAD_WEBHOOK_SECRET not set; skipping signature check")
+        return True
+
+    if not signature_header:
+        logger.error("Missing Gumroad-Signature header but secret is configured")
+        return False
+
+    expected = hmac.new(
+        webhook_secret.encode("utf-8"),
+        body_raw.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+    return hmac.compare_digest(expected, signature_header)
+
+
+# -- Tier detection -----------------------------------------------------------
 
 def _detect_tier(params: dict) -> str:
     """Detect tier from Gumroad variant or price."""
@@ -47,7 +88,7 @@ def _detect_tier(params: dict) -> str:
     variants = params.get("variants", [None])[0]
     if variants:
         for variant_name, tier_key in TIER_MAP.items():
-            if variant_name.lower() in variants.lower():
+            if variant_name in variants.lower():
                 return tier_key
 
     # Fall back to price-based detection
@@ -60,21 +101,30 @@ def _detect_tier(params: dict) -> str:
     return "starter"  # default
 
 
+# -- License key generation ---------------------------------------------------
+
 def _generate_license_key(email: str, tier: str) -> str:
-    """Generate an Ed25519-signed license key with tier and expiration."""
+    """Generate an Ed25519-signed license key with tier, features, and expiration.
+
+    Key format: base64url(json_payload) + "." + base64url(ed25519_signature)
+    The desktop app verifies by checking the signature against the embedded public key.
+    """
     private_bytes = bytes.fromhex(PRIVATE_KEY_HEX)
     private_key = Ed25519PrivateKey.from_private_bytes(private_bytes)
 
     now = int(time.time())
     exp = now + (LICENSE_DURATION_DAYS * 86400)
 
+    features = TIER_FEATURES.get(tier, [])
+
     payload = {
         "email": email,
         "tier": tier,
+        "features": features,
         "ts": now,
         "exp": exp,
     }
-    payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    payload_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
     signature = private_key.sign(payload_bytes)
 
@@ -84,15 +134,20 @@ def _generate_license_key(email: str, tier: str) -> str:
     return f"{payload_b64}.{sig_b64}"
 
 
+# -- Email delivery -----------------------------------------------------------
+
 def _send_license_email(email: str, license_key: str, tier: str) -> None:
-    """Send the license key via SES."""
+    """Send the license key via SES with branded HTML + plain text fallback."""
     tier_display = "Memory Starter" if tier == "starter" else "Memory Pro"
 
     ses.send_email(
         Source=SENDER_EMAIL,
         Destination={"ToAddresses": [email]},
         Message={
-            "Subject": {"Data": f"Your ContextPulse {tier_display} License Key", "Charset": "UTF-8"},
+            "Subject": {
+                "Data": f"Your ContextPulse {tier_display} License Key",
+                "Charset": "UTF-8",
+            },
             "Body": {
                 "Html": {
                     "Charset": "UTF-8",
@@ -117,7 +172,8 @@ def _send_license_email(email: str, license_key: str, tier: str) -> None:
   <hr style="border: 1px solid #30363D; margin: 30px 0;">
   <p style="color: #8B949E; font-size: 12px;">
     Keep this email safe. If you need help, reply to this email.<br>
-    ContextPulse — Always-on context for AI agents | <a href="https://contextpulse.ai" style="color: #00E676;">contextpulse.ai</a>
+    ContextPulse &mdash; Always-on context for AI agents |
+    <a href="https://contextpulse.ai" style="color: #00E676;">contextpulse.ai</a>
   </p>
 </div>
 </body>
@@ -139,7 +195,7 @@ Your license is valid for {LICENSE_DURATION_DAYS} days.
 ContextPulse Sight (screen capture) remains free forever.
 
 Keep this email safe. Reply to this email if you need help.
-ContextPulse — Always-on context for AI agents | https://contextpulse.ai
+ContextPulse -- Always-on context for AI agents | https://contextpulse.ai
 """,
                 },
             },
@@ -148,60 +204,116 @@ ContextPulse — Always-on context for AI agents | https://contextpulse.ai
     )
 
 
-def _record_purchase(email: str, tier: str, price_dollars: float) -> None:
-    """Record the purchase in DynamoDB for usage tracking."""
-    usage_table.put_item(Item={
+# -- DynamoDB storage ---------------------------------------------------------
+
+def _store_license(email: str, tier: str, license_key: str, price_dollars: float) -> None:
+    """Store the license record in DynamoDB for lookup and audit."""
+    now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    exp_iso = time.strftime(
+        "%Y-%m-%dT%H:%M:%SZ",
+        time.gmtime(time.time() + LICENSE_DURATION_DAYS * 86400),
+    )
+
+    licenses_table.put_item(Item={
         "email": email,
         "tier": tier,
+        "features": TIER_FEATURES.get(tier, []),
+        "license_key_hash": hashlib.sha256(license_key.encode()).hexdigest(),
         "price_dollars": str(price_dollars),
-        "purchased_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "expires_at": time.strftime(
-            "%Y-%m-%dT%H:%M:%SZ",
-            time.gmtime(time.time() + LICENSE_DURATION_DAYS * 86400),
-        ),
+        "purchased_at": now_iso,
+        "expires_at": exp_iso,
+        "status": "active",
     })
-    logger.info("Purchase recorded for %s: tier=%s, $%.2f", email, tier, price_dollars)
+    logger.info(
+        "License stored for %s: tier=%s, $%.2f, expires=%s",
+        email, tier, price_dollars, exp_iso,
+    )
 
+
+# -- Lambda handler -----------------------------------------------------------
 
 def lambda_handler(event, context):
-    """Handle Gumroad webhook — initial purchase and recurring charges."""
+    """Handle Gumroad webhook -- initial purchase and recurring charges.
+
+    Gumroad POSTs form-encoded data on each sale. We:
+    1. Validate the webhook signature (if configured)
+    2. Extract buyer email, product ID, tier
+    3. Generate a signed Ed25519 license key
+    4. Store in DynamoDB
+    5. Email the key to the buyer
+    6. Return 200 OK
+    """
     logger.info("Received webhook event")
 
+    # Decode body
     body = event.get("body", "")
     if event.get("isBase64Encoded"):
         body = base64.b64decode(body).decode("utf-8")
 
+    # Validate Gumroad webhook signature
+    headers = event.get("headers", {})
+    # API Gateway v2 lowercases headers
+    signature = headers.get("gumroad-signature") or headers.get("Gumroad-Signature")
+    if not _verify_gumroad_signature(body, signature):
+        logger.error("Webhook signature validation failed")
+        return {"statusCode": 403, "body": "Invalid signature"}
+
+    # Parse form-encoded body
     params = urllib.parse.parse_qs(body)
 
+    # Extract and validate email
     email = params.get("email", [None])[0]
     if not email:
         logger.error("No email in webhook payload")
         return {"statusCode": 400, "body": "Missing email"}
 
+    # Normalize email
+    email = email.strip().lower()
+
+    # Validate product ID if configured
     product_id = params.get("product_id", [None])[0]
     if GUMROAD_PRODUCT_ID and product_id != GUMROAD_PRODUCT_ID:
-        logger.warning("Product ID mismatch: got %s, expected %s", product_id, GUMROAD_PRODUCT_ID)
+        logger.warning(
+            "Product ID mismatch: got %s, expected %s",
+            product_id, GUMROAD_PRODUCT_ID,
+        )
         return {"statusCode": 400, "body": "Invalid product"}
 
+    # Check for refund/chargeback (Gumroad sends these too)
+    refunded = params.get("refunded", ["false"])[0]
+    if refunded == "true":
+        logger.info("Refund notification for %s -- skipping license generation", email)
+        # Optionally mark license as revoked in DynamoDB
+        try:
+            licenses_table.update_item(
+                Key={"email": email},
+                UpdateExpression="SET #s = :s",
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={":s": "revoked"},
+            )
+            logger.info("License revoked for %s", email)
+        except Exception:
+            logger.exception("Failed to revoke license for %s", email)
+        return {"statusCode": 200, "body": "Refund acknowledged"}
+
+    # Extract price
     price_cents = params.get("price", [None])[0]
     price_dollars = int(price_cents) / 100 if price_cents else 0
 
+    # Detect tier
     tier = _detect_tier(params)
-    is_recurring = params.get("is_recurring_charge", ["false"])[0] == "true"
 
     try:
-        if is_recurring:
-            # Renewal — generate fresh key with new expiration
-            license_key = _generate_license_key(email, tier)
-            _send_license_email(email, license_key, tier)
-            _record_purchase(email, tier, price_dollars)
-            logger.info("Renewal processed for %s (tier=%s, $%.2f)", email, tier, price_dollars)
-        else:
-            # First purchase
-            license_key = _generate_license_key(email, tier)
-            logger.info("Generated license key for %s (tier=%s)", email, tier)
-            _send_license_email(email, license_key, tier)
-            _record_purchase(email, tier, price_dollars)
+        # Generate license key
+        license_key = _generate_license_key(email, tier)
+        logger.info("Generated license key for %s (tier=%s)", email, tier)
+
+        # Store in DynamoDB
+        _store_license(email, tier, license_key, price_dollars)
+
+        # Email to buyer
+        _send_license_email(email, license_key, tier)
+        logger.info("License email sent to %s", email)
 
         return {"statusCode": 200, "body": "OK"}
 
