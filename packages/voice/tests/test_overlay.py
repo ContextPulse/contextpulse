@@ -72,12 +72,11 @@ def overlay():
         ov._text_label = MagicMock()
         ov._container = MagicMock()
 
-        # Make root.after call the function immediately for UI methods
-        def _after_immediate(delay, fn=None, *args):
-            if fn is not None:
-                fn(*args)
-            return "after_id_mock"
-        ov._root.after = _after_immediate
+        # Make root.after return an ID without calling the function.
+        # Calling fn immediately causes infinite recursion in _animate() since
+        # it reschedules itself. Tests call the private _*_ui() methods directly
+        # to avoid going through the after() dispatch path.
+        ov._root.after = MagicMock(return_value="after_id_mock")
 
         yield ov
 
@@ -123,8 +122,11 @@ class TestShowRecording:
         assert overlay._animating is True
 
     def test_show_recording_resets_frame_idx(self, overlay):
+        # _show_recording_ui resets to 0, then _animate() advances it to 1.
+        # Patch _animate to verify the reset value without side-effects.
         overlay._frame_idx = 10
-        overlay._show_recording_ui()
+        with patch.object(overlay, "_animate"):
+            overlay._show_recording_ui()
         assert overlay._frame_idx == 0
 
     def test_show_recording_sets_red_text(self, overlay):
