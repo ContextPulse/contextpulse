@@ -12,6 +12,12 @@ build/
 packages/*/dist/
 packages/*/build/
 packages/*/src/*.egg-info/
+installer_output/
+*.spec.bak
+dist2/
+dist3/
+build2/
+build3/
 
 # IDE
 .vscode/

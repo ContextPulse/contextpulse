@@ -74,6 +74,7 @@ class VoiceModule(ModalityModule):
         self._recorder: Recorder | None = None
         self._transcriber = None
         self._listener: kb.Listener | None = None
+        self._overlay = None  # Recording overlay (lazy init)
 
         self._recording = False
         self._fixing = False
@@ -103,6 +104,15 @@ class VoiceModule(ModalityModule):
         # Lazy-load transcriber (downloads model on first use)
         from contextpulse_voice.transcriber import LocalTranscriber
         self._transcriber = LocalTranscriber(model_size=self._model_size)
+
+        # Initialize recording overlay (visual feedback)
+        try:
+            from contextpulse_voice.overlay import RecordingOverlay
+            self._overlay = RecordingOverlay()
+            logger.info("Recording overlay initialized")
+        except Exception:
+            logger.debug("Overlay failed to initialize — running headless")
+            self._overlay = None
 
         self._running = True
         self._error = None
@@ -227,6 +237,8 @@ class VoiceModule(ModalityModule):
             self._recording = True
             app_name, window_title = self._get_foreground_info()
             self._recorder.start()
+            if self._overlay:
+                self._overlay.show_recording()
             self._emit(ContextEvent(
                 modality=Modality.VOICE,
                 event_type=EventType.SPEECH_START,
@@ -250,6 +262,8 @@ class VoiceModule(ModalityModule):
         if self._recording and not self._hotkey_keys.issubset(self._pressed_keys):
             self._recording = False
             wav_bytes = self._recorder.stop()
+            if self._overlay:
+                self._overlay.show_transcribing()
             app_name, window_title = self._get_foreground_info()
             self._emit(ContextEvent(
                 modality=Modality.VOICE,
@@ -260,6 +274,8 @@ class VoiceModule(ModalityModule):
 
             if not wav_bytes:
                 logger.warning("No audio captured")
+                if self._overlay:
+                    self._overlay.hide()
                 return
 
             threading.Thread(
@@ -278,19 +294,27 @@ class VoiceModule(ModalityModule):
             raw_text = self._transcriber.transcribe(wav_bytes)
             if not raw_text or len(raw_text.strip()) < 2:
                 logger.warning("Empty or too-short transcription — skipping")
+                if self._overlay:
+                    self._overlay.hide()
                 return
 
             raw_text = apply_punctuation(raw_text)
             use_llm = self._always_use_llm and has_api_key()
+            if use_llm and self._overlay:
+                self._overlay.show_cleaning()
             text = clean(raw_text, use_llm=use_llm)
             text = apply_vocabulary(text)
 
             if not text:
                 logger.warning("Empty transcription — silence?")
+                if self._overlay:
+                    self._overlay.hide()
                 return
 
             self._last_wav_bytes = wav_bytes
             paste_timestamp, paste_hash = paste_text(text)
+            if self._overlay:
+                self._overlay.show_ready()
 
             # Emit TRANSCRIPTION event with both raw and cleaned text
             self._emit(ContextEvent(
@@ -313,6 +337,8 @@ class VoiceModule(ModalityModule):
         except Exception:
             self._error = "Transcription failed"
             logger.exception("Transcription failed")
+            if self._overlay:
+                self._overlay.hide()
 
     def _fix_last(self) -> None:
         """Re-transcribe last audio with higher quality and LLM cleanup."""

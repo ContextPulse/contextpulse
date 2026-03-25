@@ -9,6 +9,9 @@ description = "Always-on context for AI agents"
 requires-python = ">=3.10"
 dependencies = []
 
+[project.scripts]
+contextpulse = "contextpulse_core.daemon:main"
+
 [tool.setuptools.packages.find]
 where = [
     "packages/core/src",

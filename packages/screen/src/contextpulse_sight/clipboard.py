@@ -7,6 +7,7 @@ Filters noise: ignores rapid copy-paste loops, very short clips (<5 chars),
 and duplicate consecutive content.
 """
 
+import hashlib
 import logging
 import threading
 import time
@@ -40,6 +41,11 @@ class ClipboardMonitor:
         self._last_text: str = ""
         self._last_capture_time: float = 0.0
         self._sequence_number: int = 0
+        self._sight_module = None  # optional dual-write to EventBus
+
+    def set_sight_module(self, module) -> None:
+        """Attach a SightModule for dual-write EventBus emission."""
+        self._sight_module = module
 
     def start(self):
         """Start the clipboard monitoring thread."""
@@ -96,6 +102,14 @@ class ClipboardMonitor:
             timestamp=now,
             text=text,
         )
+        # Dual-write: emit clipboard event to EventBus
+        if self._sight_module:
+            hash_val = hashlib.sha256(text.encode()).hexdigest()[:16]
+            self._sight_module.emit_clipboard(
+                timestamp=now,
+                text=text,
+                hash_val=hash_val,
+            )
         logger.debug("Clipboard captured: %d chars", len(text))
 
     def get_recent(self, count: int = 10) -> list[dict]:

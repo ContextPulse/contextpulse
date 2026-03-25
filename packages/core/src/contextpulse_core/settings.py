@@ -91,7 +91,7 @@ def _field_row(
 def _build_and_run() -> None:
     cfg = load_config()
 
-    dlg = gui_theme.create_dialog("ContextPulse — Settings", width=560, height=620)
+    dlg = gui_theme.create_dialog("ContextPulse — Settings", width=560, height=780)
 
     # Scrollable canvas for content
     canvas = tk.Canvas(dlg, bg=gui_theme.BG, highlightthickness=0)
@@ -153,6 +153,53 @@ def _build_and_run() -> None:
 
     gui_theme.make_label(
         frame, "Hotkey changes take effect after restart.",
+        font=("Segoe UI", 8), fg=gui_theme.TEXT_MUTED,
+    ).pack(anchor="w", pady=(2, 0))
+
+    # ── Voice Section ─────────────────────────────────────────────
+    _section_header(frame, "Voice Dictation")
+
+    voice_hotkey_var = tk.StringVar(master=root, value=cfg.get("voice_hotkey", "ctrl+space"))
+    _field_row(frame, "Dictate (hold):", voice_hotkey_var)
+
+    voice_fix_var = tk.StringVar(master=root, value=cfg.get("voice_fix_hotkey", "ctrl+shift+space"))
+    _field_row(frame, "Fix last:", voice_fix_var)
+
+    voice_model_var = tk.StringVar(master=root, value=cfg.get("voice_whisper_model", "base"))
+    _field_row(
+        frame, "Whisper model:", voice_model_var,
+        entry_type="combo", values=["tiny", "base", "small", "medium", "large-v3"],
+    )
+
+    voice_llm_var = tk.StringVar(master=root, value="1" if cfg.get("voice_always_use_llm", False) else "0")
+    tk.Checkbutton(
+        frame, text="  Always use AI cleanup (requires Anthropic API key)",
+        variable=voice_llm_var, onvalue="1", offvalue="0",
+        font=("Segoe UI", 10),
+        fg=gui_theme.TEXT, bg=gui_theme.BG, selectcolor=gui_theme.BG,
+        activebackground=gui_theme.BG, activeforeground=gui_theme.TEXT,
+        highlightthickness=0, bd=1,
+    ).pack(anchor="w", pady=(8, 0))
+
+    voice_api_var = tk.StringVar(master=root, value=cfg.get("voice_anthropic_api_key", ""))
+    _field_row(frame, "Anthropic API key:", voice_api_var)
+
+    gui_theme.make_label(
+        frame, "Larger models are more accurate but slower. 'base' is recommended.",
+        font=("Segoe UI", 8), fg=gui_theme.TEXT_MUTED,
+    ).pack(anchor="w", pady=(2, 0))
+
+    # ── Touch Section ─────────────────────────────────────────────
+    _section_header(frame, "Touch (Input Capture)")
+
+    burst_var = tk.StringVar(master=root, value=str(cfg.get("touch_burst_timeout", 1.5)))
+    _field_row(frame, "Burst timeout (s):", burst_var)
+
+    correction_var = tk.StringVar(master=root, value=str(cfg.get("touch_correction_window", 15.0)))
+    _field_row(frame, "Correction window (s):", correction_var)
+
+    gui_theme.make_label(
+        frame, "Touch captures typing patterns and detects voice dictation corrections.",
         font=("Segoe UI", 8), fg=gui_theme.TEXT_MUTED,
     ).pack(anchor="w", pady=(2, 0))
 
@@ -229,19 +276,34 @@ def _build_and_run() -> None:
         cfg.get("hotkey_all_monitors", ""),
         cfg.get("hotkey_region", ""),
         cfg.get("hotkey_pause", ""),
+        cfg.get("voice_hotkey", ""),
+        cfg.get("voice_fix_hotkey", ""),
+        cfg.get("voice_whisper_model", ""),
     )
 
     def save_and_close():
         new_cfg = dict(cfg)  # preserve any unknown keys
         new_cfg.update({
+            # Capture
             "auto_interval": max(0, interval_var.get()),
             "storage_mode": storage_var.get(),
             "jpeg_quality": max(1, min(100, quality_var.get())),
             "buffer_max_age": max(0, buffer_var.get()),
+            # Sight hotkeys
             "hotkey_capture": hk_capture_var.get().strip().lower() or "ctrl+shift+s",
             "hotkey_all_monitors": hk_all_var.get().strip().lower() or "ctrl+shift+a",
             "hotkey_region": hk_region_var.get().strip().lower() or "ctrl+shift+z",
             "hotkey_pause": hk_pause_var.get().strip().lower() or "ctrl+shift+p",
+            # Voice
+            "voice_hotkey": voice_hotkey_var.get().strip().lower() or "ctrl+space",
+            "voice_fix_hotkey": voice_fix_var.get().strip().lower() or "ctrl+shift+space",
+            "voice_whisper_model": voice_model_var.get() or "base",
+            "voice_always_use_llm": voice_llm_var.get() == "1",
+            "voice_anthropic_api_key": voice_api_var.get().strip(),
+            # Touch
+            "touch_burst_timeout": float(burst_var.get() or "1.5"),
+            "touch_correction_window": float(correction_var.get() or "15.0"),
+            # Privacy
             "blocklist_patterns": [p.strip() for p in blocklist_var.get().split(",") if p.strip()],
             "always_both_apps": [p.strip() for p in always_both_var.get().split(",") if p.strip()],
             "redact_ocr_text": redact_var.get() == "1",
@@ -254,6 +316,9 @@ def _build_and_run() -> None:
             new_cfg["hotkey_all_monitors"],
             new_cfg["hotkey_region"],
             new_cfg["hotkey_pause"],
+            new_cfg["voice_hotkey"],
+            new_cfg["voice_fix_hotkey"],
+            new_cfg["voice_whisper_model"],
         )
         if new_hotkeys != startup_hotkeys:
             messagebox.showinfo(
