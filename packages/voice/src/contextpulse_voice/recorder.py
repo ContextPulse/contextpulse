@@ -40,13 +40,20 @@ class Recorder:
         logger.info("Recording started")
 
     def stop(self) -> bytes:
-        """Stop recording and return WAV bytes."""
-        if self._stream is not None:
-            self._stream.stop()
-            self._stream.close()
-            self._stream = None
-        logger.info("Recording stopped — %d frames captured", len(self._frames))
-        return self._to_wav()
+        """Stop recording and return WAV bytes.
+
+        Always clears the internal frame buffer, even if WAV conversion fails,
+        to prevent memory accumulation across dictation cycles.
+        """
+        try:
+            if self._stream is not None:
+                self._stream.stop()
+                self._stream.close()
+                self._stream = None
+            logger.info("Recording stopped — %d frames captured", len(self._frames))
+            return self._to_wav()
+        finally:
+            self._frames = []
 
     def _callback(
         self, indata: np.ndarray, frames: int, time_info: object, status: sd.CallbackFlags

@@ -25,12 +25,14 @@ from contextpulse_sight.ocr_worker import OCRWorker
 from contextpulse_sight.privacy import (
     SessionMonitor, get_foreground_process_name, get_foreground_window_title, is_blocked,
 )
+from contextpulse_sight.sight_module import SightModule
 
 # Core productization imports (settings, first-run, licensing)
 from contextpulse_core.first_run import is_first_run, show_welcome_dialog
 from contextpulse_core.settings import show_settings
 from contextpulse_core.license import is_licensed, has_memory_access
 from contextpulse_core.license_dialog import show_nag_dialog
+from contextpulse_core.spine import EventBus
 
 _WARNING_COLOR = _COLORS.get("dark", {}).get("warning", "#F0B429")
 
@@ -59,6 +61,14 @@ class ContextPulseSightApp:
         self._event_detector = EventDetector()
         self._ocr_worker = OCRWorker(self.activity_db, self.buffer)
         self._clipboard_monitor = ClipboardMonitor(self.activity_db)
+
+        # Spine dual-write: EventBus + SightModule
+        self._event_bus = EventBus(self.activity_db.db_path)
+        self._sight_module = SightModule()
+        self._sight_module.register(self._event_bus.emit)
+        self._sight_module.start()
+        self._ocr_worker.set_sight_module(self._sight_module)
+        self._clipboard_monitor.set_sight_module(self._sight_module)
 
     # -- Privacy guard -----------------------------------------------------
 
@@ -115,11 +125,13 @@ class ContextPulseSightApp:
     def _on_session_lock(self):
         logger.info("Session locked -- auto-pausing")
         self.paused = True
+        self._sight_module.emit_session_lock(locked=True)
         self._update_tray_icon()
 
     def _on_session_unlock(self):
         logger.info("Session unlocked -- restoring state")
         self.paused = self._user_paused
+        self._sight_module.emit_session_lock(locked=False)
         self._update_tray_icon()
 
     # -- Auto-capture loop -------------------------------------------------
@@ -153,6 +165,15 @@ class ContextPulseSightApp:
                     app_name=app_name,
                     monitor_index=idx,
                     frame_path=str(frame_path) if frame_path else None,
+                    diff_score=diff_pct,
+                )
+                # Dual-write: emit to EventBus via SightModule
+                self._sight_module.emit_capture(
+                    timestamp=now,
+                    app_name=app_name,
+                    window_title=window_title,
+                    monitor_index=idx,
+                    frame_path=str(frame_path) if frame_path else "",
                     diff_score=diff_pct,
                 )
                 # Queue for background OCR
@@ -363,6 +384,8 @@ class ContextPulseSightApp:
         self._event_detector.stop()
         self._ocr_worker.stop()
         self._clipboard_monitor.stop()
+        self._sight_module.stop()
+        self._event_bus.close()
         self.activity_db.close()
         # Clean up tkinter root used by settings/dialogs
         from contextpulse_core.gui_theme import destroy_root

@@ -35,6 +35,9 @@ from contextpulse_sight.classifier import classify_and_extract
 from contextpulse_sight.config import FILE_LATEST, OUTPUT_DIR
 from contextpulse_sight.privacy import is_blocked, is_title_blocked
 
+from contextpulse_core.license import get_license_tier
+from contextpulse_core.spine import EventBus
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(message)s",
@@ -47,6 +50,15 @@ mcp_app = FastMCP("ContextPulse Sight")
 # Shared instances (reads data written by the daemon)
 _buffer = RollingBuffer()
 _activity_db = ActivityDB()
+_event_bus: EventBus | None = None
+
+
+def _get_event_bus() -> EventBus:
+    """Lazy-init EventBus (reads the same activity.db as the daemon)."""
+    global _event_bus
+    if _event_bus is None:
+        _event_bus = EventBus(_activity_db.db_path)
+    return _event_bus
 
 
 def _track_call(func):
@@ -54,6 +66,21 @@ def _track_call(func):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         _activity_db.record_mcp_call(tool_name=func.__name__)
+        return func(*args, **kwargs)
+    return wrapper
+
+
+def _require_pro(func):
+    """Decorator that gates a tool behind a Pro license tier."""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        tier = get_license_tier()
+        if tier != "pro":
+            return (
+                f"This tool requires a ContextPulse Pro license. "
+                f"Current tier: {'free' if not tier else tier}. "
+                f"Upgrade at https://contextpulse.ai/pricing"
+            )
         return func(*args, **kwargs)
     return wrapper
 
@@ -482,6 +509,130 @@ def get_agent_stats(hours: float = 24.0) -> str:
         for tool_name, count in sorted(tools.items(), key=lambda x: -x[1]):
             lines.append(f"  {tool_name}: {count}")
         lines.append("")
+
+    return "\n".join(lines)
+
+
+@mcp_app.tool()
+@_track_call
+@_require_pro
+def search_all_events(query: str, minutes_ago: int = 60, modality: str | None = None) -> str:
+    """Search across ALL event types (screen, voice, clipboard, keys, flow) using full-text search.
+
+    Cross-modal search powered by the ContextPulse spine. Finds when specific
+    content appeared on screen, was spoken, typed, or copied — all in one query.
+
+    Args:
+        query: Search terms (searches window titles, app names, OCR text, transcripts, clipboard).
+        minutes_ago: How far back to search (default 60 minutes).
+        modality: Optional filter: "sight", "voice", "clipboard", "keys", "flow", "system".
+    """
+    bus = _get_event_bus()
+    results = bus.search(query, minutes_ago=minutes_ago, modality=modality)
+
+    if not results:
+        scope = f" in {modality}" if modality else ""
+        return f"No results for '{query}'{scope} in the last {minutes_ago} minutes."
+
+    # Filter blocked titles
+    filtered = [r for r in results if not is_title_blocked(r.get("window_title", ""))]
+    skipped = len(results) - len(filtered)
+
+    lines = [f"=== Cross-Modal Search: '{query}' ({len(filtered)} results) ===\n"]
+    if skipped:
+        lines.append(f"({skipped} result(s) hidden — privacy blocklist)\n")
+
+    for r in filtered[:25]:
+        ts_str = datetime.fromtimestamp(r["timestamp"]).strftime("%H:%M:%S")
+        mod = r.get("modality", "?")
+        evt = r.get("event_type", "?")
+        app = r.get("app_name", "")
+        title = r.get("window_title", "")[:60]
+
+        lines.append(f"[{ts_str}] [{mod}/{evt}] {app} — {title}")
+
+        # Extract searchable text from payload
+        try:
+            import json as _json
+            payload = _json.loads(r["payload"]) if isinstance(r["payload"], str) else r.get("payload", {})
+            text = payload.get("ocr_text") or payload.get("transcript") or payload.get("text") or ""
+            if text:
+                snippet = text[:150].replace("\n", " ")
+                lines.append(f"  {snippet}{'...' if len(text) > 150 else ''}")
+        except Exception:
+            pass
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+@mcp_app.tool()
+@_track_call
+@_require_pro
+def get_event_timeline(minutes_ago: float = 5.0, modality: str | None = None) -> str:
+    """Get a timeline of ALL events across modalities for the last N minutes.
+
+    Shows what was happening across screen, voice, keyboard, mouse, and clipboard
+    at a specific time window. Useful for understanding context around an event
+    or reconstructing what the user was doing.
+
+    Args:
+        minutes_ago: How many minutes back to look (default 5).
+        modality: Optional filter: "sight", "voice", "clipboard", "keys", "flow", "system".
+    """
+    bus = _get_event_bus()
+    seconds = minutes_ago * 60
+    events = bus.query_recent(seconds=seconds, modality=modality, limit=100)
+
+    if not events:
+        scope = f" ({modality})" if modality else ""
+        return f"No events{scope} in the last {minutes_ago:.0f} minutes."
+
+    # Filter blocked titles
+    filtered = [e for e in events if not is_title_blocked(e.window_title)]
+    skipped = len(events) - len(filtered)
+
+    # Reverse to chronological order
+    filtered = list(reversed(filtered))
+
+    lines = [f"=== Event Timeline (last {minutes_ago:.0f}m, {len(filtered)} events) ===\n"]
+    if skipped:
+        lines.append(f"({skipped} event(s) hidden — privacy blocklist)\n")
+
+    # Group by modality for summary
+    modality_counts: dict[str, int] = {}
+    for e in filtered:
+        mod = e.modality.value if hasattr(e.modality, 'value') else str(e.modality)
+        modality_counts[mod] = modality_counts.get(mod, 0) + 1
+
+    lines.append("Modalities: " + ", ".join(f"{k}={v}" for k, v in sorted(modality_counts.items())))
+    lines.append("")
+
+    for e in filtered[:50]:
+        ts_str = datetime.fromtimestamp(e.timestamp).strftime("%H:%M:%S")
+        mod = e.modality.value if hasattr(e.modality, 'value') else str(e.modality)
+        evt = e.event_type.value if hasattr(e.event_type, 'value') else str(e.event_type)
+        app = e.app_name or ""
+        title = e.window_title[:50] if e.window_title else ""
+
+        line = f"[{ts_str}] {mod:>9}/{evt:<20} {app}"
+        if title:
+            line += f" — {title}"
+        lines.append(line)
+
+        # Show key payload info
+        payload = e.payload if isinstance(e.payload, dict) else {}
+        extras = []
+        if payload.get("diff_score"):
+            extras.append(f"diff={payload['diff_score']:.1%}")
+        if payload.get("ocr_confidence"):
+            extras.append(f"ocr_conf={payload['ocr_confidence']:.0%}")
+        if payload.get("wpm"):
+            extras.append(f"wpm={payload['wpm']}")
+        if payload.get("word_count"):
+            extras.append(f"words={payload['word_count']}")
+        if extras:
+            lines.append(f"  {'  '.join(extras)}")
 
     return "\n".join(lines)
 

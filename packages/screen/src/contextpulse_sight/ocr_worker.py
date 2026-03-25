@@ -39,6 +39,11 @@ class OCRWorker:
         self._buffer = buffer
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
+        self._sight_module = None  # optional dual-write to EventBus
+
+    def set_sight_module(self, module) -> None:
+        """Attach a SightModule for dual-write EventBus emission."""
+        self._sight_module = module
 
     def enqueue(self, frame_path: Path, row_id: int, app_name: str = ""):
         """Queue a frame for OCR. Non-blocking; drops if queue full."""
@@ -103,6 +108,15 @@ class OCRWorker:
             self._buffer.add_ocr_text(
                 frame_path, result["text"], result["confidence"]
             )
+            # Dual-write: emit OCR result to EventBus
+            if self._sight_module:
+                self._sight_module.emit_ocr(
+                    timestamp=frame_path.stat().st_mtime if frame_path.exists() else 0,
+                    frame_path=str(frame_path),
+                    ocr_text=result["text"],
+                    confidence=result["confidence"],
+                    app_name=app_name,
+                )
 
         # Decide whether to keep the image
         if is_text_heavy and STORAGE_MODE in ("smart", "text") and not force_both:
