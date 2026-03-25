@@ -65,31 +65,41 @@ def populated_bus(bus):
 
 
 class TestRequireProDecorator:
-    """Test the _require_pro gating decorator."""
+    """Test the _require_pro gating decorator.
 
-    def test_blocks_free_tier(self):
+    The decorator now uses has_pro_access() which grants access when:
+    - User has a valid license (starter or pro tier), OR
+    - User is within their 7-day trial period
+    """
+
+    def test_blocks_when_no_access(self):
         from contextpulse_sight.mcp_server import _require_pro
 
         @_require_pro
         def my_tool():
             return "success"
 
-        with patch("contextpulse_sight.mcp_server.get_license_tier", return_value=""):
+        with (
+            patch("contextpulse_sight.mcp_server.has_pro_access", return_value=False),
+            patch("contextpulse_sight.mcp_server.get_license_tier", return_value=""),
+        ):
             result = my_tool()
             assert "Pro license" in result
             assert "free" in result
 
-    def test_blocks_starter_tier(self):
+    def test_blocks_expired_no_trial(self):
         from contextpulse_sight.mcp_server import _require_pro
 
         @_require_pro
         def my_tool():
             return "success"
 
-        with patch("contextpulse_sight.mcp_server.get_license_tier", return_value="starter"):
+        with (
+            patch("contextpulse_sight.mcp_server.has_pro_access", return_value=False),
+            patch("contextpulse_sight.mcp_server.get_license_tier", return_value=""),
+        ):
             result = my_tool()
             assert "Pro license" in result
-            assert "starter" in result
 
     def test_allows_pro_tier(self):
         from contextpulse_sight.mcp_server import _require_pro
@@ -98,7 +108,29 @@ class TestRequireProDecorator:
         def my_tool():
             return "success"
 
-        with patch("contextpulse_sight.mcp_server.get_license_tier", return_value="pro"):
+        with patch("contextpulse_sight.mcp_server.has_pro_access", return_value=True):
+            result = my_tool()
+            assert result == "success"
+
+    def test_allows_starter_tier(self):
+        from contextpulse_sight.mcp_server import _require_pro
+
+        @_require_pro
+        def my_tool():
+            return "success"
+
+        with patch("contextpulse_sight.mcp_server.has_pro_access", return_value=True):
+            result = my_tool()
+            assert result == "success"
+
+    def test_allows_during_trial(self):
+        from contextpulse_sight.mcp_server import _require_pro
+
+        @_require_pro
+        def my_tool():
+            return "success"
+
+        with patch("contextpulse_sight.mcp_server.has_pro_access", return_value=True):
             result = my_tool()
             assert result == "success"
 
@@ -123,7 +155,7 @@ class TestSearchAllEvents:
         # Patch the event bus and license tier
         with (
             patch.object(mcp_server, "_event_bus", populated_bus),
-            patch.object(mcp_server, "get_license_tier", return_value="pro"),
+            patch.object(mcp_server, "has_pro_access", return_value=True),
             patch.object(mcp_server, "_activity_db") as mock_db,
         ):
             mock_db.record_mcp_call = lambda **kw: None
@@ -136,7 +168,7 @@ class TestSearchAllEvents:
 
         with (
             patch.object(mcp_server, "_event_bus", populated_bus),
-            patch.object(mcp_server, "get_license_tier", return_value="pro"),
+            patch.object(mcp_server, "has_pro_access", return_value=True),
             patch.object(mcp_server, "_activity_db") as mock_db,
         ):
             mock_db.record_mcp_call = lambda **kw: None
@@ -148,7 +180,7 @@ class TestSearchAllEvents:
 
         with (
             patch.object(mcp_server, "_event_bus", populated_bus),
-            patch.object(mcp_server, "get_license_tier", return_value="pro"),
+            patch.object(mcp_server, "has_pro_access", return_value=True),
             patch.object(mcp_server, "_activity_db") as mock_db,
         ):
             mock_db.record_mcp_call = lambda **kw: None
@@ -160,6 +192,7 @@ class TestSearchAllEvents:
 
         with (
             patch.object(mcp_server, "_event_bus", populated_bus),
+            patch.object(mcp_server, "has_pro_access", return_value=False),
             patch.object(mcp_server, "get_license_tier", return_value=""),
             patch.object(mcp_server, "_activity_db") as mock_db,
         ):
@@ -176,7 +209,7 @@ class TestGetEventTimeline:
 
         with (
             patch.object(mcp_server, "_event_bus", populated_bus),
-            patch.object(mcp_server, "get_license_tier", return_value="pro"),
+            patch.object(mcp_server, "has_pro_access", return_value=True),
             patch.object(mcp_server, "_activity_db") as mock_db,
         ):
             mock_db.record_mcp_call = lambda **kw: None
@@ -189,7 +222,7 @@ class TestGetEventTimeline:
 
         with (
             patch.object(mcp_server, "_event_bus", populated_bus),
-            patch.object(mcp_server, "get_license_tier", return_value="pro"),
+            patch.object(mcp_server, "has_pro_access", return_value=True),
             patch.object(mcp_server, "_activity_db") as mock_db,
         ):
             mock_db.record_mcp_call = lambda **kw: None
@@ -201,7 +234,7 @@ class TestGetEventTimeline:
 
         with (
             patch.object(mcp_server, "_event_bus", populated_bus),
-            patch.object(mcp_server, "get_license_tier", return_value="pro"),
+            patch.object(mcp_server, "has_pro_access", return_value=True),
             patch.object(mcp_server, "_activity_db") as mock_db,
         ):
             mock_db.record_mcp_call = lambda **kw: None
@@ -214,7 +247,7 @@ class TestGetEventTimeline:
 
         with (
             patch.object(mcp_server, "_event_bus", bus),
-            patch.object(mcp_server, "get_license_tier", return_value="pro"),
+            patch.object(mcp_server, "has_pro_access", return_value=True),
             patch.object(mcp_server, "_activity_db") as mock_db,
         ):
             mock_db.record_mcp_call = lambda **kw: None
@@ -226,6 +259,7 @@ class TestGetEventTimeline:
 
         with (
             patch.object(mcp_server, "_event_bus", populated_bus),
+            patch.object(mcp_server, "has_pro_access", return_value=False),
             patch.object(mcp_server, "get_license_tier", return_value=""),
             patch.object(mcp_server, "_activity_db") as mock_db,
         ):

@@ -1,11 +1,11 @@
-"""Ed25519 license verification with tiers and expiration.
+"""Ed25519 license verification with tiers, features, and expiration.
 
 Key format: base64url(json_payload) + "." + base64url(ed25519_signature)
-Payload: {"email": "...", "tier": "starter|pro", "exp": unix_ts, "ts": unix_ts}
+Payload: {"email": "...", "tier": "starter|pro", "features": [...], "exp": unix_ts, "ts": unix_ts}
 
-Sight is always free. Licensing gates Memory/Agent features only.
+Sight is always free. Licensing gates Pro features (search_all_events, get_event_timeline).
 Expired license = warning + nag, NOT hard block.
-7-day trial for Memory features on first use.
+7-day trial for Pro features on first use.
 """
 
 import base64
@@ -166,4 +166,67 @@ def has_memory_access() -> bool:
     if is_licensed():
         tier = get_license_tier()
         return tier in ("starter", "pro")
+    return not is_trial_expired()
+
+
+# -- Feature-based access checks ---------------------------------------------
+
+# Known Pro features that require a license
+PRO_FEATURES = frozenset({"search_all_events", "get_event_timeline"})
+
+
+def get_licensed_features() -> list[str]:
+    """Return the list of features unlocked by the current license.
+
+    Falls back to tier-based defaults if the license payload lacks an
+    explicit 'features' list (backwards compat with older keys).
+    """
+    payload = load_license()
+    if payload is None:
+        return []
+
+    # Check expiration
+    if "exp" in payload and payload["exp"] < time.time():
+        return []
+
+    # Prefer explicit feature list from newer license keys
+    features = payload.get("features")
+    if features:
+        return list(features)
+
+    # Backwards compat: derive features from tier
+    tier = payload.get("tier", "")
+    if tier in ("starter", "pro"):
+        return list(PRO_FEATURES)
+    return []
+
+
+def has_feature(feature_name: str) -> bool:
+    """Check if a specific feature is unlocked (by license OR trial)."""
+    # Licensed users: check feature list
+    if is_licensed():
+        return feature_name in get_licensed_features()
+
+    # Trial users: all Pro features are available during trial
+    if feature_name in PRO_FEATURES and not is_trial_expired():
+        return True
+
+    return False
+
+
+def has_pro_access() -> bool:
+    """Check if user has Pro-tier access (licensed with pro tier OR within trial).
+
+    This is the primary check used by _require_pro in MCP tools.
+    """
+    if is_licensed():
+        tier = get_license_tier()
+        if tier == "pro":
+            return True
+        # Starter tier also gets Pro tools (both tiers unlock the same features)
+        if tier == "starter":
+            return True
+        return False
+
+    # Trial: Pro features available during 7-day trial
     return not is_trial_expired()

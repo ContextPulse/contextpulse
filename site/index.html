@@ -3,89 +3,450 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ContextPulse — Coming Soon</title>
-  <meta name="description" content="ContextPulse gives AI agents awareness of your screen. Local-first, open source, MCP-native.">
+  <title>ContextPulse — Always-on Context for AI Agents</title>
+  <meta name="description" content="Give your AI agents eyes, ears, and memory. ContextPulse captures screen, voice, and input context — and delivers it via MCP. Local-first, privacy-first.">
   <meta property="og:type" content="website">
-  <meta property="og:title" content="ContextPulse — Coming Soon">
-  <meta property="og:description" content="Always-on screen context for AI agents. Local-first, open source.">
+  <meta property="og:title" content="ContextPulse — Always-on Context for AI Agents">
+  <meta property="og:description" content="Give your AI agents eyes, ears, and memory. MCP-native context platform for developers.">
   <meta property="og:url" content="https://contextpulse.ai">
   <link rel="icon" type="image/png" href="favicon.png">
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    :root {
-      --bg: #0D1117;
-      --surface: #161B22;
-      --text: #E6EDF3;
-      --text-muted: #8B949E;
-      --accent: #12B5E0;
-      --border: #30363D;
-      --font: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-      --mono: 'Cascadia Code', 'Fira Code', Consolas, monospace;
-    }
-    html { scroll-behavior: smooth; }
-    body {
-      font-family: var(--font);
-      background: var(--bg);
-      color: var(--text);
-      line-height: 1.6;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-      padding: 24px;
-      text-align: center;
-    }
-    .logo { width: 72px; height: 72px; margin-bottom: 24px; border-radius: 16px; }
-    h1 { font-size: 2.4rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 12px; }
-    .tagline { font-size: 1.15rem; color: var(--text-muted); max-width: 480px; margin-bottom: 32px; }
-    .badge {
-      display: inline-block;
-      padding: 6px 14px;
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      font-size: 0.85rem;
-      color: var(--accent);
-      background: rgba(18, 181, 224, 0.08);
-      margin-bottom: 32px;
-    }
-    .install {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 14px 24px;
-      font-family: var(--mono);
-      font-size: 0.95rem;
-      color: var(--text);
-      margin-bottom: 40px;
-      user-select: all;
-    }
-    .links { display: flex; gap: 24px; flex-wrap: wrap; justify-content: center; }
-    .links a {
-      color: var(--accent);
-      text-decoration: none;
-      font-size: 0.95rem;
-      transition: opacity 0.2s;
-    }
-    .links a:hover { opacity: 0.75; }
-    footer {
-      position: absolute;
-      bottom: 24px;
-      font-size: 0.8rem;
-      color: var(--text-muted);
-    }
-  </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <img src="logo.png" alt="ContextPulse" class="logo">
-  <h1>ContextPulse</h1>
-  <p class="tagline">Always-on screen context for AI agents. Local-first, open source, MCP-native.</p>
-  <div class="badge">Coming Soon</div>
-  <div class="install">pip install contextpulse-sight</div>
-  <div class="links">
-    <a href="https://github.com/jerard-ventures/contextpulse">GitHub</a>
-    <a href="https://pypi.org/project/contextpulse-sight/">PyPI</a>
-  </div>
-  <footer>&copy; 2026 Jerard Ventures LLC</footer>
+
+  <!-- Nav -->
+  <nav class="nav">
+    <div class="nav-inner container">
+      <a href="#" class="nav-logo">
+        <img src="logo.png" alt="ContextPulse" class="nav-logo-img">
+        <span class="nav-logo-text">ContextPulse</span>
+      </a>
+      <div class="nav-links">
+        <a href="#how-it-works">How It Works</a>
+        <a href="#features">Features</a>
+        <a href="#pricing">Pricing</a>
+        <a href="https://github.com/junkyard-rules/contextpulse" class="nav-github" target="_blank" rel="noopener">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+        </a>
+      </div>
+      <button class="nav-mobile-toggle" aria-label="Toggle menu">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="container">
+      <div class="hero-badge fade-in">
+        <span class="pulse-dot"></span>
+        Patent Pending &middot; MCP Native
+      </div>
+      <h1 class="hero-title fade-in">
+        Give your AI agents<br>
+        <span class="gradient-text">eyes, ears, and memory</span>
+      </h1>
+      <p class="hero-subtitle fade-in">
+        ContextPulse captures your screen, voice, and input in real time &mdash; then delivers it
+        to AI agents via the Model Context Protocol. One daemon, 21 tools, zero cloud dependency.
+      </p>
+      <div class="hero-actions fade-in">
+        <a href="#" class="btn btn-primary">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Download for Windows
+        </a>
+        <a href="https://github.com/junkyard-rules/contextpulse" class="btn btn-secondary" target="_blank" rel="noopener">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+          View on GitHub
+        </a>
+      </div>
+      <div class="hero-stats fade-in">
+        <div class="stat">
+          <span class="stat-value">21</span>
+          <span class="stat-label">MCP Tools</span>
+        </div>
+        <div class="stat-divider"></div>
+        <div class="stat">
+          <span class="stat-value">294</span>
+          <span class="stat-label">Tests Passing</span>
+        </div>
+        <div class="stat-divider"></div>
+        <div class="stat">
+          <span class="stat-value">&lt;1%</span>
+          <span class="stat-label">CPU Usage</span>
+        </div>
+        <div class="stat-divider"></div>
+        <div class="stat">
+          <span class="stat-value">0</span>
+          <span class="stat-label">Cloud Dependencies</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Problem -->
+  <section class="section section-problem">
+    <div class="container">
+      <div class="section-header fade-in">
+        <span class="section-label">The Problem</span>
+        <h2 class="section-title">Your AI agents are <span class="gradient-text">blind</span></h2>
+        <p class="section-subtitle">
+          They can't see your screen, hear your voice, or remember what you were doing five minutes ago.
+          Every conversation starts from scratch. Every context switch means re-explaining everything.
+        </p>
+      </div>
+      <div class="problem-grid">
+        <div class="problem-card fade-in">
+          <div class="problem-icon">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+          </div>
+          <h3>Can't see your screen</h3>
+          <p>Your agent has no idea what app you're in, what error is on screen, or what you're looking at right now.</p>
+        </div>
+        <div class="problem-card fade-in">
+          <div class="problem-icon">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 005.12 2.12M15 9.34V4a3 3 0 00-5.94-.6"/><path d="M17 16.95A7 7 0 015 12v-2m14 0v2c0 .26-.01.51-.04.76"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+          </div>
+          <h3>Can't hear you</h3>
+          <p>Voice context vanishes the moment you stop talking. Your agent can't reference what you said two minutes ago.</p>
+        </div>
+        <div class="problem-card fade-in">
+          <div class="problem-icon">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          </div>
+          <h3>No memory</h3>
+          <p>Every session resets. Your agent doesn't know what you were doing before, what you copied, or what you typed.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- How It Works -->
+  <section class="section" id="how-it-works">
+    <div class="container">
+      <div class="section-header fade-in">
+        <span class="section-label">How It Works</span>
+        <h2 class="section-title">Three modules. <span class="gradient-text">Total awareness.</span></h2>
+        <p class="section-subtitle">
+          ContextPulse runs as a single lightweight daemon in your system tray. It captures everything
+          your AI agent needs to understand your working context.
+        </p>
+      </div>
+      <div class="modules-grid">
+        <div class="module-card fade-in">
+          <div class="module-icon module-icon-sight">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </div>
+          <h3 class="module-title">Sight</h3>
+          <p class="module-desc">Auto-captures your screen every 5 seconds with full OCR. Tracks clipboard changes, active windows, and app usage patterns.</p>
+          <ul class="module-features">
+            <li>Screen capture + OCR</li>
+            <li>Clipboard monitoring</li>
+            <li>Activity timeline</li>
+            <li>Rolling buffer (tunable)</li>
+          </ul>
+          <span class="module-tools">10 MCP tools</span>
+        </div>
+        <div class="module-card fade-in">
+          <div class="module-icon module-icon-voice">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+          </div>
+          <h3 class="module-title">Voice</h3>
+          <p class="module-desc">Hold-to-dictate with local Whisper transcription. Self-improving vocabulary learns your jargon and auto-corrects misheard words.</p>
+          <ul class="module-features">
+            <li>Hotkey dictation (Ctrl+Space)</li>
+            <li>Local Whisper model</li>
+            <li>Auto-learning vocabulary</li>
+            <li>Transcription history</li>
+          </ul>
+          <span class="module-tools">3 MCP tools</span>
+        </div>
+        <div class="module-card fade-in">
+          <div class="module-icon module-icon-touch">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8V6a2 2 0 00-2-2H4a2 2 0 00-2 2v7a2 2 0 002 2h8"/><path d="M10 16l4.88-4.88a1.5 1.5 0 012.12 0l.88.88"/><circle cx="18" cy="18" r="3"/></svg>
+          </div>
+          <h3 class="module-title">Touch</h3>
+          <p class="module-desc">Monitors typing patterns and mouse activity. Detects when you correct voice dictation errors and feeds improvements back to Voice.</p>
+          <ul class="module-features">
+            <li>Typing burst detection</li>
+            <li>WPM + backspace ratio</li>
+            <li>Correction detection</li>
+            <li>Click, scroll, drag events</li>
+          </ul>
+          <span class="module-tools">3 MCP tools</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- MCP Native -->
+  <section class="section section-mcp">
+    <div class="container">
+      <div class="mcp-layout">
+        <div class="mcp-text fade-in">
+          <span class="section-label">Integration</span>
+          <h2 class="section-title">Speaks <span class="gradient-text">MCP</span> natively</h2>
+          <p class="mcp-description">
+            ContextPulse exposes 21 tools through the Model Context Protocol. No APIs to configure,
+            no tokens to manage. Your AI agent calls ContextPulse tools just like any other MCP server.
+          </p>
+          <div class="mcp-compat">
+            <span class="mcp-compat-label">Works with</span>
+            <div class="mcp-compat-list">
+              <span class="mcp-compat-item">Claude Code</span>
+              <span class="mcp-compat-item">Claude Desktop</span>
+              <span class="mcp-compat-item">Cursor</span>
+              <span class="mcp-compat-item">Windsurf</span>
+              <span class="mcp-compat-item">Any MCP client</span>
+            </div>
+          </div>
+        </div>
+        <div class="mcp-code fade-in">
+          <div class="code-window">
+            <div class="code-titlebar">
+              <div class="code-dots">
+                <span class="dot dot-red"></span>
+                <span class="dot dot-yellow"></span>
+                <span class="dot dot-green"></span>
+              </div>
+              <span class="code-filename">claude_desktop_config.json</span>
+            </div>
+            <pre class="code-content"><code>{
+  <span class="code-key">"mcpServers"</span>: {
+    <span class="code-key">"contextpulse-sight"</span>: {
+      <span class="code-key">"command"</span>: <span class="code-string">"contextpulse-sight-mcp"</span>,
+      <span class="code-key">"transport"</span>: <span class="code-string">"stdio"</span>
+    },
+    <span class="code-key">"contextpulse-voice"</span>: {
+      <span class="code-key">"command"</span>: <span class="code-string">"contextpulse-voice-mcp"</span>,
+      <span class="code-key">"transport"</span>: <span class="code-string">"stdio"</span>
+    },
+    <span class="code-key">"contextpulse-touch"</span>: {
+      <span class="code-key">"command"</span>: <span class="code-string">"contextpulse-touch-mcp"</span>,
+      <span class="code-key">"transport"</span>: <span class="code-string">"stdio"</span>
+    }
+  }
+}</code></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section class="section" id="features">
+    <div class="container">
+      <div class="section-header fade-in">
+        <span class="section-label">Features</span>
+        <h2 class="section-title">Everything your agent needs. <span class="gradient-text">Nothing it doesn't.</span></h2>
+      </div>
+      <div class="features-grid">
+        <div class="feature-card fade-in">
+          <div class="feature-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          </div>
+          <h3>Always-on Capture</h3>
+          <p>Runs silently in your system tray. Captures screen, voice, and input 24/7 with less than 1% CPU usage.</p>
+        </div>
+        <div class="feature-card fade-in">
+          <div class="feature-icon feature-icon-pro">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          </div>
+          <div class="feature-title-row">
+            <h3>Cross-Modal Search</h3>
+            <span class="pro-badge">PRO</span>
+          </div>
+          <p>Search across screen, voice, clipboard, and keyboard events in a single query. Find anything you saw, said, or typed.</p>
+        </div>
+        <div class="feature-card fade-in">
+          <div class="feature-icon feature-icon-pro">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          </div>
+          <div class="feature-title-row">
+            <h3>Event Timeline</h3>
+            <span class="pro-badge">PRO</span>
+          </div>
+          <p>Temporal view of all events across modalities. Reconstruct exactly what happened, when, and in what order.</p>
+        </div>
+        <div class="feature-card fade-in">
+          <div class="feature-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+          </div>
+          <h3>Privacy-First</h3>
+          <p>All data stays on your machine. Local SQLite database, local Whisper model, zero cloud uploads. Your context is yours.</p>
+        </div>
+        <div class="feature-card fade-in">
+          <div class="feature-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
+          </div>
+          <h3>Auto-Learning Vocabulary</h3>
+          <p>Voice dictation improves over time. Learns your project names, technical terms, and common phrases automatically.</p>
+        </div>
+        <div class="feature-card fade-in">
+          <div class="feature-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          </div>
+          <h3>Correction Detection</h3>
+          <p>Touch detects when you fix voice dictation errors and feeds corrections back. Your agent gets smarter every session.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Pricing -->
+  <section class="section section-pricing" id="pricing">
+    <div class="container">
+      <div class="section-header fade-in">
+        <span class="section-label">Pricing</span>
+        <h2 class="section-title">Start free. <span class="gradient-text">Upgrade when you need more.</span></h2>
+        <p class="section-subtitle">
+          The core experience is free forever. Pro unlocks cross-modal superpowers for power users.
+        </p>
+      </div>
+      <div class="pricing-grid">
+        <div class="pricing-card fade-in">
+          <div class="pricing-header">
+            <h3 class="pricing-name">Free</h3>
+            <div class="pricing-price">
+              <span class="pricing-amount">$0</span>
+              <span class="pricing-period">forever</span>
+            </div>
+            <p class="pricing-desc">Everything you need to give your AI agents context awareness.</p>
+          </div>
+          <ul class="pricing-features">
+            <li>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              Screen capture + OCR
+            </li>
+            <li>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              Clipboard monitoring
+            </li>
+            <li>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              Voice dictation
+            </li>
+            <li>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              Touch activity tracking
+            </li>
+            <li>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              Per-module search
+            </li>
+            <li>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              Project detection + journal
+            </li>
+            <li>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              16 MCP tools
+            </li>
+          </ul>
+          <a href="#" class="btn btn-secondary btn-full">Download Free</a>
+        </div>
+        <div class="pricing-card pricing-card-pro fade-in">
+          <div class="pricing-popular">Most Popular</div>
+          <div class="pricing-header">
+            <h3 class="pricing-name pricing-name-pro">Pro</h3>
+            <div class="pricing-price">
+              <span class="pricing-amount pricing-amount-soon">Coming Soon</span>
+            </div>
+            <p class="pricing-desc">Full cross-modal awareness for professional workflows.</p>
+          </div>
+          <ul class="pricing-features">
+            <li>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              Everything in Free
+            </li>
+            <li class="pricing-feature-highlight">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              Cross-modal search
+            </li>
+            <li class="pricing-feature-highlight">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              Event timeline
+            </li>
+            <li>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              21 MCP tools (full suite)
+            </li>
+            <li>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              Priority support
+            </li>
+            <li>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              Early access to new modules
+            </li>
+          </ul>
+          <form class="waitlist-form" id="waitlist-form">
+            <input type="email" class="waitlist-input" placeholder="Enter your email" required>
+            <button type="submit" class="btn btn-primary btn-full">Join the Pro Waitlist</button>
+          </form>
+          <p class="waitlist-note">No spam. We'll notify you when Pro launches.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="section section-cta">
+    <div class="container">
+      <div class="cta-content fade-in">
+        <h2 class="section-title">Ready to give your AI agents <span class="gradient-text">superpowers</span>?</h2>
+        <p class="section-subtitle">Download ContextPulse and start your first session in under a minute.</p>
+        <div class="hero-actions">
+          <a href="#" class="btn btn-primary">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Download for Windows
+          </a>
+          <a href="https://github.com/junkyard-rules/contextpulse" class="btn btn-secondary" target="_blank" rel="noopener">View Documentation</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-inner">
+        <div class="footer-brand">
+          <img src="logo.png" alt="ContextPulse" class="footer-logo">
+          <span class="footer-brand-name">ContextPulse</span>
+          <p class="footer-tagline">Always-on context for AI agents</p>
+        </div>
+        <div class="footer-links">
+          <div class="footer-col">
+            <h4>Product</h4>
+            <a href="#how-it-works">How It Works</a>
+            <a href="#features">Features</a>
+            <a href="#pricing">Pricing</a>
+            <a href="#">Download</a>
+          </div>
+          <div class="footer-col">
+            <h4>Resources</h4>
+            <a href="https://github.com/junkyard-rules/contextpulse" target="_blank" rel="noopener">GitHub</a>
+            <a href="https://pypi.org/project/contextpulse-sight/" target="_blank" rel="noopener">PyPI</a>
+            <a href="#">Documentation</a>
+          </div>
+          <div class="footer-col">
+            <h4>Legal</h4>
+            <a href="#">Privacy Policy</a>
+            <a href="#">Terms of Service</a>
+          </div>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <p>&copy; 2026 Jerard Ventures LLC. All rights reserved.</p>
+        <p class="footer-patent">Patent Pending (App. #64/013,461) &middot; Trademark #96717513</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="script.js"></script>
 </body>
 </html>

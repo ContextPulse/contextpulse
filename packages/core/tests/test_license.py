@@ -11,12 +11,16 @@ import pytest
 from contextpulse_core.license import (
     APPDATA_DIR,
     LICENSE_FILE,
+    PRO_FEATURES,
     TRIAL_FILE,
     _PUBLIC_KEY_HEX,
     get_license_email,
     get_license_tier,
+    get_licensed_features,
     get_trial_days_remaining,
+    has_feature,
     has_memory_access,
+    has_pro_access,
     is_expired,
     is_licensed,
     is_trial_expired,
@@ -204,3 +208,77 @@ class TestMemoryAccess:
         trial_data = {"start": int(time.time()) - 8 * 86400}
         (appdata / "trial.json").write_text(json.dumps(trial_data))
         assert has_memory_access() is False
+
+
+# -- has_pro_access tests ----------------------------------------------------
+
+class TestProAccess:
+    def test_pro_access_with_pro_license(self, isolated_license):
+        key = _generate_test_key(tier="pro")
+        save_license(key)
+        assert has_pro_access() is True
+
+    def test_pro_access_with_starter_license(self, isolated_license):
+        key = _generate_test_key(tier="starter")
+        save_license(key)
+        assert has_pro_access() is True
+
+    def test_pro_access_during_trial(self, isolated_license):
+        assert has_pro_access() is True  # trial starts fresh
+
+    def test_no_pro_access_after_trial_expired(self, isolated_license):
+        appdata = isolated_license
+        appdata.mkdir(parents=True, exist_ok=True)
+        trial_data = {"start": int(time.time()) - 8 * 86400}
+        (appdata / "trial.json").write_text(json.dumps(trial_data))
+        assert has_pro_access() is False
+
+    def test_no_pro_access_with_expired_license(self, isolated_license):
+        key = _generate_test_key(tier="pro", exp=int(time.time()) - 3600)
+        save_license(key)
+        # Also expire the trial
+        appdata = isolated_license
+        trial_data = {"start": int(time.time()) - 8 * 86400}
+        (appdata / "trial.json").write_text(json.dumps(trial_data))
+        assert has_pro_access() is False
+
+
+# -- Feature-based access tests ----------------------------------------------
+
+class TestFeatureAccess:
+    def test_has_feature_with_license(self, isolated_license):
+        key = _generate_test_key(tier="pro")
+        save_license(key)
+        assert has_feature("search_all_events") is True
+        assert has_feature("get_event_timeline") is True
+
+    def test_has_feature_during_trial(self, isolated_license):
+        assert has_feature("search_all_events") is True
+        assert has_feature("get_event_timeline") is True
+
+    def test_no_feature_after_trial_expired(self, isolated_license):
+        appdata = isolated_license
+        appdata.mkdir(parents=True, exist_ok=True)
+        trial_data = {"start": int(time.time()) - 8 * 86400}
+        (appdata / "trial.json").write_text(json.dumps(trial_data))
+        assert has_feature("search_all_events") is False
+
+    def test_unknown_feature_returns_false(self, isolated_license):
+        key = _generate_test_key(tier="pro")
+        save_license(key)
+        assert has_feature("nonexistent_feature") is False
+
+    def test_get_licensed_features_with_license(self, isolated_license):
+        key = _generate_test_key(tier="starter")
+        save_license(key)
+        features = get_licensed_features()
+        assert "search_all_events" in features
+        assert "get_event_timeline" in features
+
+    def test_get_licensed_features_no_license(self, isolated_license):
+        assert get_licensed_features() == []
+
+    def test_get_licensed_features_expired(self, isolated_license):
+        key = _generate_test_key(tier="pro", exp=int(time.time()) - 3600)
+        save_license(key)
+        assert get_licensed_features() == []

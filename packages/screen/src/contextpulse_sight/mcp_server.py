@@ -35,7 +35,7 @@ from contextpulse_sight.classifier import classify_and_extract
 from contextpulse_sight.config import FILE_LATEST, OUTPUT_DIR
 from contextpulse_sight.privacy import is_blocked, is_title_blocked
 
-from contextpulse_core.license import get_license_tier
+from contextpulse_core.license import get_license_tier, has_pro_access
 from contextpulse_core.spine import EventBus
 
 logging.basicConfig(
@@ -71,17 +71,22 @@ def _track_call(func):
 
 
 def _require_pro(func):
-    """Decorator that gates a tool behind a Pro license tier."""
+    """Decorator that gates a tool behind a Pro license (or active trial).
+
+    Allows access if:
+    - User has a valid (non-expired) license with starter or pro tier, OR
+    - User is within their 7-day trial period
+    """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
+        if has_pro_access():
+            return func(*args, **kwargs)
         tier = get_license_tier()
-        if tier != "pro":
-            return (
-                f"This tool requires a ContextPulse Pro license. "
-                f"Current tier: {'free' if not tier else tier}. "
-                f"Upgrade at https://contextpulse.ai/pricing"
-            )
-        return func(*args, **kwargs)
+        return (
+            f"This tool requires a ContextPulse Pro license. "
+            f"Current tier: {'free' if not tier else tier}. "
+            f"Upgrade at https://contextpulse.ai/pricing"
+        )
     return wrapper
 
 
