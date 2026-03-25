@@ -9,6 +9,14 @@
 
 ---
 
+### [2026-03-25] Landing page factual accuracy requires cross-referencing PROJECT_CONTEXT
+**Context:** AI agent built the landing page with "23 tools" and "726 tests" — both wrong. Actual: 21 tools (10 sight + 5 project + 3 voice + 3 touch), 294 tests. Also used wrong GitHub org URL.
+**Lesson:** When generating marketing content from project context, cross-reference specific numbers against the actual codebase or PROJECT_CONTEXT.md. Don't let the agent estimate — verify tool counts from pyproject.toml, test counts from pytest, and URLs from git remote.
+
+### [2026-03-25] Waitlist forms need a real backend before launch — localStorage is a placeholder
+**Context:** Added a waitlist email form to the Pro pricing card but it only saves to localStorage. This captures zero leads if the user clears their browser.
+**Lesson:** Before deploying any landing page with an email capture, wire it to a real backend (Cloudflare Workers KV, DynamoDB, or a form service like Formspree). localStorage is for dev only.
+
 ### [2026-03-22] Keyword routing needs stop words and raw-count scoring
 **Context:** First version of contextpulse-project used sqrt-normalized scoring. Projects with tiny keyword sets (StockTrader: 8 keywords) dominated everything because any single generic match scored disproportionately high. Also, overview text extraction pulled in English stop words ("with", "your", "have") that caused false matches.
 **Lesson:** (1) Use raw match count as primary sort, proportion as tiebreaker — not sqrt normalization. (2) Always filter stop words from keyword extraction. (3) Test routing against the real portfolio, not just unit test fixtures.
