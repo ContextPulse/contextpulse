@@ -28,6 +28,10 @@ APPDATA_DIR = Path(os.environ.get("APPDATA", "")) / "ContextPulse"
 CONFIG_FILE = APPDATA_DIR / "config.json"
 CONTEXTPULSE_HOME = Path(env("CONTEXTPULSE_HOME", str(Path.home() / ".contextpulse")))
 
+# ── Data paths (shared across all packages) ──────────────────────────
+OUTPUT_DIR = Path(env("CONTEXTPULSE_OUTPUT_DIR", str(Path.home() / "screenshots")))
+ACTIVITY_DB_PATH = OUTPUT_DIR / env("CONTEXTPULSE_ACTIVITY_DB", "activity.db")
+
 # ── Defaults ─────────────────────────────────────────────────────────
 # These define every configurable setting and its default value.
 # config.json stores user overrides; env vars override everything.
@@ -36,7 +40,7 @@ _DEFAULTS: dict = {
     "output_dir": str(Path.home() / "screenshots"),
     "auto_interval": 5,           # seconds (0 = disabled)
     "buffer_max_age": 1800,       # seconds (30 min)
-    "change_threshold": 1.5,      # % pixel difference for dedup
+    "change_threshold": 0.5,      # % pixel difference for dedup
     "max_width": 1280,
     "max_height": 720,
     "jpeg_quality": 75,
