@@ -11,13 +11,13 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-from contextpulse_core.config import APPDATA_DIR
+from contextpulse_core.config import ACTIVITY_DB_PATH
 
 logger = logging.getLogger(__name__)
 
 mcp_app = FastMCP("ContextPulse Touch")
 
-_DB_PATH = APPDATA_DIR / "activity.db"
+_DB_PATH = ACTIVITY_DB_PATH
 
 
 def _get_db() -> sqlite3.Connection | None:

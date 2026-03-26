@@ -17,7 +17,7 @@ class TestConfigDefaults:
         assert JPEG_QUALITY == 75
         assert AUTO_INTERVAL == 5
         assert BUFFER_MAX_AGE == 1800
-        assert CHANGE_THRESHOLD == 1.5
+        assert CHANGE_THRESHOLD == 0.5
 
     def test_output_dir_is_path(self):
         from contextpulse_sight.config import OUTPUT_DIR
