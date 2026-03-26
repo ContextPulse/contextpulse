@@ -9,9 +9,7 @@
 
 ---
 
-### [2026-03-25] Landing page factual accuracy requires cross-referencing PROJECT_CONTEXT
-**Context:** AI agent built the landing page with "23 tools" and "726 tests" — both wrong. Actual: 21 tools (10 sight + 5 project + 3 voice + 3 touch), 294 tests. Also used wrong GitHub org URL.
-**Lesson:** When generating marketing content from project context, cross-reference specific numbers against the actual codebase or PROJECT_CONTEXT.md. Don't let the agent estimate — verify tool counts from pyproject.toml, test counts from pytest, and URLs from git remote.
+<!-- Archived 2026-03-26: Duplicate of GLOBAL_LESSONS_LEARNED.md "[2026-03-25] AI-generated marketing numbers need human verification" (same lesson, same incident) -->
 
 ### [2026-03-25] Waitlist forms need a real backend before launch — localStorage is a placeholder
 **Context:** Added a waitlist email form to the Pro pricing card but it only saves to localStorage. This captures zero leads if the user clears their browser.
