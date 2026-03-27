@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 Jerard Ventures LLC
+
 """ContextPulse Daemon — unified launcher for all modality modules.
 
 Single process, single tray icon. Starts:
