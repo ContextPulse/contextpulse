@@ -26,6 +26,7 @@ LICENSE_FILE = APPDATA_DIR / "license.key"
 TRIAL_FILE = APPDATA_DIR / "trial.json"
 
 TRIAL_DAYS = 7
+EXPIRY_GRACE_DAYS = 3  # Grace period after license expiration before hard block
 
 
 def _get_public_key():
@@ -68,24 +69,37 @@ def verify_key(license_key: str) -> dict | None:
 
 
 def is_licensed() -> bool:
-    """Check if a valid, non-expired license key is stored."""
+    """Check if a valid license key is stored (includes grace period after expiry)."""
     payload = load_license()
     if payload is None:
         return False
-    # Check expiration if present
-    if "exp" in payload and payload["exp"] < time.time():
-        return False
+    # Check expiration with grace period
+    if "exp" in payload:
+        grace_deadline = payload["exp"] + (EXPIRY_GRACE_DAYS * 86400)
+        if grace_deadline < time.time():
+            return False
     return True
 
 
 def is_expired() -> bool:
-    """Check if the stored license exists but has expired."""
+    """Check if the stored license exists but has expired (past the nominal expiry date)."""
     payload = load_license()
     if payload is None:
         return False
     if "exp" not in payload:
         return False  # no expiration = perpetual
     return payload["exp"] < time.time()
+
+
+def is_in_grace_period() -> bool:
+    """Check if the license is expired but still within the grace period."""
+    payload = load_license()
+    if payload is None:
+        return False
+    if "exp" not in payload:
+        return False
+    now = time.time()
+    return payload["exp"] < now <= payload["exp"] + (EXPIRY_GRACE_DAYS * 86400)
 
 
 def get_license_tier() -> str:
@@ -128,24 +142,72 @@ def get_license_email() -> str | None:
 
 # ── Trial system ─────────────────────────────────────────────────────
 
+
+def _trial_hmac_key() -> bytes:
+    """Derive a machine-specific key for trial HMAC.
+
+    Uses a combination of the public key hex and a stable machine identifier
+    to prevent simple copy-paste of trial files between machines.
+    """
+    import hashlib
+    import uuid
+
+    # Use the public key as a salt combined with a machine-specific value.
+    # getnode() returns the MAC address as a 48-bit int — stable across reboots.
+    machine_id = str(uuid.getnode())
+    return hashlib.sha256(
+        (_PUBLIC_KEY_HEX + ":" + machine_id).encode()
+    ).digest()
+
+
+def _compute_trial_hmac(data: dict) -> str:
+    """Compute HMAC-SHA256 over the trial start timestamp."""
+    import hashlib
+    import hmac
+
+    key = _trial_hmac_key()
+    msg = str(data["start"]).encode()
+    return hmac.new(key, msg, hashlib.sha256).hexdigest()
+
+
 def _read_trial() -> dict | None:
-    """Read the trial start timestamp file."""
+    """Read and verify the trial start timestamp file.
+
+    Returns None if the file is missing, corrupt, or has been tampered with
+    (HMAC mismatch). A tampered trial file is treated as expired to prevent
+    trial extension attacks.
+    """
     if not TRIAL_FILE.exists():
         return None
     try:
-        return json.loads(TRIAL_FILE.read_text(encoding="utf-8"))
+        data = json.loads(TRIAL_FILE.read_text(encoding="utf-8"))
+        if "start" not in data:
+            return None
+        # Verify HMAC if present; if missing (legacy file), re-sign it
+        stored_hmac = data.get("hmac")
+        expected_hmac = _compute_trial_hmac(data)
+        if stored_hmac is None:
+            # Legacy trial file without HMAC — migrate by adding HMAC
+            data["hmac"] = expected_hmac
+            _write_trial(data)
+            return data
+        if stored_hmac != expected_hmac:
+            logger.warning("Trial file HMAC mismatch — treating as expired")
+            return {"start": 0}  # epoch = maximally expired
+        return data
     except Exception:
         return None
 
 
 def _write_trial(data: dict) -> None:
-    """Write trial data to disk."""
+    """Write trial data to disk with HMAC tamper protection."""
     APPDATA_DIR.mkdir(parents=True, exist_ok=True)
+    data["hmac"] = _compute_trial_hmac(data)
     TRIAL_FILE.write_text(json.dumps(data), encoding="utf-8")
 
 
 def get_trial_days_remaining() -> int:
-    """Return days remaining in Memory trial. Starts trial on first call."""
+    """Return days remaining in Pro trial. Starts trial on first call."""
     data = _read_trial()
     if data is None:
         data = {"start": int(time.time())}
@@ -185,9 +247,11 @@ def get_licensed_features() -> list[str]:
     if payload is None:
         return []
 
-    # Check expiration
-    if "exp" in payload and payload["exp"] < time.time():
-        return []
+    # Check expiration (with grace period)
+    if "exp" in payload:
+        grace_deadline = payload["exp"] + (EXPIRY_GRACE_DAYS * 86400)
+        if grace_deadline < time.time():
+            return []
 
     # Prefer explicit feature list from newer license keys
     features = payload.get("features")

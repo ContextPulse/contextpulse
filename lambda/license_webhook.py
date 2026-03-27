@@ -206,7 +206,9 @@ ContextPulse -- Always-on context for AI agents | https://contextpulse.ai
 
 # -- DynamoDB storage ---------------------------------------------------------
 
-def _store_license(email: str, tier: str, license_key: str, price_dollars: float) -> None:
+def _store_license(
+    email: str, tier: str, license_key: str, price_dollars: float, sale_id: str,
+) -> None:
     """Store the license record in DynamoDB for lookup and audit."""
     now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     exp_iso = time.strftime(
@@ -216,6 +218,7 @@ def _store_license(email: str, tier: str, license_key: str, price_dollars: float
 
     licenses_table.put_item(Item={
         "email": email,
+        "sale_id": sale_id,
         "tier": tier,
         "features": TIER_FEATURES.get(tier, []),
         "license_key_hash": hashlib.sha256(license_key.encode()).hexdigest(),
@@ -225,8 +228,8 @@ def _store_license(email: str, tier: str, license_key: str, price_dollars: float
         "status": "active",
     })
     logger.info(
-        "License stored for %s: tier=%s, $%.2f, expires=%s",
-        email, tier, price_dollars, exp_iso,
+        "License stored for %s: tier=%s, $%.2f, expires=%s, sale_id=%s",
+        email, tier, price_dollars, exp_iso, sale_id,
     )
 
 
@@ -296,6 +299,21 @@ def lambda_handler(event, context):
             logger.exception("Failed to revoke license for %s", email)
         return {"statusCode": 200, "body": "Refund acknowledged"}
 
+    # Extract sale_id for idempotency
+    sale_id = params.get("sale_id", [None])[0]
+    if not sale_id:
+        logger.error("No sale_id in webhook payload")
+        return {"statusCode": 400, "body": "Missing sale_id"}
+
+    # Idempotency check: skip if this sale was already processed
+    try:
+        existing = licenses_table.get_item(Key={"email": email})
+        if "Item" in existing and existing["Item"].get("sale_id") == sale_id:
+            logger.info("Duplicate webhook for sale_id=%s email=%s -- skipping", sale_id, email)
+            return {"statusCode": 200, "body": "Already processed"}
+    except Exception:
+        logger.debug("Idempotency check failed (table may not exist yet)", exc_info=True)
+
     # Extract price
     price_cents = params.get("price", [None])[0]
     price_dollars = int(price_cents) / 100 if price_cents else 0
@@ -303,20 +321,32 @@ def lambda_handler(event, context):
     # Detect tier
     tier = _detect_tier(params)
 
+    # Generate license key
     try:
-        # Generate license key
         license_key = _generate_license_key(email, tier)
         logger.info("Generated license key for %s (tier=%s)", email, tier)
+    except Exception:
+        logger.exception("Failed to generate license key for %s", email)
+        return {"statusCode": 500, "body": "Key generation failed"}
 
-        # Store in DynamoDB
-        _store_license(email, tier, license_key, price_dollars)
+    # Store in DynamoDB
+    try:
+        _store_license(email, tier, license_key, price_dollars, sale_id)
+    except Exception:
+        logger.exception("Failed to store license in DynamoDB for %s", email)
+        return {"statusCode": 500, "body": "Storage failed"}
 
-        # Email to buyer
+    # Email to buyer (non-fatal: license is stored, customer can request re-send)
+    try:
         _send_license_email(email, license_key, tier)
         logger.info("License email sent to %s", email)
-
-        return {"statusCode": 200, "body": "OK"}
-
     except Exception:
-        logger.exception("Failed to process webhook for %s", email)
-        return {"statusCode": 500, "body": "Internal error"}
+        logger.exception(
+            "License stored but email delivery failed for %s (sale_id=%s). "
+            "Manual re-send required.",
+            email, sale_id,
+        )
+        # Return 200 -- license IS created, email is a delivery concern
+        return {"statusCode": 200, "body": "License created, email delivery failed"}
+
+    return {"statusCode": 200, "body": "OK"}
