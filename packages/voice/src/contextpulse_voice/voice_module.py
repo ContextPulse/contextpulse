@@ -83,6 +83,7 @@ class VoiceModule(ModalityModule):
         self._fixing = False
         self._pressed_keys: set = set()
         self._last_wav_bytes: bytes | None = None
+        self._last_stop_time: float = 0.0  # debounce: prevent double stop-recording
 
         # Config
         cfg = get_voice_config()
@@ -288,6 +289,19 @@ class VoiceModule(ModalityModule):
             self._fixing = False
 
         if self._recording and not self._hotkey_keys.issubset(self._pressed_keys):
+            # Debounce: on Windows, multiple pynput keyboard hooks (Voice,
+            # Touch, Sight) can cause duplicate release events for the same
+            # physical key release.  Guard against firing twice within 1s.
+            now = time.time()
+            if now - self._last_stop_time < 1.0:
+                logger.warning(
+                    "Duplicate stop-recording within %.2fs — ignoring",
+                    now - self._last_stop_time,
+                )
+                self._recording = False
+                return
+            self._last_stop_time = now
+
             self._recording = False
             wav_bytes = self._recorder.stop()
             if self._overlay:
@@ -319,6 +333,16 @@ class VoiceModule(ModalityModule):
     ) -> None:
         """Run full pipeline: transcribe → cleanup → vocabulary → paste → emit."""
         try:
+            # Guard: skip if this exact audio was already transcribed (duplicate
+            # thread spawn from keyboard hook re-delivery on Windows).
+            audio_hash = hashlib.sha256(wav_bytes).hexdigest()[:16]
+            if audio_hash == getattr(self, "_last_audio_hash", None):
+                logger.warning(
+                    "Duplicate audio hash %s — skipping transcription", audio_hash
+                )
+                return
+            self._last_audio_hash = audio_hash
+
             raw_text = self._transcriber.transcribe(wav_bytes)
             if not raw_text or len(raw_text.strip()) < 2:
                 logger.warning("Empty or too-short transcription — skipping")
