@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install core package and test deps
+        run: |
+          pip install -e packages/core[dev]
+          pip install -e packages/memory[dev]
+          pip install -e packages/project[dev]
+          pip install pytest ruff
+
+      - name: Lint with ruff
+        run: |
+          ruff check packages/core/src packages/memory/src packages/project/src
+
+      - name: Run tests (cross-platform packages)
+        run: |
+          pytest packages/core/tests packages/memory/tests packages/project/tests -v --tb=short
