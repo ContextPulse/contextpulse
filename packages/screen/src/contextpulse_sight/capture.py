@@ -90,14 +90,25 @@ def capture_all_monitors() -> list[tuple[int, Image.Image]]:
     """Capture each monitor individually, downscaled.
 
     Returns list of (monitor_index, image) pairs.
+    Handles MemoryError per-monitor so a single large monitor doesn't
+    prevent capturing the others.
     """
     with mss.mss() as sct:
         physical = sct.monitors[1:]
         results = []
         for i, mon in enumerate(physical):
-            sct_img = sct.grab(mon)
-            img = _downscale(mss_to_pil(sct_img))
-            results.append((i, img))
+            try:
+                sct_img = sct.grab(mon)
+                img = _downscale(mss_to_pil(sct_img))
+                results.append((i, img))
+            except MemoryError:
+                logger.error(
+                    "MemoryError capturing monitor %d (%dx%d) — skipping",
+                    i, mon.get("width", 0), mon.get("height", 0),
+                )
+                # Free whatever partial allocation happened
+                import gc
+                gc.collect()
     return results
 
 
