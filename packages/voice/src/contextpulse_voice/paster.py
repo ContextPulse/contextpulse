@@ -45,6 +45,16 @@ def paste_text(text: str) -> tuple[float, str]:
 
         text_hash = hashlib.sha256(text.encode()).hexdigest()[:16]
 
+        # Content dedup: reject pasting the exact same text twice in a row.
+        # Protects against duplicate transcribe threads pasting the same
+        # result even when they finish more than 1s apart.
+        if text_hash == _last_paste_hash and now - _last_paste_time < 10.0:
+            logger.warning(
+                "Duplicate paste content (hash=%s, %.1fs ago) — skipping",
+                text_hash, now - _last_paste_time,
+            )
+            return (0.0, "")
+
         pyperclip.copy("")
         time.sleep(0.05)
 
