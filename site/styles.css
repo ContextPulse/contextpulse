@@ -147,15 +147,6 @@ pre {
   color: var(--text);
 }
 
-.nav-github {
-  display: flex;
-  align-items: center;
-  color: var(--text-secondary) !important;
-}
-
-.nav-github:hover {
-  color: var(--text) !important;
-}
 
 .nav-mobile-toggle {
   display: none;
