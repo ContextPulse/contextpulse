@@ -5,21 +5,22 @@
 <h1 align="center">ContextPulse</h1>
 
 <p align="center">
-  <strong>Always-on context for AI agents.</strong><br>
-  Give your AI assistants eyes, ears, and memory — locally, privately, via MCP.
+  <strong>Local-first ambient context for AI agents.</strong><br>
+  Screen capture, voice dictation, clipboard, keyboard/mouse activity — all local, all private.
 </p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue.svg" alt="AGPL-3.0" /></a>
-  <img src="https://img.shields.io/badge/python-3.14+-3776AB.svg" alt="Python 3.14+" />
+  <img src="https://img.shields.io/badge/python-3.11+-3776AB.svg" alt="Python 3.11+" />
   <img src="https://img.shields.io/badge/platform-Windows-0078D6.svg" alt="Windows" />
   <img src="https://img.shields.io/badge/MCP-native-orange.svg" alt="MCP Native" />
-  <img src="https://img.shields.io/badge/tests-798-brightgreen.svg" alt="798 tests" />
 </p>
 
 ---
 
 ContextPulse is a desktop daemon that captures your screen, voice, and keyboard/mouse activity in real time, then delivers it to AI agents through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). One process, one tray icon, 23 MCP tools, zero cloud dependency.
+
+Everything stays local. No cloud. No telemetry. Your data never leaves your machine.
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -59,9 +60,7 @@ AI coding assistants are powerful but blind. They can't see your screen, hear yo
 - **Activity patterns** — typing speed, app switching, focus time. Your AI understands your work rhythm.
 - **Cross-modal search** — "what was I looking at when I said that?" queries across all modalities *(Pro)*
 
-Everything stays local. No cloud. No telemetry. Your data never leaves your machine.
-
-## Quick Start
+## Installation
 
 ```bash
 pip install contextpulse-core contextpulse-sight contextpulse-voice contextpulse-touch
@@ -146,19 +145,11 @@ That's it. Your AI agent now has 23 tools for reading your screen, voice, and ac
 | `search_all_events` | Cross-modal full-text search across screen, voice, clipboard, keys |
 | `get_event_timeline` | Temporal view of all events across all modalities |
 
-## Pro Tier
-
-ContextPulse is free and open-source. The Pro tier adds cross-modal intelligence for power users:
-
-- **Cross-modal search** — "find when I was looking at that error while dictating notes"
-- **Event timeline** — unified view of everything that happened across all input channels
-- 7-day free trial included
-
-[Get ContextPulse Pro &rarr;](https://contextpulse.ai)
+**Free:** 21 tools across Sight, Voice, Touch, and Project. **Pro:** 2 cross-modal tools (`search_all_events`, `get_event_timeline`) that query across all modalities at once.
 
 ## Architecture
 
-ContextPulse is a monorepo with 7 packages:
+ContextPulse is a monorepo with modular packages:
 
 | Package | Purpose |
 |---------|---------|
@@ -167,19 +158,23 @@ ContextPulse is a monorepo with 7 packages:
 | `contextpulse-voice` | Hold-to-dictate, Whisper transcription, vocabulary |
 | `contextpulse-touch` | Keyboard/mouse activity capture, correction detection |
 | `contextpulse-project` | Project detection and journal routing |
-| `contextpulse-memory` | Cross-session context persistence *(planned)* |
-| `contextpulse-agent` | Agent coordination *(planned)* |
 
 All modules emit events to a shared **EventBus** (the "spine"), which writes to a local SQLite database with FTS5 full-text search. MCP servers are read-only processes that query this database.
+
+## Performance
+
+- **CPU:** ~0.5% average (spikes briefly during OCR/capture)
+- **RAM:** ~15 MB resident
+- **Disk:** SQLite DB grows ~50 MB/day with default settings
 
 ## Development
 
 ```bash
-git clone https://github.com/junkyard-rules/contextpulse.git
+git clone <repo-url>
 cd contextpulse
-python -m venv .venv
+uv venv
 .venv\Scripts\activate
-pip install -e packages/core -e packages/screen -e packages/voice -e packages/touch -e packages/project
+uv pip install -e "packages/core[dev]" -e packages/screen -e packages/voice -e packages/touch -e packages/project
 pytest tests/ -x -q
 ```
 
@@ -189,10 +184,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ContextPulse is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0).
 
-**What this means:**
 - You can use, modify, and distribute ContextPulse freely
 - If you modify and deploy it as a service, you must open-source your changes
-- Commercial licensing is available for embedding in proprietary products
+- Commercial licensing available for embedding in proprietary products
 
 For commercial licensing inquiries: david@jerardventures.com
 
