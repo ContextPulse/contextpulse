@@ -6,9 +6,10 @@ from pathlib import Path
 
 block_cipher = None
 
-# Paths
-VENV_SP = Path(r"C:\Users\david\projects\ContextPulse\.venv\Lib\site-packages")
-PACKAGES = Path(r"C:\Users\david\projects\ContextPulse\packages")
+# Paths — resolved dynamically so spec works on any machine
+_spec_dir = Path(SPECPATH)
+VENV_SP = _spec_dir / ".venv" / "Lib" / "site-packages"
+PACKAGES = _spec_dir / "packages"
 
 # Native binaries that PyInstaller can't auto-detect
 binaries = []
@@ -57,7 +58,7 @@ if _rocr.exists():
         datas.append((str(onnx), str(rel.parent)))
 
 # Brand colors (if present)
-_brand = Path(r"C:\Users\david\projects\ContextPulse\brand")
+_brand = _spec_dir / "brand"
 if (_brand / "colors.json").exists():
     datas.append((str(_brand / "colors.json"), "brand"))
 
