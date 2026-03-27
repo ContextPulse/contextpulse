@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 Jerard Ventures LLC
+
 """VoiceModule — ModalityModule implementation for voice capture and transcription.
 
 Wraps the recorder, transcriber, cleanup, vocabulary, and paster pipeline

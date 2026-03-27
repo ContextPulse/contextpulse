@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 Jerard Ventures LLC
+
 """TouchModule — ModalityModule for keyboard and mouse input capture.
 
 Emits events with both Modality.KEYS (keyboard) and Modality.FLOW (mouse).
