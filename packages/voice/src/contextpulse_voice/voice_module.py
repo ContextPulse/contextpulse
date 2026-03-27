@@ -137,7 +137,17 @@ class VoiceModule(ModalityModule):
         logger.info("VoiceModule stopped")
 
     def is_alive(self) -> bool:
-        return self._running
+        if not self._running:
+            return False
+        # Check actual listener thread liveness — the _running flag can stay
+        # True even after the pynput listener thread dies from an unhandled
+        # exception (e.g. PortAudioError when audio device disappears).
+        if self._listener is not None and not self._listener.is_alive():
+            logger.warning("Voice keyboard listener thread died — marking as not alive")
+            self._running = False
+            self._error = "Keyboard listener thread died unexpectedly"
+            return False
+        return True
 
     def get_status(self) -> dict[str, Any]:
         return {
@@ -210,6 +220,15 @@ class VoiceModule(ModalityModule):
     # ── Hotkey Handling ──────────────────────────────────────────────
 
     def _on_press(self, key: kb.Key | kb.KeyCode | None) -> None:
+        try:
+            self._on_press_inner(key)
+        except Exception:
+            # Catch ALL exceptions to prevent pynput listener thread from dying.
+            # Common culprits: PortAudioError when audio device disconnects,
+            # OSError on transient system issues. Log and continue.
+            logger.exception("Error in voice _on_press handler (swallowed to keep listener alive)")
+
+    def _on_press_inner(self, key: kb.Key | kb.KeyCode | None) -> None:
         self._pressed_keys.add(key)
         if key in (kb.Key.ctrl_l, kb.Key.ctrl_r):
             self._pressed_keys.add(kb.Key.ctrl_l)
@@ -248,6 +267,12 @@ class VoiceModule(ModalityModule):
             logger.info("Recording...")
 
     def _on_release(self, key: kb.Key | kb.KeyCode | None) -> None:
+        try:
+            self._on_release_inner(key)
+        except Exception:
+            logger.exception("Error in voice _on_release handler (swallowed to keep listener alive)")
+
+    def _on_release_inner(self, key: kb.Key | kb.KeyCode | None) -> None:
         self._pressed_keys.discard(key)
         if key in (kb.Key.ctrl_l, kb.Key.ctrl_r):
             self._pressed_keys.discard(kb.Key.ctrl_l)

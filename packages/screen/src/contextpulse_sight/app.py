@@ -195,37 +195,65 @@ class ContextPulseSightApp:
         logger.info("Auto-capture started (interval=%ds)", AUTO_INTERVAL)
         consecutive_errors = 0
         last_capture_time = 0.0
+        _last_paused_log = 0.0  # debounce "paused" log messages
         while not self.stop_event.is_set():
-            if not self._should_skip("auto-capture"):
+            if self._should_skip_quiet():
+                # When paused/blocked, sleep longer to avoid log spam and CPU waste.
+                # Log at most once per 60 seconds instead of every second.
                 now = time.time()
-                event_fired = self._event_detector.has_pending_event()
-                timer_expired = (now - last_capture_time) >= AUTO_INTERVAL
+                if now - _last_paused_log >= 60:
+                    logger.info("Auto-capture paused (will check every 5s)")
+                    _last_paused_log = now
+                self.stop_event.wait(5)
+                continue
+            now = time.time()
+            event_fired = self._event_detector.has_pending_event()
+            timer_expired = (now - last_capture_time) >= AUTO_INTERVAL
 
-                if event_fired or timer_expired:
-                    try:
-                        if event_fired:
-                            reason = self._event_detector.get_pending_reason()
-                            logger.debug("Event-driven capture: %s", reason)
-                            self._event_detector.clear_pending()
+            if event_fired or timer_expired:
+                try:
+                    if event_fired:
+                        reason = self._event_detector.get_pending_reason()
+                        logger.debug("Event-driven capture: %s", reason)
+                        self._event_detector.clear_pending()
 
-                        self._do_auto_capture()
-                        last_capture_time = time.time()
-                        consecutive_errors = 0
-                    except Exception:
-                        consecutive_errors += 1
-                        logger.exception(
-                            "Auto-capture failed (%d consecutive)", consecutive_errors
+                    self._do_auto_capture()
+                    last_capture_time = time.time()
+                    consecutive_errors = 0
+                except MemoryError:
+                    consecutive_errors += 1
+                    logger.error(
+                        "MemoryError during capture (%d consecutive) — forcing GC",
+                        consecutive_errors,
+                    )
+                    import gc
+                    gc.collect()
+                    # Back off significantly on memory pressure
+                    self.stop_event.wait(min(60, 10 * consecutive_errors))
+                    continue
+                except Exception:
+                    consecutive_errors += 1
+                    logger.exception(
+                        "Auto-capture failed (%d consecutive)", consecutive_errors
+                    )
+                    if consecutive_errors >= 5:
+                        backoff = min(30, AUTO_INTERVAL * consecutive_errors)
+                        logger.warning(
+                            "Too many capture errors, backing off %ds", backoff
                         )
-                        if consecutive_errors >= 5:
-                            backoff = min(30, AUTO_INTERVAL * consecutive_errors)
-                            logger.warning(
-                                "Too many capture errors, backing off %ds", backoff
-                            )
-                            self.stop_event.wait(backoff)
-                            continue
+                        self.stop_event.wait(backoff)
+                        continue
             # Check more frequently than AUTO_INTERVAL to catch events promptly
             self.stop_event.wait(1)
         logger.info("Auto-capture stopped")
+
+    def _should_skip_quiet(self) -> bool:
+        """Like _should_skip but without logging — for use in tight loops."""
+        if self.paused:
+            return True
+        if is_blocked():
+            return True
+        return False
 
     # -- Watchdog ----------------------------------------------------------
 
