@@ -236,14 +236,51 @@ class ContextPulseDaemon:
 
         Sight has its own internal watchdog. This covers Voice and Touch.
         Max 3 restarts per module before giving up.
+
+        Also writes a heartbeat file so external monitors (MCP tools,
+        health checks) can detect if the daemon is alive without needing
+        to probe the process directly.
+
+        Additionally monitors for "stuck paused" state: if Sight has been
+        paused for longer than expected (e.g. session monitor died and
+        never delivered the unlock event), it forces an un-pause.
         """
         MAX_RESTARTS = 3
-        logger.info("Daemon watchdog started (monitoring Voice + Touch)")
+        STUCK_PAUSE_THRESHOLD = 3600  # 1 hour — if paused this long, likely stuck
+        heartbeat_path = OUTPUT_DIR / "heartbeat"
+        logger.info("Daemon watchdog started (monitoring Voice + Touch + heartbeat + stuck-pause)")
 
         while not self.stop_event.is_set():
             self.stop_event.wait(15)  # check every 15 seconds
             if self.stop_event.is_set():
                 break
+
+            # Write heartbeat file (timestamp) for external health checks
+            try:
+                heartbeat_path.write_text(str(time.time()), encoding="utf-8")
+            except Exception:
+                pass  # best-effort
+
+            # Stuck-pause detection: if Sight has been paused but the user
+            # didn't manually pause, the session monitor may have died.
+            # After STUCK_PAUSE_THRESHOLD seconds, force un-pause.
+            if self._sight_app and self._sight_app.paused and not self._sight_app._user_paused:
+                if not hasattr(self, "_pause_detected_at"):
+                    self._pause_detected_at = time.time()
+                elif time.time() - self._pause_detected_at > STUCK_PAUSE_THRESHOLD:
+                    logger.warning(
+                        "Sight has been auto-paused for >%ds without unlock — "
+                        "forcing un-pause (session monitor may have died)",
+                        STUCK_PAUSE_THRESHOLD,
+                    )
+                    self._sight_app.paused = False
+                    self._pause_detected_at = None
+                    self._notify_tray(
+                        "Auto-resumed capture",
+                        "Screen capture was stuck paused. Resumed automatically."
+                    )
+            else:
+                self._pause_detected_at = None  # type: ignore[attr-defined]
 
             # Voice watchdog
             if self._voice_module and not self._voice_module.is_alive():
@@ -483,6 +520,19 @@ def main():
         logger.info("ContextPulse daemon starting (pid=%d)", os.getpid())
         daemon = ContextPulseDaemon()
         daemon.run()
+    except MemoryError:
+        logger.error("Fatal MemoryError — forcing GC and writing crash log")
+        import gc
+        gc.collect()
+        try:
+            with open(CRASH_LOG, "a", encoding="utf-8") as f:
+                f.write(f"\n{'='*60}\n")
+                f.write(f"FATAL MemoryError: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(traceback.format_exc())
+                f.write(f"\n{'='*60}\n")
+        except Exception:
+            pass
+        raise
     except Exception:
         logger.exception("Fatal error — daemon crashed")
         # Write crash to separate file for easy discovery
