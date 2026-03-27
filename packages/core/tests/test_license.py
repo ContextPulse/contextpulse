@@ -10,10 +10,12 @@ import pytest
 
 from contextpulse_core.license import (
     APPDATA_DIR,
+    EXPIRY_GRACE_DAYS,
     LICENSE_FILE,
     PRO_FEATURES,
     TRIAL_FILE,
     _PUBLIC_KEY_HEX,
+    _write_trial,
     get_license_email,
     get_license_tier,
     get_licensed_features,
@@ -22,6 +24,7 @@ from contextpulse_core.license import (
     has_memory_access,
     has_pro_access,
     is_expired,
+    is_in_grace_period,
     is_licensed,
     is_trial_expired,
     load_license,
@@ -141,9 +144,17 @@ class TestLicenseStatus:
     def test_is_licensed_false_when_no_key(self, isolated_license):
         assert is_licensed() is False
 
-    def test_is_licensed_false_when_expired(self, isolated_license):
-        # Expired 1 hour ago
+    def test_is_licensed_true_during_grace_period(self, isolated_license):
+        # Expired 1 hour ago, but within 3-day grace period
         key = _generate_test_key(exp=int(time.time()) - 3600)
+        save_license(key)
+        assert is_licensed() is True
+        assert is_expired() is True
+        assert is_in_grace_period() is True
+
+    def test_is_licensed_false_past_grace_period(self, isolated_license):
+        # Expired 4 days ago (past the 3-day grace period)
+        key = _generate_test_key(exp=int(time.time()) - 4 * 86400)
         save_license(key)
         assert is_licensed() is False
 
@@ -181,12 +192,23 @@ class TestTrial:
     def test_trial_expired_after_time(self, isolated_license, monkeypatch):
         import contextpulse_core.license as lic_mod
 
-        # Write trial start 8 days ago
-        appdata = isolated_license
-        appdata.mkdir(parents=True, exist_ok=True)
-        trial_data = {"start": int(time.time()) - 8 * 86400}
-        (appdata / "trial.json").write_text(json.dumps(trial_data))
+        # Write trial start 8 days ago (using _write_trial for HMAC)
+        _write_trial({"start": int(time.time()) - 8 * 86400})
 
+        assert is_trial_expired() is True
+        assert get_trial_days_remaining() == 0
+
+    def test_trial_tampered_file_treated_as_expired(self, isolated_license):
+        """Manually editing trial.json to reset start time is detected as tampering."""
+        # Start a valid trial
+        get_trial_days_remaining()
+
+        # Tamper: rewrite the file with a fresh start but wrong HMAC
+        appdata = isolated_license
+        tampered = {"start": int(time.time()), "hmac": "deadbeef" * 8}
+        (appdata / "trial.json").write_text(json.dumps(tampered))
+
+        # Should be treated as expired (start=0 → maximally expired)
         assert is_trial_expired() is True
         assert get_trial_days_remaining() == 0
 
@@ -203,10 +225,7 @@ class TestMemoryAccess:
         assert has_memory_access() is True  # trial starts fresh
 
     def test_no_access_after_trial_expired(self, isolated_license):
-        appdata = isolated_license
-        appdata.mkdir(parents=True, exist_ok=True)
-        trial_data = {"start": int(time.time()) - 8 * 86400}
-        (appdata / "trial.json").write_text(json.dumps(trial_data))
+        _write_trial({"start": int(time.time()) - 8 * 86400})
         assert has_memory_access() is False
 
 
@@ -227,19 +246,15 @@ class TestProAccess:
         assert has_pro_access() is True  # trial starts fresh
 
     def test_no_pro_access_after_trial_expired(self, isolated_license):
-        appdata = isolated_license
-        appdata.mkdir(parents=True, exist_ok=True)
-        trial_data = {"start": int(time.time()) - 8 * 86400}
-        (appdata / "trial.json").write_text(json.dumps(trial_data))
+        _write_trial({"start": int(time.time()) - 8 * 86400})
         assert has_pro_access() is False
 
     def test_no_pro_access_with_expired_license(self, isolated_license):
-        key = _generate_test_key(tier="pro", exp=int(time.time()) - 3600)
+        # Expired 4 days ago (past 3-day grace period)
+        key = _generate_test_key(tier="pro", exp=int(time.time()) - 4 * 86400)
         save_license(key)
         # Also expire the trial
-        appdata = isolated_license
-        trial_data = {"start": int(time.time()) - 8 * 86400}
-        (appdata / "trial.json").write_text(json.dumps(trial_data))
+        _write_trial({"start": int(time.time()) - 8 * 86400})
         assert has_pro_access() is False
 
 
@@ -257,10 +272,7 @@ class TestFeatureAccess:
         assert has_feature("get_event_timeline") is True
 
     def test_no_feature_after_trial_expired(self, isolated_license):
-        appdata = isolated_license
-        appdata.mkdir(parents=True, exist_ok=True)
-        trial_data = {"start": int(time.time()) - 8 * 86400}
-        (appdata / "trial.json").write_text(json.dumps(trial_data))
+        _write_trial({"start": int(time.time()) - 8 * 86400})
         assert has_feature("search_all_events") is False
 
     def test_unknown_feature_returns_false(self, isolated_license):
@@ -278,7 +290,15 @@ class TestFeatureAccess:
     def test_get_licensed_features_no_license(self, isolated_license):
         assert get_licensed_features() == []
 
-    def test_get_licensed_features_expired(self, isolated_license):
-        key = _generate_test_key(tier="pro", exp=int(time.time()) - 3600)
+    def test_get_licensed_features_expired_past_grace(self, isolated_license):
+        # Expired 4 days ago (past 3-day grace period)
+        key = _generate_test_key(tier="pro", exp=int(time.time()) - 4 * 86400)
         save_license(key)
         assert get_licensed_features() == []
+
+    def test_get_licensed_features_in_grace_period(self, isolated_license):
+        # Expired 1 hour ago, within grace period -- features still available
+        key = _generate_test_key(tier="pro", exp=int(time.time()) - 3600)
+        save_license(key)
+        features = get_licensed_features()
+        assert "search_all_events" in features
