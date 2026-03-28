@@ -532,6 +532,7 @@ class MemoryStore:
         embedding_bytes: bytes | None = None
         try:
             import numpy as np
+
             from contextpulse_memory.embeddings import get_engine
             engine = get_engine()
             vec = engine.embed(value)

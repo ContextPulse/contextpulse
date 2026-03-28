@@ -154,8 +154,8 @@ class MacPlatformProvider(PlatformProvider):
                 return None
 
             # AXPosition is an AXValue wrapping a CGPoint
-            from Quartz import AXValueGetValue, kAXValueTypeCGPoint
             import Quartz
+            from Quartz import AXValueGetValue, kAXValueTypeCGPoint
 
             point = Quartz.CGPoint()
             if AXValueGetValue(pos_value, kAXValueTypeCGPoint, point):
