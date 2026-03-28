@@ -12,12 +12,9 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 import threading
 import time
 from typing import Any, Callable
-
-from pynput import keyboard as kb
 
 from contextpulse_core.spine import (
     ContextEvent,
@@ -25,6 +22,7 @@ from contextpulse_core.spine import (
     Modality,
     ModalityModule,
 )
+from pynput import keyboard as kb
 
 from contextpulse_voice.cleanup import clean
 from contextpulse_voice.config import get_voice_config, has_api_key

@@ -8,7 +8,6 @@ replace the existing code — it wraps it for dual-write during the transition.
 from __future__ import annotations
 
 import logging
-import time
 from typing import Any, Callable
 
 from contextpulse_core.spine import (

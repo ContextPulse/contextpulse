@@ -5,9 +5,9 @@ from io import BytesIO
 from pathlib import Path
 
 import mss
+from contextpulse_core.platform import get_platform_provider
 from PIL import Image
 
-from contextpulse_core.platform import get_platform_provider
 from contextpulse_sight.config import JPEG_QUALITY, MAX_HEIGHT, MAX_WIDTH
 
 logger = logging.getLogger(__name__)

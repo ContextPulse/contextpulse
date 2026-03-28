@@ -4,7 +4,6 @@ import logging
 import math
 import threading
 import tkinter as tk
-from io import BytesIO
 
 from PIL import Image, ImageDraw, ImageTk
 

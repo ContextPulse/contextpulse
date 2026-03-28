@@ -9,7 +9,6 @@ import sqlite3
 import threading
 import time
 from collections import defaultdict
-from datetime import datetime
 from pathlib import Path
 
 from contextpulse_sight.config import ACTIVITY_DB_PATH, ACTIVITY_MAX_AGE

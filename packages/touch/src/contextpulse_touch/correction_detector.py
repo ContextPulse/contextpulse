@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from contextpulse_voice.config import LEARNED_VOCAB_FILE, VOICE_DATA_DIR
+from contextpulse_voice.config import LEARNED_VOCAB_FILE
 
 from contextpulse_touch.burst_tracker import BurstTracker
 from contextpulse_touch.config import CORRECTION_CONFIDENCE_THRESHOLD

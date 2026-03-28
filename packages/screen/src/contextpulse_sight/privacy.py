@@ -3,6 +3,7 @@
 import logging
 
 from contextpulse_core.platform import get_platform_provider
+
 from contextpulse_sight.config import BLOCKLIST_PATTERNS
 
 logger = logging.getLogger("contextpulse.sight.privacy")

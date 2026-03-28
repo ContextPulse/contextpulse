@@ -1,14 +1,13 @@
 """Input listeners — thin pynput wrappers for keyboard and mouse capture."""
 
 import logging
-import time
 import threading
+import time
 from typing import Any, Callable
 
+from contextpulse_core.platform import get_platform_provider
 from pynput import keyboard as kb
 from pynput import mouse as ms
-
-from contextpulse_core.platform import get_platform_provider
 
 logger = logging.getLogger(__name__)
 

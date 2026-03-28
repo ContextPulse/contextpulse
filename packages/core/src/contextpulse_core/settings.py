@@ -10,7 +10,7 @@ Saves to %APPDATA%/ContextPulse/config.json via config module.
 
 import logging
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import messagebox, ttk
 
 from contextpulse_core import gui_theme
 from contextpulse_core.config import load_config, save_config

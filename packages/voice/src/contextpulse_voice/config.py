@@ -5,7 +5,6 @@ alongside Sight and other package settings. Env vars override everything.
 """
 
 import os
-from pathlib import Path
 
 from contextpulse_core.config import APPDATA_DIR, load_config
 

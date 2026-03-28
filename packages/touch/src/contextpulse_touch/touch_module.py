@@ -13,7 +13,6 @@ for simpler deployment and because correction detection needs both.
 from __future__ import annotations
 
 import logging
-import time
 from typing import Any, Callable
 
 from contextpulse_core.spine import (
@@ -25,7 +24,7 @@ from contextpulse_core.spine import (
 
 from contextpulse_touch.burst_tracker import BurstTracker
 from contextpulse_touch.config import get_touch_config
-from contextpulse_touch.correction_detector import CorrectionDetector, VoiceasyBridge
+from contextpulse_touch.correction_detector import CorrectionDetector
 from contextpulse_touch.listeners import KeyboardListener, MouseListener
 
 logger = logging.getLogger(__name__)

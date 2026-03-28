@@ -8,7 +8,6 @@ Usage:
 
 import json
 import shutil
-import sys
 from pathlib import Path
 
 # MCP server config that gets injected into each client's settings

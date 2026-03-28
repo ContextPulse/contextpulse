@@ -24,7 +24,6 @@ from contextpulse_sight.config import (
     BUFFER_MAX_AGE,
     CHANGE_THRESHOLD,
     JPEG_QUALITY,
-    STORAGE_MODE,
 )
 
 logger = logging.getLogger("contextpulse.sight.buffer")

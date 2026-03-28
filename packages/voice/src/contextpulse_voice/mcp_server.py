@@ -3,16 +3,13 @@
 Entry point: contextpulse-voice-mcp (see pyproject.toml).
 """
 
-import functools
 import json
 import logging
 import sqlite3
 import time
-from pathlib import Path
-
-from mcp.server.fastmcp import FastMCP
 
 from contextpulse_core.config import ACTIVITY_DB_PATH
+from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger(__name__)
 

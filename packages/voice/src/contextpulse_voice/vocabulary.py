@@ -9,7 +9,7 @@ import logging
 import re
 from pathlib import Path
 
-from contextpulse_voice.config import VOCAB_FILE, LEARNED_VOCAB_FILE, VOICE_DATA_DIR
+from contextpulse_voice.config import LEARNED_VOCAB_FILE, VOCAB_FILE, VOICE_DATA_DIR
 
 logger = logging.getLogger(__name__)
 

@@ -28,7 +28,6 @@ from pathlib import Path
 import pystray
 
 from contextpulse_core.first_run import is_first_run, show_welcome_dialog
-from contextpulse_core.license import is_licensed
 from contextpulse_core.license_dialog import show_nag_dialog
 from contextpulse_core.platform import get_platform_provider
 from contextpulse_core.settings import show_settings
@@ -435,7 +434,7 @@ class ContextPulseDaemon:
         """Update tray icon based on state."""
         if not hasattr(self, "tray") or not self.tray:
             return
-        from contextpulse_sight.icon import create_icon, _COLORS
+        from contextpulse_sight.icon import _COLORS, create_icon
         warning = _COLORS.get("dark", {}).get("warning", "#F0B429")
         paused = self._sight_app and self._sight_app.paused
         self.tray.icon = create_icon(warning if paused else None)
@@ -509,7 +508,7 @@ def main() -> None:
 
     # Handle --setup flag for MCP config
     if "--setup" in sys.argv:
-        from contextpulse_sight.setup import setup_all, print_config
+        from contextpulse_sight.setup import print_config, setup_all
         idx = sys.argv.index("--setup")
         if idx + 1 < len(sys.argv) and sys.argv[idx + 1] == "print":
             print_config()
