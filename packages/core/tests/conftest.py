@@ -65,3 +65,26 @@ if not hasattr(ctypes, "windll"):
 if not isinstance(getattr(ctypes, "windll", None), MagicMock):
     if not hasattr(ctypes.windll, "kernel32"):
         ctypes.windll.kernel32 = MagicMock()
+
+# ---------------------------------------------------------------------------
+# Set up a mock platform provider so tests across all packages work on any OS.
+# This is in the core conftest because it loads first in cross-package runs.
+# ---------------------------------------------------------------------------
+from pathlib import Path
+
+# Add core source to path (needed when running from project root)
+_CORE_SRC = Path(__file__).parent.parent / "src"
+sys.path.insert(0, str(_CORE_SRC))
+
+from contextpulse_core.platform import factory as _platform_factory
+from contextpulse_core.platform.base import PlatformProvider
+
+_mock_platform = MagicMock(spec=PlatformProvider)
+_mock_platform.get_foreground_window_title.return_value = ""
+_mock_platform.get_foreground_process_name.return_value = ""
+_mock_platform.get_cursor_pos.return_value = (500, 500)
+_mock_platform.get_clipboard_sequence.return_value = 0
+_mock_platform.get_clipboard_text.return_value = None
+_mock_platform.get_caret_position.return_value = None
+_mock_platform.acquire_single_instance_lock.return_value = object()
+_platform_factory._instance = _mock_platform

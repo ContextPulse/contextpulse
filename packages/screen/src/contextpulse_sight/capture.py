@@ -1,7 +1,5 @@
 """Screen capture engine using mss. Handles multi-monitor, cursor tracking, region crop."""
 
-import ctypes
-import ctypes.wintypes
 import logging
 from io import BytesIO
 from pathlib import Path
@@ -9,20 +7,15 @@ from pathlib import Path
 import mss
 from PIL import Image
 
+from contextpulse_core.platform import get_platform_provider
 from contextpulse_sight.config import JPEG_QUALITY, MAX_HEIGHT, MAX_WIDTH
 
 logger = logging.getLogger(__name__)
 
 
-class POINT(ctypes.Structure):
-    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
-
-
 def _get_cursor_pos() -> tuple[int, int]:
-    """Get current cursor position (screen coordinates)."""
-    pt = POINT()
-    ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
-    return pt.x, pt.y
+    """Get current cursor position (screen coordinates) via platform provider."""
+    return get_platform_provider().get_cursor_pos()
 
 
 def find_monitor_at_cursor(sct: mss.mss) -> tuple[int, dict]:

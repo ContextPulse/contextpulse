@@ -1,4 +1,4 @@
-"""Clipboard context capture — monitors Win32 clipboard for text content.
+"""Clipboard context capture — monitors clipboard for text content.
 
 Captures clipboard text (error messages, URLs, stack traces, code snippets)
 alongside screenshots. Stores in the activity database for searchable history.
@@ -12,9 +12,7 @@ import logging
 import threading
 import time
 
-import ctypes
-import ctypes.wintypes
-
+from contextpulse_core.platform import get_platform_provider
 from contextpulse_sight.activity import ActivityDB
 
 logger = logging.getLogger("contextpulse.sight.clipboard")
@@ -120,32 +118,14 @@ class ClipboardMonitor:
 def _get_clipboard_sequence() -> int:
     """Get the clipboard sequence number (changes on every clipboard update)."""
     try:
-        return ctypes.windll.user32.GetClipboardSequenceNumber()
+        return get_platform_provider().get_clipboard_sequence()
     except Exception:
         return 0
 
 
 def _get_clipboard_text() -> str | None:
-    """Read text from the Windows clipboard."""
-    CF_UNICODETEXT = 13
-
+    """Read text from the clipboard via platform provider."""
     try:
-        if not ctypes.windll.user32.OpenClipboard(0):
-            return None
-        try:
-            if not ctypes.windll.user32.IsClipboardFormatAvailable(CF_UNICODETEXT):
-                return None
-            handle = ctypes.windll.user32.GetClipboardData(CF_UNICODETEXT)
-            if not handle:
-                return None
-            ptr = ctypes.windll.kernel32.GlobalLock(handle)
-            if not ptr:
-                return None
-            try:
-                return ctypes.wstring_at(ptr)
-            finally:
-                ctypes.windll.kernel32.GlobalUnlock(handle)
-        finally:
-            ctypes.windll.user32.CloseClipboard()
+        return get_platform_provider().get_clipboard_text()
     except Exception:
         return None

@@ -18,7 +18,7 @@ Lambda: contextpulse-license-webhook
 ```
 
 ## Prerequisites
-- AWS account 397348547231, region us-east-1
+- Your AWS account, region us-east-1
 - SES domain verification for contextpulse.ai (+ DKIM records in Cloudflare)
 - Ed25519 keypair generated and private key in SSM Parameter Store
 - Gumroad product listing for Memory Starter ($29) and Memory Pro ($49)

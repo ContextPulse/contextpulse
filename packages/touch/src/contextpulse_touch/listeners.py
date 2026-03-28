@@ -1,7 +1,6 @@
 """Input listeners — thin pynput wrappers for keyboard and mouse capture."""
 
 import logging
-import os
 import time
 import threading
 from typing import Any, Callable
@@ -9,32 +8,15 @@ from typing import Any, Callable
 from pynput import keyboard as kb
 from pynput import mouse as ms
 
+from contextpulse_core.platform import get_platform_provider
+
 logger = logging.getLogger(__name__)
 
 
 def _get_clipboard_text() -> str:
     """Read current clipboard text. Returns empty string on failure."""
     try:
-        import ctypes
-        CF_UNICODETEXT = 13
-        user32 = ctypes.windll.user32
-        kernel32 = ctypes.windll.kernel32
-
-        if not user32.OpenClipboard(0):
-            return ""
-        try:
-            handle = user32.GetClipboardData(CF_UNICODETEXT)
-            if not handle:
-                return ""
-            ptr = kernel32.GlobalLock(handle)
-            if not ptr:
-                return ""
-            try:
-                return ctypes.wstring_at(ptr)
-            finally:
-                kernel32.GlobalUnlock(handle)
-        finally:
-            user32.CloseClipboard()
+        return get_platform_provider().get_clipboard_text() or ""
     except Exception:
         return ""
 
@@ -42,28 +24,9 @@ def _get_clipboard_text() -> str:
 def _get_foreground_info() -> tuple[str, str]:
     """Get current foreground app name and window title."""
     try:
-        import ctypes
-        import ctypes.wintypes
-
-        hwnd = ctypes.windll.user32.GetForegroundWindow()
-        length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
-        buf = ctypes.create_unicode_buffer(length + 1)
-        ctypes.windll.user32.GetWindowTextW(hwnd, buf, length + 1)
-        title = buf.value
-
-        pid = ctypes.wintypes.DWORD()
-        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        handle = ctypes.windll.kernel32.OpenProcess(0x0400 | 0x0010, False, pid.value)
-        if handle:
-            buf2 = ctypes.create_unicode_buffer(260)
-            size = ctypes.wintypes.DWORD(260)
-            ctypes.windll.kernel32.QueryFullProcessImageNameW(
-                handle, 0, buf2, ctypes.byref(size)
-            )
-            ctypes.windll.kernel32.CloseHandle(handle)
-            app_name = os.path.basename(buf2.value)
-        else:
-            app_name = ""
+        platform = get_platform_provider()
+        app_name = platform.get_foreground_process_name()
+        title = platform.get_foreground_window_title()
         return (app_name, title)
     except Exception:
         return ("", "")

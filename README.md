@@ -180,6 +180,37 @@ pytest tests/ -x -q
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
+## Canary Health Check
+
+A canary script exercises every exposed MCP tool and reports pass/fail. It runs automatically on a cron/Task Scheduler schedule to catch regressions before users do.
+
+```bash
+# Run manually
+python scripts/canary_health_check.py
+
+# Verbose (shows each tool as it runs)
+python scripts/canary_health_check.py --verbose
+
+# JSON output (for CI or external monitoring)
+python scripts/canary_health_check.py --json
+```
+
+**What it does:**
+- Auto-starts the ContextPulse daemon if it is not already running
+- Calls all 26 MCP tools (sight × 12, voice × 3, touch × 3, project × 4, memory × 5) with minimal valid arguments
+- Prints a human-readable summary with per-server breakdown
+- Appends results to `logs/canary_results.json` (last 100 runs retained)
+- Exits `0` if all tools pass, `1` if any fail
+
+**Scheduling (Windows Task Scheduler):**
+
+1. Open Task Scheduler → Create Basic Task
+2. Trigger: Daily, repeat every 4 hours
+3. Action: Start a program
+   - Program: `C:\Users\david\Projects\ContextPulse\.venv\Scripts\python.exe`
+   - Arguments: `scripts/canary_health_check.py`
+   - Start in: `C:\Users\david\Projects\ContextPulse`
+
 ## License
 
 ContextPulse is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0).
