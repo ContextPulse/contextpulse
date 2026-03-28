@@ -29,13 +29,11 @@ Thumbs.db
 desktop.ini
 
 # Claude / AI tools
-.claude/settings.local.json
-.claude/plans/
-.claude/projects/
-.claude/worktrees/
+.claude/
 
-# Screenshots (runtime output)
+# Runtime output
 screenshots/
+logs/
 
 # Lambda build artifacts (regenerated via pip install)
 lambda/package/
