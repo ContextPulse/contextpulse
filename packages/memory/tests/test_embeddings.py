@@ -10,10 +10,8 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
-
 from contextpulse_memory import embeddings as emb_module
 from contextpulse_memory.embeddings import EMBEDDING_DIM, EmbeddingEngine, get_engine
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -223,6 +221,7 @@ class TestWarmTierSemanticSearch:
 
     def test_semantic_search_excludes_expired(self, tmp_path):
         import time
+
         from contextpulse_memory.storage import WarmTier
         warm = WarmTier(tmp_path / "warm.db")
         vec = _unit_vec(3)
@@ -313,8 +312,9 @@ class TestHybridSearch:
 class TestStoreAutoEmbedding:
     def test_store_embeds_value_when_engine_available(self, tmp_path, engine_with_mock_model):
         """When the engine is available, stored memories should have an embedding."""
-        from contextpulse_memory.storage import MemoryStore
         import sqlite3
+
+        from contextpulse_memory.storage import MemoryStore
 
         store = MemoryStore(tmp_path)
         # engine_with_mock_model fixture already patches _instance in the embeddings module
@@ -349,6 +349,7 @@ class TestStoreAutoEmbedding:
         """Memories stored before embedding column was added (embedding=NULL) must
         still be returned by FTS search."""
         import sqlite3
+
         from contextpulse_memory.storage import MemoryStore
 
         # Write a row without embedding directly
@@ -357,7 +358,8 @@ class TestStoreAutoEmbedding:
         store.close()
 
         conn = sqlite3.connect(str(db_path))
-        import time, json
+        import json
+        import time
         now = time.time()
         conn.execute(
             """INSERT INTO memories (key, value, tags, created_at, updated_at, expires_at)
