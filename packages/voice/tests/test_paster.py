@@ -1,12 +1,10 @@
 """Tests for the paster module — clipboard paste and hash tracking."""
 
-import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-import pytest
-
-from contextpulse_voice.paster import paste_text, get_last_paste_info
 import contextpulse_voice.paster as paster_module
+import pytest
+from contextpulse_voice.paster import get_last_paste_info, paste_text
 
 
 class TestPasteText:
@@ -18,8 +16,8 @@ class TestPasteText:
         yield
 
     def test_paste_returns_hash(self):
-        import pyperclip
         import pyautogui
+        import pyperclip
         pyperclip.copy = MagicMock()
         pyautogui.hotkey = MagicMock()
 
@@ -38,8 +36,8 @@ class TestPasteText:
         assert h == ""
 
     def test_get_last_paste_info(self):
-        import pyperclip
         import pyautogui
+        import pyperclip
         pyperclip.copy = MagicMock()
         pyautogui.hotkey = MagicMock()
 
@@ -49,8 +47,8 @@ class TestPasteText:
         assert len(h) == 16
 
     def test_rapid_paste_blocked(self):
-        import pyperclip
         import pyautogui
+        import pyperclip
         pyperclip.copy = MagicMock()
         pyautogui.hotkey = MagicMock()
 
@@ -60,8 +58,8 @@ class TestPasteText:
         assert ts == 0.0  # blocked
 
     def test_consistent_hash(self):
-        import pyperclip
         import pyautogui
+        import pyperclip
         pyperclip.copy = MagicMock()
         pyautogui.hotkey = MagicMock()
 

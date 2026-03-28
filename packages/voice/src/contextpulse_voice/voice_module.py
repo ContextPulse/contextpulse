@@ -335,7 +335,8 @@ class VoiceModule(ModalityModule):
             use_llm = self._always_use_llm and has_api_key()
             if use_llm and self._overlay:
                 self._overlay.show_cleaning()
-            text = clean(raw_text, use_llm=use_llm)
+            profile_context = self._build_profile_context(app_name, window_title)
+            text = clean(raw_text, use_llm=use_llm, profile_context=profile_context)
             text = apply_vocabulary(text)
 
             if not text:
@@ -367,6 +368,15 @@ class VoiceModule(ModalityModule):
                 },
             ))
             logger.info("Dictated: %s", text[:100])
+
+            # Schedule background screen correction harvesting.
+            # Wait a few seconds for Claude to respond, then check if
+            # screen OCR contains corrected versions of what was dictated.
+            def _delayed_harvest(rt: str = raw_text) -> None:
+                time.sleep(8)
+                self._harvest_screen_corrections(rt)
+
+            threading.Thread(target=_delayed_harvest, daemon=True).start()
         except Exception:
             self._error = "Transcription failed"
             logger.exception("Transcription failed")
@@ -385,7 +395,9 @@ class VoiceModule(ModalityModule):
 
             raw_text = self._transcriber.transcribe(self._last_wav_bytes, beam_size=10)
             raw_text = apply_punctuation(raw_text)
-            text = clean(raw_text, use_llm=True)
+            app_name_fl, window_title_fl = self._get_foreground_info()
+            profile_context = self._build_profile_context(app_name_fl, window_title_fl)
+            text = clean(raw_text, use_llm=True, profile_context=profile_context)
             text = apply_vocabulary(text)
 
             if text:
@@ -416,3 +428,131 @@ class VoiceModule(ModalityModule):
         except Exception:
             self._error = "Fix-last failed"
             logger.exception("Fix-last failed")
+
+    # ── Context-aware helpers ────────────────────────────────────────
+
+    def _build_profile_context(
+        self, app_name: str = "", window_title: str = ""
+    ) -> str:
+        """Build a context string for LLM cleanup from screen context.
+
+        Uses recent window titles from Sight events (last 60s) to identify
+        what the user was working on. The active window during dictation
+        is usually 'Claude', so recent windows are more informative.
+        """
+        parts: list[str] = []
+
+        # Gather recent window titles from Sight events
+        try:
+            import sqlite3
+
+            from contextpulse_core.config import ACTIVITY_DB_PATH
+
+            if ACTIVITY_DB_PATH.exists():
+                conn = sqlite3.connect(str(ACTIVITY_DB_PATH), timeout=1)
+                conn.row_factory = sqlite3.Row
+                cutoff = time.time() - 120  # last 2 minutes
+                rows = conn.execute(
+                    "SELECT DISTINCT window_title FROM events "
+                    "WHERE modality = 'sight' AND window_title != '' "
+                    "AND timestamp > ? ORDER BY timestamp DESC LIMIT 10",
+                    (cutoff,),
+                ).fetchall()
+                conn.close()
+
+                titles = [r["window_title"] for r in rows if r["window_title"]]
+                # Filter out generic titles
+                titles = [
+                    t for t in titles
+                    if t not in ("Claude", "Search", "")
+                    and len(t) > 3
+                ]
+                if titles:
+                    parts.append("Recent windows: " + ", ".join(titles[:5]))
+        except Exception:
+            pass
+
+        # Add known proper nouns from context vocabulary
+        try:
+            from contextpulse_voice.context_vocab import get_known_proper_nouns
+            nouns = get_known_proper_nouns()
+            if nouns:
+                parts.append("Known terms: " + ", ".join(nouns[:15]))
+        except Exception:
+            pass
+
+        context = ". ".join(parts)
+        # Truncate to keep the LLM prompt manageable
+        return context[:300] if context else ""
+
+    def _harvest_screen_corrections(self, raw_text: str) -> None:
+        """Background: check screen OCR for corrected versions of dictated terms.
+
+        When the user dictates into Claude Code, Claude's responses often
+        contain properly-capitalized versions of what was said (e.g., Claude
+        writes "ContextPulse" when the user said "context pulse"). This method
+        harvests those corrections from screen OCR events.
+
+        Runs in a background thread after a short delay to allow Claude
+        to respond and Sight to capture the screen.
+        """
+        try:
+            import json as _json
+            import re as _re
+            import sqlite3
+
+            from contextpulse_core.config import ACTIVITY_DB_PATH
+            from contextpulse_touch.correction_detector import VoiceasyBridge
+
+            if not ACTIVITY_DB_PATH.exists():
+                return
+
+            conn = sqlite3.connect(str(ACTIVITY_DB_PATH), timeout=2)
+            conn.row_factory = sqlite3.Row
+            cutoff = time.time() - 180  # last 3 minutes
+            rows = conn.execute(
+                "SELECT payload FROM events "
+                "WHERE modality = 'sight' AND event_type = 'ocr_result' "
+                "AND timestamp > ? ORDER BY timestamp DESC LIMIT 5",
+                (cutoff,),
+            ).fetchall()
+            conn.close()
+
+            if not rows:
+                return
+
+            # Combine OCR text from recent screens
+            ocr_text = ""
+            for r in rows:
+                payload = _json.loads(r["payload"])
+                confidence = payload.get("ocr_confidence", 0)
+                if confidence >= 0.75:
+                    ocr_text += " " + payload.get("ocr_text", "")
+
+            if len(ocr_text) < 20:
+                return
+
+            # Find CamelCase words in OCR text
+            camel_words = set(_re.findall(r"\b([A-Z][a-z]+(?:[A-Z][a-z]+)+)\b", ocr_text))
+            if not camel_words:
+                return
+
+            bridge = VoiceasyBridge()
+            raw_lower = raw_text.lower()
+
+            for word in camel_words:
+                # Split CamelCase into space-separated phrase
+                phrase = _re.sub(r"([a-z])([A-Z])", r"\1 \2", word)
+                phrase = _re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", phrase)
+                phrase_lower = phrase.lower()
+
+                # Check if the raw dictation contains this phrase
+                if phrase_lower in raw_lower and len(phrase_lower) >= 6:
+                    added = bridge.add_correction(phrase_lower, word)
+                    if added:
+                        logger.info(
+                            "Screen-learned correction: %r -> %r",
+                            phrase_lower, word,
+                        )
+        except Exception:
+            logger.debug("Screen correction harvesting failed", exc_info=True)

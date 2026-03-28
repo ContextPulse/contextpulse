@@ -1,17 +1,12 @@
 """Edge case tests for Voice — unusual inputs, boundary conditions, error handling."""
 
-import json
-import re
-from unittest.mock import MagicMock, patch
 
-import pytest
 
-from contextpulse_voice.cleanup import clean_basic, _fix_title_case, _is_hallucination
+from contextpulse_voice.cleanup import _is_hallucination, clean_basic
 from contextpulse_voice.vocabulary import (
-    apply_punctuation,
-    apply_vocabulary,
-    _compile_patterns,
     _DEFAULT_VOCABULARY,
+    _compile_patterns,
+    apply_punctuation,
 )
 
 

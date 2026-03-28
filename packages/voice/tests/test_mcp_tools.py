@@ -1,11 +1,7 @@
 """Tests for MCP server tools — transcription history and vocabulary queries."""
 
-import json
 import sqlite3
-import time
 from unittest.mock import patch
-
-import pytest
 
 
 class TestGetRecentTranscriptions:

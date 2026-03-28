@@ -11,24 +11,17 @@ import json
 import sqlite3
 import threading
 import time
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
-
 from contextpulse_core.spine import ContextEvent, EventBus, EventType, Modality
 from contextpulse_touch.burst_tracker import BurstTracker
 from contextpulse_touch.correction_detector import CorrectionDetector, VoiceasyBridge
+from contextpulse_voice import vocabulary
+from contextpulse_voice.analyzer import load_entries_from_eventbus
 from contextpulse_voice.vocabulary import (
     apply_vocabulary,
-    _compile_patterns,
-    _load_vocabulary,
-    reload_vocabulary,
 )
-from contextpulse_voice.analyzer import find_corrections, load_entries_from_eventbus
-from contextpulse_voice.cleanup import clean_basic
-from contextpulse_voice import vocabulary
-
 
 # ═══════════════════════════════════════════════════════════════════════
 # Fixtures
@@ -526,8 +519,8 @@ class TestMCPCrossPackage:
 
     def test_both_mcp_no_interference(self, shared_db):
         """Querying from both MCP servers simultaneously should not interfere."""
-        from contextpulse_voice import mcp_server as voice_mcp
         from contextpulse_touch import mcp_server as touch_mcp
+        from contextpulse_voice import mcp_server as voice_mcp
 
         with patch.object(voice_mcp, "_DB_PATH", shared_db), \
              patch.object(touch_mcp, "_DB_PATH", shared_db):

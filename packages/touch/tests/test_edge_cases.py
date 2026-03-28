@@ -7,7 +7,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from contextpulse_touch.burst_tracker import BurstTracker
 from contextpulse_touch.correction_detector import CorrectionDetector, VoiceasyBridge
 

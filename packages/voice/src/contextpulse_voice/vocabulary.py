@@ -9,7 +9,12 @@ import logging
 import re
 from pathlib import Path
 
-from contextpulse_voice.config import LEARNED_VOCAB_FILE, VOCAB_FILE, VOICE_DATA_DIR
+from contextpulse_voice.config import (
+    CONTEXT_VOCAB_FILE,
+    LEARNED_VOCAB_FILE,
+    VOCAB_FILE,
+    VOICE_DATA_DIR,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +87,7 @@ _DEFAULT_VOCABULARY: dict[str, str] = {
 _compiled_patterns: list[tuple[re.Pattern[str], str]] | None = None
 _vocab_mtime: float = 0.0
 _learned_mtime: float = 0.0
+_context_mtime: float = 0.0
 
 
 def _ensure_vocab_file() -> Path:
@@ -138,6 +144,21 @@ def _load_vocabulary() -> dict[str, str]:
         except (json.JSONDecodeError, OSError) as exc:
             logger.warning("Failed to read vocabulary_learned.json: %s", exc)
 
+    # Merge context vocabulary (project names, proper nouns — lowest priority)
+    if CONTEXT_VOCAB_FILE.exists():
+        try:
+            context = json.loads(CONTEXT_VOCAB_FILE.read_text(encoding="utf-8"))
+            if isinstance(context, dict):
+                count = 0
+                for key, val in context.items():
+                    if key not in data:
+                        data[key] = val
+                        count += 1
+                if count:
+                    logger.info("Merged %d context vocabulary entries", count)
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("Failed to read vocabulary_context.json: %s", exc)
+
     return data
 
 
@@ -152,25 +173,32 @@ def _compile_patterns(vocab: dict[str, str]) -> list[tuple[re.Pattern[str], str]
 
 
 def _get_patterns() -> list[tuple[re.Pattern[str], str]]:
-    """Return cached compiled patterns, auto-reloading when either file changes."""
-    global _compiled_patterns, _vocab_mtime, _learned_mtime
-    try:
-        current_mtime = VOCAB_FILE.stat().st_mtime if VOCAB_FILE.exists() else 0.0
-    except OSError:
-        current_mtime = 0.0
-    try:
-        current_learned = LEARNED_VOCAB_FILE.stat().st_mtime if LEARNED_VOCAB_FILE.exists() else 0.0
-    except OSError:
-        current_learned = 0.0
+    """Return cached compiled patterns, auto-reloading when any vocab file changes."""
+    global _compiled_patterns, _vocab_mtime, _learned_mtime, _context_mtime
+
+    def _mtime(path: Path) -> float:
+        try:
+            return path.stat().st_mtime if path.exists() else 0.0
+        except OSError:
+            return 0.0
+
+    current_mtime = _mtime(VOCAB_FILE)
+    current_learned = _mtime(LEARNED_VOCAB_FILE)
+    current_context = _mtime(CONTEXT_VOCAB_FILE)
+
     if (_compiled_patterns is None
             or current_mtime != _vocab_mtime
-            or current_learned != _learned_mtime):
+            or current_learned != _learned_mtime
+            or current_context != _context_mtime):
         _compiled_patterns = _compile_patterns(_load_vocabulary())
         _vocab_mtime = current_mtime
         _learned_mtime = current_learned
+        _context_mtime = current_context
         if _vocab_mtime > 0:
-            logger.info("Vocabulary loaded (mtime=%.0f, learned_mtime=%.0f)",
-                        _vocab_mtime, _learned_mtime)
+            logger.info(
+                "Vocabulary loaded (user=%.0f, learned=%.0f, context=%.0f)",
+                _vocab_mtime, _learned_mtime, _context_mtime,
+            )
     return _compiled_patterns
 
 

@@ -1,7 +1,6 @@
 """Tests for ModalityModule ABC contract."""
 
 import pytest
-
 from contextpulse_core.spine.events import ContextEvent, EventType, Modality
 from contextpulse_core.spine.module import ModalityModule
 

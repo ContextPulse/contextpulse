@@ -9,8 +9,12 @@ class TestConfigDefaults:
 
     def test_default_values(self):
         from contextpulse_sight.config import (
-            AUTO_INTERVAL, BUFFER_MAX_AGE, CHANGE_THRESHOLD,
-            JPEG_QUALITY, MAX_HEIGHT, MAX_WIDTH,
+            AUTO_INTERVAL,
+            BUFFER_MAX_AGE,
+            CHANGE_THRESHOLD,
+            JPEG_QUALITY,
+            MAX_HEIGHT,
+            MAX_WIDTH,
         )
         assert MAX_WIDTH == 1280
         assert MAX_HEIGHT == 720
@@ -20,13 +24,17 @@ class TestConfigDefaults:
         assert CHANGE_THRESHOLD == 0.5
 
     def test_output_dir_is_path(self):
-        from contextpulse_sight.config import OUTPUT_DIR
         from pathlib import Path
+
+        from contextpulse_sight.config import OUTPUT_DIR
         assert isinstance(OUTPUT_DIR, Path)
 
     def test_file_paths_are_under_output_dir(self):
         from contextpulse_sight.config import (
-            FILE_ALL, FILE_LATEST, FILE_REGION, OUTPUT_DIR,
+            FILE_ALL,
+            FILE_LATEST,
+            FILE_REGION,
+            OUTPUT_DIR,
         )
         assert FILE_LATEST.parent == OUTPUT_DIR
         assert FILE_ALL.parent == OUTPUT_DIR
@@ -45,6 +53,7 @@ class TestConfigValidation:
         with patch.dict(os.environ, {"CONTEXTPULSE_JPEG_QUALITY": "999"}):
             # Re-import to pick up new env
             import importlib
+
             import contextpulse_sight.config as cfg
             importlib.reload(cfg)
             assert cfg.JPEG_QUALITY == 100
@@ -52,6 +61,7 @@ class TestConfigValidation:
     def test_jpeg_quality_clamped_low(self):
         with patch.dict(os.environ, {"CONTEXTPULSE_JPEG_QUALITY": "-5"}):
             import importlib
+
             import contextpulse_sight.config as cfg
             importlib.reload(cfg)
             assert cfg.JPEG_QUALITY == 1
@@ -59,6 +69,7 @@ class TestConfigValidation:
     def test_auto_interval_non_negative(self):
         with patch.dict(os.environ, {"CONTEXTPULSE_AUTO_INTERVAL": "-10"}):
             import importlib
+
             import contextpulse_sight.config as cfg
             importlib.reload(cfg)
             assert cfg.AUTO_INTERVAL == 0
@@ -66,6 +77,7 @@ class TestConfigValidation:
     def test_buffer_max_age_non_negative(self):
         with patch.dict(os.environ, {"CONTEXTPULSE_BUFFER_MAX_AGE": "-60"}):
             import importlib
+
             import contextpulse_sight.config as cfg
             importlib.reload(cfg)
             assert cfg.BUFFER_MAX_AGE == 0
@@ -73,6 +85,7 @@ class TestConfigValidation:
     def test_change_threshold_non_negative(self):
         with patch.dict(os.environ, {"CONTEXTPULSE_CHANGE_THRESHOLD": "-1.0"}):
             import importlib
+
             import contextpulse_sight.config as cfg
             importlib.reload(cfg)
             assert cfg.CHANGE_THRESHOLD == 0.0

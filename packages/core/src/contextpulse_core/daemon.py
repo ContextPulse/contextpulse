@@ -411,11 +411,19 @@ class ContextPulseDaemon:
             ),
             pystray.MenuItem(
                 "Open Screenshots",
-                lambda: subprocess.Popen(["explorer", str(OUTPUT_DIR)]),
+                lambda: subprocess.Popen(
+                    ["open", str(OUTPUT_DIR)] if sys.platform == "darwin"
+                    else ["xdg-open", str(OUTPUT_DIR)] if sys.platform.startswith("linux")
+                    else ["explorer", str(OUTPUT_DIR)]
+                ),
             ),
             pystray.MenuItem(
                 "Open Log",
-                lambda: subprocess.Popen(["notepad", str(LOG_FILE)]),
+                lambda: subprocess.Popen(
+                    ["open", str(LOG_FILE)] if sys.platform == "darwin"
+                    else ["xdg-open", str(LOG_FILE)] if sys.platform.startswith("linux")
+                    else ["notepad", str(LOG_FILE)]
+                ),
             ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
@@ -463,6 +471,25 @@ class ContextPulseDaemon:
         """Main entry point — single-instance guard, start modules, run tray."""
         # Single-instance guard via platform provider
         platform = get_platform_provider()
+
+        # Kill zombie ContextPulse processes before acquiring mutex.
+        # These are leftover pythonw processes from previous crashes or
+        # the mutex race condition (fixed in windows.py).
+        my_pid = os.getpid()
+        if hasattr(platform, "find_contextpulse_processes"):
+            zombies = platform.find_contextpulse_processes(exclude_pid=my_pid)
+            if zombies:
+                logger.warning(
+                    "Found %d zombie ContextPulse process(es): %s — killing",
+                    len(zombies), zombies,
+                )
+                for pid in zombies:
+                    platform.kill_process(pid)
+                    logger.info("Killed zombie pid=%d", pid)
+                # Brief pause to let the OS release the mutex
+                import time
+                time.sleep(0.5)
+
         self._mutex = platform.acquire_single_instance_lock("ContextPulse_SingleInstance")
         if self._mutex is None:
             logger.error("ContextPulse is already running. Exiting.")
@@ -483,6 +510,16 @@ class ContextPulseDaemon:
 
         # Start all modules
         self._start_modules()
+
+        # Rebuild context vocabulary from project directories (non-blocking).
+        # This generates vocabulary_context.json with CamelCase project names
+        # so Voice can correct "context pulse" → "ContextPulse" etc.
+        try:
+            from contextpulse_voice.context_vocab import rebuild_context_vocabulary
+            count = rebuild_context_vocabulary()
+            logger.info("Context vocabulary rebuilt: %d entries", count)
+        except Exception:
+            logger.debug("Context vocabulary rebuild skipped (voice not available)")
 
         # Start daemon watchdog for Voice + Touch
         self._daemon_watchdog_thread = threading.Thread(
@@ -506,14 +543,30 @@ def main() -> None:
     """Entry point for contextpulse CLI command."""
     _setup_logging()
 
-    # Handle --setup flag for MCP config
+    # Handle --setup flag for MCP config + companion skills
     if "--setup" in sys.argv:
         from contextpulse_sight.setup import print_config, setup_all
         idx = sys.argv.index("--setup")
         if idx + 1 < len(sys.argv) and sys.argv[idx + 1] == "print":
             print_config()
         else:
+            # Configure MCP servers
             setup_all()
+            # Install companion skills
+            print("\n--- Companion Skills ---")
+            from contextpulse_core.skill_setup import install_skills
+            force = "--force" in sys.argv
+            install_skills("claude-code", force=force)
+            install_skills("gemini", force=force)
+            # Show ecosystem status
+            from contextpulse_core.skill_setup import print_ecosystem_status
+            print_ecosystem_status()
+        return
+
+    # Handle --status flag
+    if "--status" in sys.argv:
+        from contextpulse_core.skill_setup import print_ecosystem_status
+        print_ecosystem_status()
         return
 
     try:

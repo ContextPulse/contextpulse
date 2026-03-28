@@ -1,13 +1,11 @@
 """Tests for CorrectionDetector and VoiceasyBridge."""
 
-import hashlib
 import json
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
-
 from contextpulse_touch.burst_tracker import BurstTracker
 from contextpulse_touch.correction_detector import CorrectionDetector, VoiceasyBridge
 

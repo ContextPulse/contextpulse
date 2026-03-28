@@ -1,6 +1,6 @@
 """Tests for privacy controls: window title blocklist and session lock."""
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from contextpulse_sight import privacy
 

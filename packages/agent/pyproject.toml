@@ -6,10 +6,31 @@ build-backend = "setuptools.build_meta"
 name = "contextpulse-agent"
 version = "0.1.0"
 description = "Agent coordination and session protocol for AI agents"
+authors = [
+    { name = "David Jerard", email = "david@jerardventures.com" },
+]
+license = "AGPL-3.0-or-later"
+readme = "README.md"
+keywords = ["mcp", "ai-agents", "context", "claude", "agent", "coordination"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+]
 requires-python = ">=3.12"
 dependencies = [
     "contextpulse-core",
 ]
+
+[project.urls]
+Homepage = "https://contextpulse.ai"
+Repository = "https://github.com/junkyard-rules/contextpulse"
+Issues = "https://github.com/junkyard-rules/contextpulse/issues"
+Documentation = "https://github.com/junkyard-rules/contextpulse#readme"
 
 [tool.setuptools.packages.find]
 where = ["src"]

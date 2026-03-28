@@ -3,7 +3,6 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from contextpulse_core.spine import ContextEvent, EventType, Modality
 
 

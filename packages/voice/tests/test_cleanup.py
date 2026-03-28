@@ -1,6 +1,5 @@
 """Tests for the cleanup module — rule-based and LLM text polishing."""
 
-import pytest
 
 from contextpulse_voice.cleanup import (
     _capitalize_after_punctuation,

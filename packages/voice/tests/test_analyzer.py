@@ -1,7 +1,5 @@
 """Tests for the analyzer module — auto-learning from transcription history."""
 
-import json
-import pytest
 
 from contextpulse_voice.analyzer import (
     _is_style_change,

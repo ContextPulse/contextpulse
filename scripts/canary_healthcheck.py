@@ -24,7 +24,6 @@ import logging
 import os
 import sys
 import time
-import traceback
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -291,7 +290,7 @@ def print_summary(report: HealthReport):
     for r in report.results:
         servers.setdefault(r.server, []).append(r)
 
-    print(f"\nPer-server breakdown:")
+    print("\nPer-server breakdown:")
     for server, results in sorted(servers.items()):
         passed = sum(1 for r in results if r.passed)
         total = len(results)

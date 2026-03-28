@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from contextpulse_sight import capture
 from contextpulse_sight.classifier import classify_and_extract
-from contextpulse_sight.privacy import get_foreground_window_title, get_foreground_process_name
+from contextpulse_sight.privacy import get_foreground_process_name, get_foreground_window_title
 
 INTERVAL = 3  # seconds between captures
 OUTPUT_DIR = Path(__file__).parent.parent / "benchmark_results"
@@ -90,7 +90,7 @@ def print_report(results):
     print(f"  Text-only eligible: {text_only} ({text_only/total*100:.0f}%)")
     print(f"  Image required:     {keep_image} ({keep_image/total*100:.0f}%)")
 
-    print(f"\nDisk usage comparison:")
+    print("\nDisk usage comparison:")
     print(f"  All images (visual mode):  {total_img_bytes/1024:.0f} KB")
     print(f"  Smart mode:                {smart_total/1024:.0f} KB")
     print(f"  Savings:                   {savings/1024:.0f} KB ({savings/total_img_bytes*100:.0f}%)")
@@ -107,7 +107,7 @@ def print_report(results):
             apps[app]["image"] += 1
         apps[app]["samples"].append(r)
 
-    print(f"\nPer-app breakdown:")
+    print("\nPer-app breakdown:")
     print(f"  {'App':<25} {'Text-only':>10} {'Image':>10} {'Avg Conf':>10} {'Avg Chars':>10}")
     print(f"  {'-'*25} {'-'*10} {'-'*10} {'-'*10} {'-'*10}")
     for app, data in sorted(apps.items(), key=lambda x: -len(x[1]["samples"])):
@@ -116,7 +116,7 @@ def print_report(results):
         print(f"  {app:<25} {data['text']:>10} {data['image']:>10} {avg_conf:>10.2f} {avg_chars:>10.0f}")
 
     # Show OCR confidence distribution
-    print(f"\nOCR confidence distribution:")
+    print("\nOCR confidence distribution:")
     conf_buckets = {"0.0-0.5": 0, "0.5-0.7": 0, "0.7-0.8": 0, "0.8-0.9": 0, "0.9-1.0": 0}
     for r in results:
         c = r["ocr_confidence"]
@@ -135,7 +135,7 @@ def print_report(results):
         print(f"  {bucket}: {count:>3} {bar}")
 
     # Show individual captures
-    print(f"\nDetailed capture log:")
+    print("\nDetailed capture log:")
     print(f"  {'Time':<10} {'App':<20} {'Type':<10} {'Chars':>6} {'Conf':>6} {'ImgKB':>6} {'TxtKB':>6} {'Window'}")
     print(f"  {'-'*10} {'-'*20} {'-'*10} {'-'*6} {'-'*6} {'-'*6} {'-'*6} {'-'*40}")
     for r in results:

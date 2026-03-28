@@ -6,8 +6,6 @@ all 10 free tools + 2 Pro-gated tools are present and correctly named.
 
 import asyncio
 
-import pytest
-
 from contextpulse_sight import mcp_server as _mcp_server_mod
 
 # ---------------------------------------------------------------------------

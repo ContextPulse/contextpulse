@@ -8,17 +8,18 @@ version = "0.1.0"
 description = "Always-on screen capture for AI coding assistants — your AI can see what you see"
 readme = "README.md"
 requires-python = ">=3.12"
-license = "MIT"
+license = "AGPL-3.0-or-later"
 authors = [
     { name = "David Jerard", email = "david@jerardventures.com" },
 ]
-keywords = ["screen-capture", "mcp", "ai-agents", "claude", "context"]
+keywords = ["mcp", "ai-agents", "context", "claude", "screen-capture", "ocr"]
 classifiers = [
     "Development Status :: 3 - Alpha",
-    "Environment :: Win32 (MS Windows)",
     "Intended Audience :: Developers",
-    "Operating System :: Microsoft :: Windows",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
@@ -36,6 +37,8 @@ dependencies = [
 [project.urls]
 Homepage = "https://contextpulse.ai"
 Repository = "https://github.com/junkyard-rules/contextpulse"
+Issues = "https://github.com/junkyard-rules/contextpulse/issues"
+Documentation = "https://github.com/junkyard-rules/contextpulse#readme"
 
 [project.scripts]
 contextpulse-sight = "contextpulse_sight.app:main"

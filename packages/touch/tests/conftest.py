@@ -44,6 +44,7 @@ mock_anthropic = MagicMock()
 sys.modules["anthropic"] = mock_anthropic
 
 import ctypes
+
 if not hasattr(ctypes, "windll"):
     ctypes.windll = MagicMock()
 
@@ -76,10 +77,10 @@ def restore_mocked_modules():
 @pytest.fixture
 def activity_db(tmp_path):
     """Create a temp activity.db with Voice transcription events."""
+    import hashlib
     import json
     import sqlite3
     import time
-    import hashlib
 
     db_path = tmp_path / "activity.db"
     conn = sqlite3.connect(str(db_path))

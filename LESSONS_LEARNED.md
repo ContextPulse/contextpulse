@@ -11,6 +11,14 @@
 
 <!-- Archived 2026-03-26: Duplicate of GLOBAL_LESSONS_LEARNED.md "[2026-03-25] AI-generated marketing numbers need human verification" (same lesson, same incident) -->
 
+### [2026-03-28] activity.db lives in ~/screenshots/, not %APPDATA%/ContextPulse/
+**Context:** `session_learner.py` defaulted to `%APPDATA%/ContextPulse/activity.db` but dev-mode daemon writes to `~/screenshots/activity.db` (controlled by `OUTPUT_DIR` env var / `ACTIVITY_DB_PATH` in `contextpulse_core.config`).
+**Lesson:** Always use `ACTIVITY_DB_PATH` from `contextpulse_core.config` when reading activity.db — don't hardcode the path in voice tools. The MCP server gets this right; `session_learner.py` needs the same fix before shipping.
+
+### [2026-03-28] New Voice MCP tools need MCP server restart before they appear in session
+**Context:** `learn_from_session` and `rebuild_context_vocabulary` were added to `mcp_server.py` last session, but weren't available via `ToolSearch` this session — the MCP process was stale.
+**Lesson:** After adding new MCP tools, restart the relevant MCP server process (or restart Claude Code) before expecting them in ToolSearch. Fallback: call the underlying Python functions directly.
+
 ### [2026-03-25] Waitlist forms need a real backend before launch — localStorage is a placeholder
 **Context:** Added a waitlist email form to the Pro pricing card but it only saves to localStorage. This captures zero leads if the user clears their browser.
 **Lesson:** Before deploying any landing page with an email capture, wire it to a real backend (Cloudflare Workers KV, DynamoDB, or a form service like Formspree). localStorage is for dev only.

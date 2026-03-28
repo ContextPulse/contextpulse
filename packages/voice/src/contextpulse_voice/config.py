@@ -17,6 +17,7 @@ MODEL_DIR = VOICE_DATA_DIR / "models"
 # Vocabulary files
 VOCAB_FILE = VOICE_DATA_DIR / "vocabulary.json"
 LEARNED_VOCAB_FILE = VOICE_DATA_DIR / "vocabulary_learned.json"
+CONTEXT_VOCAB_FILE = VOICE_DATA_DIR / "vocabulary_context.json"
 USER_PROFILE_FILE = VOICE_DATA_DIR / "user_profile.json"
 
 

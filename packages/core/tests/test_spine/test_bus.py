@@ -3,7 +3,6 @@
 import time
 
 import pytest
-
 from contextpulse_core.spine.bus import EventBus
 from contextpulse_core.spine.events import ContextEvent, EventType, Modality
 

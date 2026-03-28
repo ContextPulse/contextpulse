@@ -40,6 +40,7 @@ sys.modules["rapidocr_onnxruntime"] = mock_rapidocr
 
 # Mock ctypes.windll for non-Windows or test environments
 import ctypes
+
 if not hasattr(ctypes, "windll"):
     ctypes.windll = MagicMock()
 

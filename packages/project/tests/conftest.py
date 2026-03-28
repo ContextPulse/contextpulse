@@ -1,8 +1,7 @@
 """Shared fixtures for contextpulse-project tests."""
 
-import pytest
-from pathlib import Path
 
+import pytest
 from contextpulse_project.registry import ProjectRegistry
 
 

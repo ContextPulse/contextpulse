@@ -154,9 +154,11 @@ def clean_with_llm(text: str, profile_context: str = "") -> str:
     try:
         import anthropic
 
-        domain_hint = ""
+        context_section = ""
         if profile_context:
-            domain_hint = f" {profile_context}"
+            context_section = (
+                f"\n\nContext (use for proper noun spelling): {profile_context}"
+            )
 
         client = anthropic.Anthropic(api_key=api_key)
         response = client.messages.create(
@@ -168,9 +170,10 @@ def clean_with_llm(text: str, profile_context: str = "") -> str:
                     "content": (
                         "Clean up this voice dictation. Fix grammar, punctuation, and "
                         "remove filler words. Keep the original meaning and tone. "
+                        "Use the context below for proper noun capitalization and spelling. "
                         "Do NOT add any commentary — return ONLY the cleaned text."
-                        f"{domain_hint}\n\n"
-                        f"{text}"
+                        f"{context_section}\n\n"
+                        f"Dictation: {text}"
                     ),
                 }
             ],

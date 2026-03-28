@@ -209,10 +209,10 @@ def test_capture_engine():
 
 def test_buffer():
     _section("3. Rolling Buffer")
+    import numpy as np
     from contextpulse_sight.buffer import RollingBuffer
     from contextpulse_sight.config import BUFFER_DIR
     from PIL import Image
-    import numpy as np
 
     # Use a temp buffer dir to avoid polluting real buffer
     test_buf_dir = BUFFER_DIR.parent / "buffer_test"
@@ -279,8 +279,8 @@ def test_buffer():
 
 def test_privacy():
     _section("4. Privacy Controls")
-    from contextpulse_sight.privacy import get_foreground_window_title, is_blocked
     import contextpulse_sight.config as cfg
+    from contextpulse_sight.privacy import get_foreground_window_title, is_blocked
 
     title = get_foreground_window_title()
     _label("get_foreground_window_title()", "PASS",
@@ -334,7 +334,7 @@ def test_icon():
 def test_hotkey_handler():
     _section("6. Hotkey Handler (in-process)")
     from contextpulse_sight.app import ContextPulseSightApp
-    from contextpulse_sight.config import OUTPUT_DIR, FILE_LATEST, FILE_ALL, FILE_REGION
+    from contextpulse_sight.config import FILE_ALL, FILE_LATEST, FILE_REGION, OUTPUT_DIR
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -425,7 +425,7 @@ def test_hotkey_handler():
 
 def test_daemon_lifecycle():
     _section("7. Daemon Lifecycle (subprocess)")
-    from contextpulse_sight.config import OUTPUT_DIR, BUFFER_DIR, FILE_LATEST
+    from contextpulse_sight.config import BUFFER_DIR, FILE_LATEST, OUTPUT_DIR
 
     python = sys.executable
 
@@ -523,9 +523,9 @@ def test_daemon_lifecycle():
             if log_file.exists():
                 content = log_file.read_text(errors="replace").strip()
                 if content:
-                    print(f"\n  --- Daemon log ---")
+                    print("\n  --- Daemon log ---")
                     print(f"  {content[-400:]}")
-                    print(f"  --- End daemon log ---\n")
+                    print("  --- End daemon log ---\n")
                 log_file.unlink(missing_ok=True)
 
 
@@ -671,8 +671,8 @@ def test_mcp_server():
 
 def test_ocr():
     _section("9. OCR Classifier")
-    from contextpulse_sight.classifier import classify_and_extract
     from contextpulse_sight import capture
+    from contextpulse_sight.classifier import classify_and_extract
 
     try:
         import mss as mss_lib
@@ -695,7 +695,7 @@ def test_ocr():
 
 def main():
     print(f"\n{'=' * _WIDTH}")
-    print(f"  ContextPulse Sight — User Acceptance Tests")
+    print("  ContextPulse Sight — User Acceptance Tests")
     print(f"{'=' * _WIDTH}", flush=True)
 
     imports_ok = test_preflight()
@@ -718,7 +718,7 @@ def main():
     print(f"  RESULTS: {_PASS} passed, {_FAIL} failed, {_SKIP} skipped"
           f" (of {total})")
     if _FAIL == 0:
-        print(f"  \033[92mAll tests passed!\033[0m")
+        print("  \033[92mAll tests passed!\033[0m")
     else:
         print(f"  \033[91m{_FAIL} test(s) need attention\033[0m")
     print(f"{'=' * _WIDTH}\n")

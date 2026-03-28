@@ -5,19 +5,13 @@ so this file can safely import contextpulse_core.daemon.
 """
 
 import inspect
-import sys
 import time
-import threading
-from pathlib import Path
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 # ---------------------------------------------------------------------------
 # Import daemon module (conftest.py ensures tkinter + pystray are mocked)
 # ---------------------------------------------------------------------------
 from contextpulse_core.daemon import ContextPulseDaemon
-
 
 # ---------------------------------------------------------------------------
 # Factory: build a daemon instance without triggering real __init__ side-effects

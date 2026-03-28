@@ -2,12 +2,10 @@
 
 import hashlib
 import time
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
-
-from contextpulse_core.spine import EventBus, EventType, Modality
+from contextpulse_core.spine import EventBus, EventType
 from contextpulse_sight.sight_module import SightModule
 
 
@@ -121,8 +119,8 @@ class TestAppDualWriteWiring:
     def test_app_has_sight_module_and_event_bus(self, tmp_path, monkeypatch):
         """ContextPulseSightApp creates SightModule + EventBus in __init__."""
         # Monkeypatch config paths to use tmp_path
-        import contextpulse_sight.config as cfg
         import contextpulse_sight.activity as act
+        import contextpulse_sight.config as cfg
         monkeypatch.setattr(cfg, "OUTPUT_DIR", tmp_path)
         monkeypatch.setattr(act, "ACTIVITY_DB_PATH", tmp_path / "activity.db")
 

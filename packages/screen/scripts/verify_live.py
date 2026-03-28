@@ -7,11 +7,8 @@ Usage:
     python packages/screen/scripts/verify_live.py
 """
 
-import json
-import sqlite3
 import sys
 import time
-from io import BytesIO
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -41,14 +38,11 @@ def test_imports():
     """Verify all modules import cleanly."""
     print("\n1. Module Imports")
     try:
-        from contextpulse_sight import capture, buffer, app, config, privacy
-        from contextpulse_sight import events, activity, ocr_worker, classifier
         check("9 core modules import", True)
     except Exception as e:
         check("9 core modules import", False, str(e))
 
     try:
-        from contextpulse_sight import mcp_server
         check("mcp_server imports", True)
     except Exception as e:
         # MCP server uses pydantic types that fail outside MCP runtime - expected
@@ -59,8 +53,13 @@ def test_config():
     """Verify config defaults are correct."""
     print("\n2. Config Defaults")
     from contextpulse_sight.config import (
-        BUFFER_MAX_AGE, JPEG_QUALITY, STORAGE_MODE, ALWAYS_BOTH_APPS,
-        AUTO_INTERVAL, EVENT_POLL_INTERVAL, ACTIVITY_MAX_AGE,
+        ACTIVITY_MAX_AGE,
+        ALWAYS_BOTH_APPS,
+        AUTO_INTERVAL,
+        BUFFER_MAX_AGE,
+        EVENT_POLL_INTERVAL,
+        JPEG_QUALITY,
+        STORAGE_MODE,
     )
     check("BUFFER_MAX_AGE == 1800 (30 min)", BUFFER_MAX_AGE == 1800, f"got {BUFFER_MAX_AGE}")
     check("JPEG_QUALITY == 75", JPEG_QUALITY == 75, f"got {JPEG_QUALITY}")
@@ -156,7 +155,7 @@ def test_capture_functions():
 def test_buffer():
     """Test rolling buffer reads."""
     print("\n5. Rolling Buffer")
-    from contextpulse_sight.buffer import RollingBuffer, parse_frame_path
+    from contextpulse_sight.buffer import RollingBuffer
 
     buf = RollingBuffer()
     count = buf.frame_count()
@@ -215,7 +214,9 @@ def test_privacy():
     """Test privacy functions."""
     print("\n7. Privacy Functions")
     from contextpulse_sight.privacy import (
-        get_foreground_window_title, get_foreground_process_name, is_blocked,
+        get_foreground_process_name,
+        get_foreground_window_title,
+        is_blocked,
     )
 
     title = get_foreground_window_title()

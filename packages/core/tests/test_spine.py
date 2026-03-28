@@ -2,13 +2,9 @@
 
 import json
 import sqlite3
-import tempfile
 import time
-from pathlib import Path
-from typing import Any, Callable
 
 import pytest
-
 from contextpulse_core.spine import (
     ContextEvent,
     EventBus,
@@ -16,7 +12,6 @@ from contextpulse_core.spine import (
     Modality,
     ModalityModule,
 )
-
 
 # ---------------------------------------------------------------------------
 # ContextEvent tests

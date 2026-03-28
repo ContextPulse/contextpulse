@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from contextpulse_sight import capture
 from contextpulse_sight.classifier import classify_and_extract
-from contextpulse_sight.privacy import get_foreground_window_title, get_foreground_process_name
+from contextpulse_sight.privacy import get_foreground_process_name, get_foreground_window_title
 
 OUTPUT_DIR = Path(__file__).parent.parent / "benchmark_results"
 
@@ -50,7 +50,6 @@ def open_app(cmd):
 
 def close_foreground():
     """Send Alt+F4 to close foreground window."""
-    import ctypes
     # Post Alt+F4 keystrokes
     subprocess.run(
         ["powershell", "-Command",
@@ -111,7 +110,7 @@ def print_report(results):
     print(f"\nScenarios tested: {total}")
     print(f"  Text-only eligible: {text_only} ({text_only/total*100:.0f}%)")
     print(f"  Image required:     {keep_image} ({keep_image/total*100:.0f}%)")
-    print(f"\nDisk usage:")
+    print("\nDisk usage:")
     print(f"  All images:  {total_img/1024:.0f} KB")
     print(f"  Smart mode:  {smart_bytes/1024:.0f} KB")
     print(f"  Savings:     {savings/1024:.0f} KB ({savings/total_img*100:.0f}%)" if total_img else "")
@@ -130,7 +129,7 @@ def print_report(results):
         )
 
     # Confidence distribution
-    print(f"\nConfidence by content type:")
+    print("\nConfidence by content type:")
     for r in results:
         bar_len = int(r["ocr_confidence"] * 30)
         bar = "#" * bar_len + "." * (30 - bar_len)
@@ -138,7 +137,7 @@ def print_report(results):
         print(f"  [{icon}] {r['ocr_confidence']:.2f} |{bar}| {r['label']}")
 
     # Text samples
-    print(f"\nText samples (first 150 chars):")
+    print("\nText samples (first 150 chars):")
     for r in results:
         if r["sample_text"]:
             snippet = r["sample_text"][:150].replace("\n", " ")

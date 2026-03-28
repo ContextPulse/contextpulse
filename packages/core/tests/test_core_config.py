@@ -1,19 +1,13 @@
 """Tests for contextpulse_core.config — persistent JSON config with env var fallback."""
 
 import json
-import os
-from pathlib import Path
-from unittest import mock
 
 import pytest
-
 from contextpulse_core.config import (
-    APPDATA_DIR,
-    CONFIG_FILE,
     _DEFAULTS,
+    get,
     load_config,
     save_config,
-    get,
 )
 
 
