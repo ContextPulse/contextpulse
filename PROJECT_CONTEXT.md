@@ -39,15 +39,15 @@ ContextPulse Daemon (single process)
 
 | Package | Version | Tests | MCP Tools | Status |
 |---------|---------|-------|-----------|--------|
-| **contextpulse-core** | 0.1.0 | 95 | — | Spine, config, licensing, settings, GUI theme |
+| **contextpulse-core** | 0.1.0 | 151 | — | Spine, config, licensing, settings, GUI theme |
 | **contextpulse-sight** | 0.1.0 | 283 | 12 (10 free + 2 Pro) | Screen capture, OCR, clipboard, activity DB |
 | **contextpulse-voice** | 0.1.0 | 195 | 3 | Hold-to-dictate, Whisper transcription, vocabulary |
 | **contextpulse-touch** | 0.1.0 | 56 | 3 | Typing bursts, mouse events, correction detection |
 | **contextpulse-project** | 0.1.0 | 38 | 5 | Project detection, journal routing |
-| **contextpulse-memory** | — | — | — | Planned (cross-session context persistence) |
-| **contextpulse-agent** | — | — | — | Planned (agent coordination) |
+| **contextpulse-memory** | 0.1.0 | 80 | 5 | Three-tier memory (hot/warm/cold), FTS5 search |
+| **contextpulse-agent** | 0.1.0 | — | — | Coming soon (v0.2 — agent coordination) |
 
-**Total: 726 tests, 23 MCP tools**
+**Total: 803 tests, 28 MCP tools**
 
 ## MCP Tools
 

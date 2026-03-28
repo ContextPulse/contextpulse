@@ -27,9 +27,20 @@ echo.
 echo PyInstaller output: dist\ContextPulse\
 echo.
 
-rem Step 4: Inno Setup (if available)
-set ISCC="C:\Users\david\AppData\Local\Programs\Inno Setup 6\ISCC.exe"
-if exist %ISCC% (
+rem Step 4: Inno Setup (if available) — check common install locations
+set ISCC=
+for %%P in (
+    "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
+    "%ProgramFiles%\Inno Setup 6\ISCC.exe"
+    "%LocalAppData%\Programs\Inno Setup 6\ISCC.exe"
+) do (
+    if exist %%P set ISCC=%%P
+)
+rem Also check PATH
+if not defined ISCC (
+    where ISCC.exe >nul 2>&1 && set ISCC=ISCC.exe
+)
+if defined ISCC (
     echo [4/4] Building installer with Inno Setup...
     %ISCC% installer.iss
     if errorlevel 1 (
