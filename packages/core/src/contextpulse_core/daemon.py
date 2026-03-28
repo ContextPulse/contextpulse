@@ -16,7 +16,6 @@ Production features:
   - Model download: progress indicator for first-run Whisper download
 """
 
-import ctypes
 import logging
 import os
 import subprocess
@@ -31,6 +30,7 @@ import pystray
 from contextpulse_core.first_run import is_first_run, show_welcome_dialog
 from contextpulse_core.license import is_licensed
 from contextpulse_core.license_dialog import show_nag_dialog
+from contextpulse_core.platform import get_platform_provider
 from contextpulse_core.settings import show_settings
 from contextpulse_core.spine import EventBus
 
@@ -45,7 +45,7 @@ CRASH_LOG = OUTPUT_DIR / "contextpulse_crash.log"
 ACTIVITY_DB_PATH = OUTPUT_DIR / os.environ.get("CONTEXTPULSE_ACTIVITY_DB", "activity.db")
 
 
-def _setup_logging():
+def _setup_logging() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
@@ -61,7 +61,7 @@ def _setup_logging():
 class ContextPulseDaemon:
     """Unified daemon that runs all ContextPulse modules in one process."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.stop_event = threading.Event()
 
         # EventBus — shared by all modules
@@ -84,7 +84,7 @@ class ContextPulseDaemon:
 
     # ── Module Initialization ─────────────────────────────────────
 
-    def _init_sight(self):
+    def _init_sight(self) -> None:
         """Initialize Sight (screen capture + OCR + clipboard)."""
         try:
             from contextpulse_sight.app import ContextPulseSightApp
@@ -100,7 +100,7 @@ class ContextPulseDaemon:
             self._sight_app = None
             logger.exception("Sight module failed to initialize: %s", exc)
 
-    def _init_voice(self):
+    def _init_voice(self) -> None:
         """Initialize Voice (hotkey → record → transcribe → paste)."""
         try:
             from contextpulse_voice.voice_module import VoiceModule
@@ -113,7 +113,7 @@ class ContextPulseDaemon:
             self._voice_module = None
             logger.exception("Voice module failed to initialize: %s", exc)
 
-    def _init_touch(self):
+    def _init_touch(self) -> None:
         """Initialize Touch (keyboard + mouse input capture)."""
         try:
             from contextpulse_touch.touch_module import TouchModule
@@ -128,7 +128,7 @@ class ContextPulseDaemon:
 
     # ── Module Lifecycle ──────────────────────────────────────────
 
-    def _start_modules(self):
+    def _start_modules(self) -> None:
         """Start all initialized modules."""
         # Sight — has its own internal thread management
         if self._sight_app:
@@ -181,7 +181,7 @@ class ContextPulseDaemon:
                 self._module_errors["touch"] = str(exc)
                 logger.exception("Touch module failed to start: %s", exc)
 
-    def _start_voice_with_progress(self):
+    def _start_voice_with_progress(self) -> None:
         """Start Voice module with model download progress handling."""
         try:
             # Check if model needs downloading (frozen EXE only)
@@ -209,7 +209,7 @@ class ContextPulseDaemon:
             self._log_crash("voice", exc)
             logger.exception("Voice module failed to start: %s", exc)
 
-    def _stop_modules(self):
+    def _stop_modules(self) -> None:
         """Stop all modules gracefully."""
         self.stop_event.set()
 
@@ -234,7 +234,7 @@ class ContextPulseDaemon:
 
     # ── Watchdog ──────────────────────────────────────────────────
 
-    def _watchdog_loop(self):
+    def _watchdog_loop(self) -> None:
         """Monitor Voice and Touch modules, restart if they die.
 
         Sight has its own internal watchdog. This covers Voice and Touch.
@@ -431,7 +431,7 @@ class ContextPulseDaemon:
             pystray.MenuItem("Quit", self._quit),
         )
 
-    def _update_tray(self):
+    def _update_tray(self) -> None:
         """Update tray icon based on state."""
         if not hasattr(self, "tray") or not self.tray:
             return
@@ -440,7 +440,7 @@ class ContextPulseDaemon:
         paused = self._sight_app and self._sight_app.paused
         self.tray.icon = create_icon(warning if paused else None)
 
-    def _quit(self):
+    def _quit(self) -> None:
         logger.info("ContextPulse shutting down")
         self._stop_modules()
 
@@ -453,21 +453,19 @@ class ContextPulseDaemon:
 
         # Release mutex
         if hasattr(self, "_mutex") and self._mutex:
-            ctypes.windll.kernel32.ReleaseMutex(self._mutex)
-            ctypes.windll.kernel32.CloseHandle(self._mutex)
+            get_platform_provider().release_single_instance_lock(self._mutex)
 
         if hasattr(self, "tray") and self.tray:
             self.tray.stop()
 
     # ── Main Entry ────────────────────────────────────────────────
 
-    def run(self):
+    def run(self) -> None:
         """Main entry point — single-instance guard, start modules, run tray."""
-        # Single-instance mutex
-        self._mutex = ctypes.windll.kernel32.CreateMutexW(
-            None, True, "ContextPulse_SingleInstance"
-        )
-        if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        # Single-instance guard via platform provider
+        platform = get_platform_provider()
+        self._mutex = platform.acquire_single_instance_lock("ContextPulse_SingleInstance")
+        if self._mutex is None:
             logger.error("ContextPulse is already running. Exiting.")
             print("ContextPulse is already running.", file=sys.stderr)
             sys.exit(1)
@@ -505,7 +503,7 @@ class ContextPulseDaemon:
         self.tray.run()  # blocks until quit
 
 
-def main():
+def main() -> None:
     """Entry point for contextpulse CLI command."""
     _setup_logging()
 

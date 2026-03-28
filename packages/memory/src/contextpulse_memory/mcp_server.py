@@ -59,6 +59,11 @@ def memory_store(
         tags: Optional grouping tags (e.g., ["project", "contextpulse"])
         ttl_hours: Time-to-live in hours (default 24h, 0 = permanent)
     """
+    if not key or not key.strip():
+        return json.dumps({"success": False, "error": "key cannot be empty"})
+    if ttl_hours < 0:
+        return json.dumps({"success": False, "error": "ttl_hours cannot be negative"})
+    ttl_hours = min(ttl_hours, 8760.0)  # cap at 1 year
     store = _get_store()
     tags = tags or []
     ttl = ttl_hours if ttl_hours > 0 else None
@@ -98,6 +103,9 @@ def memory_search(query: str, limit: int = 20) -> str:
         query: Search terms (FTS5 syntax supported)
         limit: Maximum results to return (default 20)
     """
+    limit = max(1, min(limit, 200))
+    if not query or not query.strip():
+        return json.dumps({"count": 0, "results": [], "query": query, "error": "query cannot be empty"})
     store = _get_store()
     results = store.search(query, limit=limit)
     return json.dumps({
@@ -117,6 +125,7 @@ def memory_list(tag: str | None = None, limit: int = 50) -> str:
         tag: Optional tag to filter by (e.g., "project", "deadline")
         limit: Maximum entries to return (default 50)
     """
+    limit = max(1, min(limit, 500))
     store = _get_store()
     entries = store.list_all(tag=tag, limit=limit)
     return json.dumps({

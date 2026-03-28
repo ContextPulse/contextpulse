@@ -109,6 +109,10 @@ def get_screenshot(mode: str = "active", monitor_index: int | None = None) -> An
     if is_blocked():
         return "Capture blocked: active window matches privacy blocklist."
 
+    valid_modes = {"active", "all", "monitor", "region"}
+    if mode not in valid_modes:
+        return f"Invalid mode '{mode}'. Must be one of: {', '.join(sorted(valid_modes))}"
+
     if mode == "all":
         monitors = capture.capture_all_monitors()
         results = []
@@ -158,6 +162,10 @@ def get_recent(count: int = 3, seconds: int = 60, min_diff: float = 0.0) -> list
 
     Returns images inline so Claude can see them directly.
     """
+    count = max(1, min(count, 50))
+    seconds = max(1, min(seconds, 86400))
+    min_diff = max(0.0, min(min_diff, 100.0))
+
     frames = _buffer.get_recent(seconds)
     if not frames:
         return []
@@ -312,6 +320,7 @@ def get_activity_summary(hours: float = 8.0) -> str:
     Args:
         hours: How many hours back to look (default 8).
     """
+    hours = max(0.1, min(hours, 168.0))  # cap at 1 week
     summary = _activity_db.get_summary(hours)
     if not summary["total_captures"]:
         return f"No activity recorded in the last {hours:.0f} hours."
@@ -354,6 +363,9 @@ def search_history(query: str, minutes_ago: int = 60) -> str:
         query: Search terms (searches window titles, app names, and OCR text).
         minutes_ago: How far back to search (default 60 minutes).
     """
+    minutes_ago = max(1, min(minutes_ago, 10080))  # cap at 1 week
+    if not query or not query.strip():
+        return "Search query cannot be empty."
     results = _activity_db.search(query, minutes_ago)
     if not results:
         return f"No results for '{query}' in the last {minutes_ago} minutes."
@@ -390,6 +402,7 @@ def get_context_at(minutes_ago: float = 5.0) -> list:
 
     Returns the frame as an image with metadata text.
     """
+    minutes_ago = max(0.1, min(minutes_ago, 10080.0))  # cap at 1 week
     record = _activity_db.get_context_at(minutes_ago)
     if not record:
         return f"No frame found from approximately {minutes_ago:.0f} minutes ago."
@@ -436,6 +449,7 @@ def get_clipboard_history(count: int = 10) -> str:
     Args:
         count: Number of recent entries to return (default 10).
     """
+    count = max(1, min(count, 100))
     entries = _activity_db.get_clipboard_history(count)
     if not entries:
         return "No clipboard history recorded. Is the daemon running?"
@@ -468,6 +482,9 @@ def search_clipboard(query: str, minutes_ago: int = 60) -> str:
         query: Text to search for in clipboard history.
         minutes_ago: How far back to search (default 60 minutes).
     """
+    minutes_ago = max(1, min(minutes_ago, 10080))
+    if not query or not query.strip():
+        return "Search query cannot be empty."
     results = _activity_db.search_clipboard(query, minutes_ago)
     if not results:
         return f"No clipboard entries matching '{query}' in the last {minutes_ago} minutes."
@@ -497,6 +514,7 @@ def get_agent_stats(hours: float = 24.0) -> str:
     Args:
         hours: How many hours back to report (default 24).
     """
+    hours = max(0.1, min(hours, 168.0))
     stats = _activity_db.get_agent_stats(hours)
     if not stats["total_calls"]:
         return f"No MCP tool calls recorded in the last {hours:.0f} hours."
@@ -535,6 +553,12 @@ def search_all_events(query: str, minutes_ago: int = 60, modality: str | None = 
         minutes_ago: How far back to search (default 60 minutes).
         modality: Optional filter: "sight", "voice", "clipboard", "keys", "flow", "system".
     """
+    minutes_ago = max(1, min(minutes_ago, 10080))
+    if not query or not query.strip():
+        return "Search query cannot be empty."
+    valid_modalities = {None, "sight", "voice", "clipboard", "keys", "flow", "system"}
+    if modality not in valid_modalities:
+        return f"Invalid modality '{modality}'. Must be one of: {', '.join(str(m) for m in sorted(valid_modalities, key=str))}"
     bus = _get_event_bus()
     results = bus.search(query, minutes_ago=minutes_ago, modality=modality)
 
@@ -588,6 +612,10 @@ def get_event_timeline(minutes_ago: float = 5.0, modality: str | None = None) ->
         minutes_ago: How many minutes back to look (default 5).
         modality: Optional filter: "sight", "voice", "clipboard", "keys", "flow", "system".
     """
+    minutes_ago = max(0.1, min(minutes_ago, 10080.0))
+    valid_modalities = {None, "sight", "voice", "clipboard", "keys", "flow", "system"}
+    if modality not in valid_modalities:
+        return f"Invalid modality '{modality}'. Must be one of: {', '.join(str(m) for m in sorted(valid_modalities, key=str))}"
     bus = _get_event_bus()
     seconds = minutes_ago * 60
     events = bus.query_recent(seconds=seconds, modality=modality, limit=100)

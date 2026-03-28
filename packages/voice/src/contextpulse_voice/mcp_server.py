@@ -41,6 +41,9 @@ def get_recent_transcriptions(minutes: int = 30, limit: int = 10) -> str:
         minutes: How many minutes back to look (default 30).
         limit: Maximum number of transcriptions to return (default 10).
     """
+    minutes = max(1, min(minutes, 10080))  # cap at 1 week
+    limit = max(1, min(limit, 200))
+
     conn = _get_db()
     if not conn:
         return "No activity database found. Voice module may not have been started yet."
@@ -90,6 +93,8 @@ def get_voice_stats(hours: float = 8.0) -> str:
     Args:
         hours: How many hours back to analyze (default 8).
     """
+    hours = max(0.1, min(hours, 168.0))  # cap at 1 week
+
     conn = _get_db()
     if not conn:
         return "No activity database found."

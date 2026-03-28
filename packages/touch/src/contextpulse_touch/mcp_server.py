@@ -39,6 +39,11 @@ def get_recent_touch_events(seconds: int = 300, event_types: str = "all") -> str
         seconds: How many seconds back to look (default 300 = 5 min).
         event_types: Filter — "all", "keyboard", "mouse", or "corrections".
     """
+    seconds = max(1, min(seconds, 86400))  # cap at 24h
+    valid_types = {"all", "keyboard", "mouse", "corrections"}
+    if event_types not in valid_types:
+        return f"Invalid event_types '{event_types}'. Must be one of: {', '.join(sorted(valid_types))}"
+
     conn = _get_db()
     if not conn:
         return "No activity database found. Touch module may not have been started yet."
@@ -107,6 +112,8 @@ def get_touch_stats(hours: float = 8.0) -> str:
     Args:
         hours: How many hours back to analyze (default 8).
     """
+    hours = max(0.1, min(hours, 168.0))  # cap at 1 week
+
     conn = _get_db()
     if not conn:
         return "No activity database found."
@@ -183,6 +190,8 @@ def get_correction_history(limit: int = 20) -> str:
     Args:
         limit: Maximum number of corrections to return (default 20).
     """
+    limit = max(1, min(limit, 200))
+
     conn = _get_db()
     if not conn:
         return "No activity database found."
