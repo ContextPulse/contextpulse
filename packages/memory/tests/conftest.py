@@ -1,7 +1,6 @@
 """Shared fixtures for contextpulse-memory tests."""
 
 import pytest
-
 from contextpulse_memory.storage import MemoryStore
 
 

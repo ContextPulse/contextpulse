@@ -94,7 +94,8 @@ CREATE TABLE IF NOT EXISTS memories (
     expires_at REAL,
     attention_score REAL DEFAULT 0.0,
     source_event_id TEXT,
-    modality TEXT
+    modality TEXT,
+    embedding BLOB
 );
 
 CREATE INDEX IF NOT EXISTS idx_mem_key ON memories(key);
@@ -158,6 +159,13 @@ class WarmTier:
             if cursor.fetchone() is None:
                 self._conn.executescript(_WARM_FTS)
                 self._conn.executescript(_WARM_TRIGGERS)
+            # Migration: add embedding column if missing (existing databases pre-v0.2)
+            existing = {
+                row[1]
+                for row in self._conn.execute("PRAGMA table_info(memories)").fetchall()
+            }
+            if "embedding" not in existing:
+                self._conn.execute("ALTER TABLE memories ADD COLUMN embedding BLOB")
             self._conn.commit()
 
     def upsert(
@@ -169,6 +177,7 @@ class WarmTier:
         attention_score: float = 0.0,
         source_event_id: str | None = None,
         modality: str | None = None,
+        embedding: bytes | None = None,
     ) -> None:
         now = time.time()
         tags_json = json.dumps(sorted(tags))
@@ -176,8 +185,8 @@ class WarmTier:
             self._conn.execute(
                 """INSERT INTO memories
                    (key, value, tags, created_at, updated_at, expires_at,
-                    attention_score, source_event_id, modality)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    attention_score, source_event_id, modality, embedding)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(key) DO UPDATE SET
                      value = excluded.value,
                      tags = excluded.tags,
@@ -185,9 +194,10 @@ class WarmTier:
                      expires_at = excluded.expires_at,
                      attention_score = excluded.attention_score,
                      source_event_id = excluded.source_event_id,
-                     modality = excluded.modality""",
+                     modality = excluded.modality,
+                     embedding = excluded.embedding""",
                 (key, value, tags_json, now, now, expires_at,
-                 attention_score, source_event_id, modality),
+                 attention_score, source_event_id, modality, embedding),
             )
             self._conn.commit()
 
@@ -267,6 +277,57 @@ class WarmTier:
                 rows = cursor.fetchall()
         return [self._row_to_dict(r) for r in rows]
 
+    def semantic_search(
+        self, query_embedding: list[float], limit: int = 20
+    ) -> list[dict[str, Any]]:
+        """Return top-k non-expired memories ranked by cosine similarity.
+
+        Fetches all rows that have a stored embedding, computes cosine
+        similarity in-memory, and returns the top *limit* results.
+
+        TODO: Replace with a FAISS/annoy index once memory counts exceed ~10K.
+        """
+        import numpy as np
+
+        now = time.time()
+        with self._lock:
+            cursor = self._conn.execute(
+                """SELECT id, key, value, tags, created_at, updated_at, expires_at,
+                          attention_score, source_event_id, modality, embedding
+                   FROM memories
+                   WHERE embedding IS NOT NULL
+                     AND (expires_at IS NULL OR expires_at > ?)""",
+                (now,),
+            )
+            rows = cursor.fetchall()
+
+        if not rows:
+            return []
+
+        q = np.array(query_embedding, dtype=np.float32)
+        q = q / (np.linalg.norm(q) + 1e-9)
+
+        scored: list[tuple[float, dict[str, Any]]] = []
+        for row in rows:
+            d = dict(row)
+            emb_blob = d.pop("embedding")
+            if isinstance(d.get("tags"), str):
+                try:
+                    d["tags"] = json.loads(d["tags"])
+                except (json.JSONDecodeError, TypeError):
+                    d["tags"] = []
+            emb = np.frombuffer(emb_blob, dtype=np.float32)
+            emb = emb / (np.linalg.norm(emb) + 1e-9)
+            sim = float(np.dot(q, emb))
+            scored.append((sim, d))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        results = []
+        for sim, d in scored[:limit]:
+            d["similarity"] = round(sim, 4)
+            results.append(d)
+        return results
+
     def prune_expired(self) -> int:
         """Delete expired entries. Returns count removed."""
         now = time.time()
@@ -289,6 +350,7 @@ class WarmTier:
     @staticmethod
     def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         d = dict(row)
+        d.pop("embedding", None)  # raw bytes are not exposed in public results
         if isinstance(d.get("tags"), str):
             try:
                 d["tags"] = json.loads(d["tags"])
@@ -465,10 +527,24 @@ class MemoryStore:
         expires_at = time.time() + (ttl_hours * 3600) if ttl_hours else None
         hot_ttl = min(ttl_hours * 3600, self.DEFAULT_HOT_TTL) if ttl_hours else self.DEFAULT_HOT_TTL
         self.hot.put(key, value, tags, ttl=hot_ttl)
+
+        # Compute embedding — optional, silently skipped if model not available
+        embedding_bytes: bytes | None = None
+        try:
+            import numpy as np
+            from contextpulse_memory.embeddings import get_engine
+            engine = get_engine()
+            vec = engine.embed(value)
+            if vec is not None:
+                embedding_bytes = np.array(vec, dtype=np.float32).tobytes()
+        except Exception:
+            pass
+
         self.warm.upsert(
             key=key, value=value, tags=tags, expires_at=expires_at,
             attention_score=attention_score,
             source_event_id=source_event_id, modality=modality,
+            embedding=embedding_bytes,
         )
 
     def recall(self, key: str) -> dict[str, Any] | None:
@@ -488,6 +564,85 @@ class MemoryStore:
                 r["tier"] = "cold"
             results.extend(cold)
         return results
+
+    def semantic_search(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
+        """Pure semantic (vector) search using the embedding engine.
+
+        Returns results ranked by cosine similarity. Falls back to FTS search
+        if the embedding model is not available.
+        """
+        try:
+            from contextpulse_memory.embeddings import get_engine
+            engine = get_engine()
+            if not engine.is_available():
+                return self.search(query, limit=limit)
+            vec = engine.embed(query)
+            if vec is None:
+                return self.search(query, limit=limit)
+            return self.warm.semantic_search(vec, limit=limit)
+        except Exception:
+            return self.search(query, limit=limit)
+
+    def hybrid_search(
+        self,
+        query: str,
+        limit: int = 20,
+        fts_weight: float = 0.4,
+        semantic_weight: float = 0.6,
+    ) -> list[dict[str, Any]]:
+        """Combine FTS5 keyword scores with semantic cosine similarity scores.
+
+        Both score sets are normalised to [0, 1] before weighting.  Falls back
+        gracefully to pure FTS search when the embedding model is unavailable.
+        """
+        try:
+            from contextpulse_memory.embeddings import get_engine
+            engine = get_engine()
+            if not engine.is_available():
+                return self.search(query, limit=limit)
+            vec = engine.embed(query)
+            if vec is None:
+                return self.search(query, limit=limit)
+        except Exception:
+            return self.search(query, limit=limit)
+
+        fetch = limit * 3  # over-fetch so both result sets can overlap
+
+        fts_results = self.warm.search(query, limit=fetch)
+        sem_results = self.warm.semantic_search(vec, limit=fetch)
+
+        # Build rank-based FTS scores: top result = 1.0, last = ~0
+        fts_scores: dict[str, float] = {
+            r["key"]: 1.0 - i / max(len(fts_results), 1)
+            for i, r in enumerate(fts_results)
+        }
+        # Semantic scores are already cosine similarities in [−1, 1]; clamp to [0, 1]
+        sem_scores: dict[str, float] = {
+            r["key"]: max(0.0, r.get("similarity", 0.0))
+            for r in sem_results
+        }
+
+        # Merge all candidate result dicts (keyed by memory key)
+        all_results: dict[str, dict[str, Any]] = {}
+        for r in fts_results:
+            all_results[r["key"]] = r
+        for r in sem_results:
+            # Prefer the dict from semantic_search (has similarity field)
+            all_results.setdefault(r["key"], r)
+
+        # Compute hybrid scores and sort
+        scored: list[tuple[float, dict[str, Any]]] = []
+        for key, result in all_results.items():
+            score = (
+                fts_weight * fts_scores.get(key, 0.0)
+                + semantic_weight * sem_scores.get(key, 0.0)
+            )
+            entry = result.copy()
+            entry["hybrid_score"] = round(score, 4)
+            scored.append((score, entry))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [entry for _, entry in scored[:limit]]
 
     def list_all(self, tag: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
         return self.warm.list_all(tag=tag, limit=limit)

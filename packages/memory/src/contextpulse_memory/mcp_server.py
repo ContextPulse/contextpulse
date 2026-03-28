@@ -1,11 +1,12 @@
 """MCP stdio server exposing persistent memory tools to Claude Code.
 
 Tools:
-  memory_store   — store a key-value memory with tags and TTL
-  memory_recall  — retrieve a memory by key
-  memory_search  — full-text search across all memories (warm + cold)
-  memory_list    — list memories with optional tag filter
-  memory_forget  — delete a memory by key
+  memory_store          — store a key-value memory with tags and TTL
+  memory_recall         — retrieve a memory by key
+  memory_search         — hybrid / keyword / semantic search across all memories
+  memory_semantic_search — pure semantic (vector) search
+  memory_list           — list memories with optional tag filter
+  memory_forget         — delete a memory by key
 """
 
 from __future__ import annotations
@@ -92,26 +93,70 @@ def memory_recall(key: str) -> str:
 
 
 @mcp_app.tool()
-def memory_search(query: str, limit: int = 20) -> str:
-    """Full-text search across all stored memories.
+def memory_search(
+    query: str,
+    limit: int = 20,
+    mode: str = "hybrid",
+) -> str:
+    """Search stored memories by keyword, semantic similarity, or both.
 
-    Searches key names, values, and tags using FTS5 with porter stemming.
-    Results span warm tier (recent) and cold tier (older summaries).
-    Supports FTS5 syntax: "word1 AND word2", "phrase", "word*".
+    Modes:
+      hybrid   (default) — combines FTS5 keyword rank with semantic cosine
+                           similarity (fts 40%, semantic 60%). Falls back to
+                           keyword-only if the embedding model is not loaded.
+      keyword  — FTS5 full-text search with porter stemming.
+                 Supports FTS5 syntax: "word1 AND word2", "phrase", "word*".
+                 Results span warm tier and cold tier summaries.
+      semantic — Pure vector search using all-MiniLM-L6-v2 embeddings.
+                 Falls back to keyword search if model is unavailable.
 
     Args:
-        query: Search terms (FTS5 syntax supported)
-        limit: Maximum results to return (default 20)
+        query: Search terms (FTS5 syntax supported in keyword/hybrid modes)
+        limit: Maximum results to return (1–200, default 20)
+        mode:  Search mode — "hybrid", "keyword", or "semantic" (default "hybrid")
+    """
+    limit = max(1, min(limit, 200))
+    if not query or not query.strip():
+        return json.dumps({"count": 0, "results": [], "query": query, "error": "query cannot be empty"})
+    if mode not in ("hybrid", "keyword", "semantic"):
+        mode = "hybrid"
+    store = _get_store()
+    if mode == "hybrid":
+        results = store.hybrid_search(query, limit=limit)
+    elif mode == "semantic":
+        results = store.semantic_search(query, limit=limit)
+    else:
+        results = store.search(query, limit=limit)
+    return json.dumps({
+        "count": len(results),
+        "results": results,
+        "query": query,
+        "mode": mode,
+    }, default=str)
+
+
+@mcp_app.tool()
+def memory_semantic_search(query: str, limit: int = 20) -> str:
+    """Search memories by semantic meaning using vector embeddings.
+
+    Uses the all-MiniLM-L6-v2 model to find conceptually similar memories even
+    when they use different words.  Falls back to FTS keyword search if the
+    embedding model has not been downloaded yet.
+
+    Args:
+        query: Natural language query (plain text — no FTS syntax needed)
+        limit: Maximum results to return (1–200, default 20)
     """
     limit = max(1, min(limit, 200))
     if not query or not query.strip():
         return json.dumps({"count": 0, "results": [], "query": query, "error": "query cannot be empty"})
     store = _get_store()
-    results = store.search(query, limit=limit)
+    results = store.semantic_search(query, limit=limit)
     return json.dumps({
         "count": len(results),
         "results": results,
         "query": query,
+        "mode": "semantic",
     }, default=str)
 
 

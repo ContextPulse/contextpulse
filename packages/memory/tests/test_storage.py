@@ -5,9 +5,7 @@ from __future__ import annotations
 import time
 
 import pytest
-
 from contextpulse_memory.storage import ColdTier, HotTier, MemoryStore, WarmTier
-
 
 # ---------------------------------------------------------------------------
 # HotTier tests
