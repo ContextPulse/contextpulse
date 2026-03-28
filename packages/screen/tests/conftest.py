@@ -10,6 +10,10 @@ import pytest
 SRC_DIR = Path(__file__).parent.parent / "src"
 sys.path.insert(0, str(SRC_DIR))
 
+# Also add the core package source (needed for platform abstraction layer)
+CORE_SRC_DIR = Path(__file__).parent.parent.parent / "core" / "src"
+sys.path.insert(0, str(CORE_SRC_DIR))
+
 # Save originals before mocking so we can restore them after screen tests
 _MOCKED_MODULES = ["mss", "pynput", "pynput.keyboard", "pystray", "rapidocr_onnxruntime"]
 _original_modules = {k: sys.modules.get(k) for k in _MOCKED_MODULES}
@@ -38,6 +42,23 @@ sys.modules["rapidocr_onnxruntime"] = mock_rapidocr
 import ctypes
 if not hasattr(ctypes, "windll"):
     ctypes.windll = MagicMock()
+
+# Set up a mock platform provider so tests work on any OS.
+# The core conftest sets this up first; ensure it's set when running
+# screen tests in isolation too.
+from contextpulse_core.platform import factory as _platform_factory
+from contextpulse_core.platform.base import PlatformProvider
+
+if _platform_factory._instance is None:
+    _mock_platform = MagicMock(spec=PlatformProvider)
+    _mock_platform.get_foreground_window_title.return_value = ""
+    _mock_platform.get_foreground_process_name.return_value = ""
+    _mock_platform.get_cursor_pos.return_value = (500, 500)
+    _mock_platform.get_clipboard_sequence.return_value = 0
+    _mock_platform.get_clipboard_text.return_value = None
+    _mock_platform.get_caret_position.return_value = None
+    _mock_platform.acquire_single_instance_lock.return_value = object()
+    _platform_factory._instance = _mock_platform
 
 
 @pytest.fixture(scope="session", autouse=True)

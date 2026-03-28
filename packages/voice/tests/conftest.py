@@ -47,6 +47,21 @@ import ctypes
 if not hasattr(ctypes, "windll"):
     ctypes.windll = MagicMock()
 
+# Set up a mock platform provider so tests work on any OS
+from contextpulse_core.platform import factory as _platform_factory
+from contextpulse_core.platform.base import PlatformProvider
+
+if _platform_factory._instance is None:
+    _mock_platform = MagicMock(spec=PlatformProvider)
+    _mock_platform.get_foreground_window_title.return_value = ""
+    _mock_platform.get_foreground_process_name.return_value = ""
+    _mock_platform.get_cursor_pos.return_value = (500, 500)
+    _mock_platform.get_clipboard_sequence.return_value = 0
+    _mock_platform.get_clipboard_text.return_value = None
+    _mock_platform.get_caret_position.return_value = None
+    _mock_platform.acquire_single_instance_lock.return_value = object()
+    _platform_factory._instance = _mock_platform
+
 
 @pytest.fixture(scope="session", autouse=True)
 def restore_mocked_modules():

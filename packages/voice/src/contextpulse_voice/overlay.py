@@ -201,35 +201,10 @@ class RecordingOverlay:
 
     @staticmethod
     def _get_caret_position() -> tuple[int, int] | None:
-        """Get the text caret (blinking cursor) position using Win32 API."""
+        """Get the text caret (blinking cursor) position via platform provider."""
         try:
-            import ctypes
-            import ctypes.wintypes as wt
-
-            class GUITHREADINFO(ctypes.Structure):
-                _fields_ = [
-                    ("cbSize", wt.DWORD),
-                    ("flags", wt.DWORD),
-                    ("hwndActive", wt.HWND),
-                    ("hwndFocus", wt.HWND),
-                    ("hwndCapture", wt.HWND),
-                    ("hwndMenuOwner", wt.HWND),
-                    ("hwndMoveSize", wt.HWND),
-                    ("hwndCaret", wt.HWND),
-                    ("rcCaret", wt.RECT),
-                ]
-
-            gui = GUITHREADINFO()
-            gui.cbSize = ctypes.sizeof(GUITHREADINFO)
-            if not ctypes.windll.user32.GetGUIThreadInfo(0, ctypes.byref(gui)):
-                return None
-            if not gui.hwndCaret:
-                return None
-
-            # rcCaret is in client coordinates — convert to screen
-            point = wt.POINT(gui.rcCaret.left, gui.rcCaret.top)
-            ctypes.windll.user32.ClientToScreen(gui.hwndCaret, ctypes.byref(point))
-            return (point.x, point.y)
+            from contextpulse_core.platform import get_platform_provider
+            return get_platform_provider().get_caret_position()
         except Exception:
             return None
 

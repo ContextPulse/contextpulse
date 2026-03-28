@@ -197,27 +197,10 @@ class VoiceModule(ModalityModule):
     def _get_foreground_info(self) -> tuple[str, str]:
         """Get current foreground app and window title."""
         try:
-            import ctypes
-            hwnd = ctypes.windll.user32.GetForegroundWindow()
-            length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
-            buf = ctypes.create_unicode_buffer(length + 1)
-            ctypes.windll.user32.GetWindowTextW(hwnd, buf, length + 1)
-            title = buf.value
-
-            # Get process name
-            import ctypes.wintypes
-            pid = ctypes.wintypes.DWORD()
-            ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-            handle = ctypes.windll.kernel32.OpenProcess(0x0400 | 0x0010, False, pid.value)
-            if handle:
-                buf2 = ctypes.create_unicode_buffer(260)
-                size = ctypes.wintypes.DWORD(260)
-                ctypes.windll.kernel32.QueryFullProcessImageNameW(handle, 0, buf2, ctypes.byref(size))
-                ctypes.windll.kernel32.CloseHandle(handle)
-                app_name = os.path.basename(buf2.value)
-            else:
-                app_name = ""
-            return (app_name, title)
+            from contextpulse_core.platform import get_platform_provider
+            platform = get_platform_provider()
+            return (platform.get_foreground_process_name(),
+                    platform.get_foreground_window_title())
         except Exception:
             return ("", "")
 

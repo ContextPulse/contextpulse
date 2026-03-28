@@ -2,7 +2,7 @@
 # Deploy the ContextPulse license webhook to AWS via SAM.
 #
 # Prerequisites:
-#   - AWS CLI configured with credentials for account 397348547231
+#   - AWS CLI configured with your AWS credentials
 #   - AWS SAM CLI installed (pip install aws-sam-cli)
 #   - Private key stored in SSM: /contextpulse/license-private-key
 #   - SES domain verified for contextpulse.ai
