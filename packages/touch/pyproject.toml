@@ -6,12 +6,33 @@ build-backend = "setuptools.build_meta"
 name = "contextpulse-touch"
 version = "0.1.0"
 description = "Keyboard and mouse input capture for AI agents — ContextPulse platform"
+authors = [
+    { name = "David Jerard", email = "david@jerardventures.com" },
+]
+license = "AGPL-3.0-or-later"
+readme = "README.md"
+keywords = ["mcp", "ai-agents", "context", "claude", "keyboard", "mouse", "input"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+]
 requires-python = ">=3.12"
 dependencies = [
     "contextpulse-core>=0.1.0",
     "mcp>=1.0",
     "pynput>=1.7",
 ]
+
+[project.urls]
+Homepage = "https://contextpulse.ai"
+Repository = "https://github.com/junkyard-rules/contextpulse"
+Issues = "https://github.com/junkyard-rules/contextpulse/issues"
+Documentation = "https://github.com/junkyard-rules/contextpulse#readme"
 
 [project.scripts]
 contextpulse-touch-mcp = "contextpulse_touch.mcp_server:main"

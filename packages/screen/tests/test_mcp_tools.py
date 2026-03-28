@@ -6,14 +6,11 @@ patching dependencies at the module level.
 """
 
 import time
-from pathlib import Path
-from unittest.mock import patch, MagicMock
-
-import numpy as np
-from PIL import Image
+from unittest.mock import patch
 
 from contextpulse_sight.activity import ActivityDB
 from contextpulse_sight.buffer import RollingBuffer
+from PIL import Image
 
 
 def _make_image(width=1280, height=720, color=(128, 128, 128)):

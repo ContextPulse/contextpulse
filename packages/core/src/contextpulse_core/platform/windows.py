@@ -140,11 +140,63 @@ class WindowsPlatformProvider(PlatformProvider):
     # -- Single-instance guard ---------------------------------------------
 
     def acquire_single_instance_lock(self, name: str) -> object | None:
-        """Acquire a Windows named mutex for single-instance enforcement."""
+        """Acquire a Windows named mutex for single-instance enforcement.
+
+        Uses SetLastError(0) before CreateMutexW to prevent stale error codes
+        from masking ERROR_ALREADY_EXISTS. Closes the handle on duplicate to
+        prevent zombie processes holding dangling mutex handles.
+        """
+        ERROR_ALREADY_EXISTS = 183
+        ctypes.windll.kernel32.SetLastError(0)
         mutex = ctypes.windll.kernel32.CreateMutexW(None, True, name)
-        if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        last_error = ctypes.windll.kernel32.GetLastError()
+        if last_error == ERROR_ALREADY_EXISTS:
+            # Close the handle — otherwise this process holds a dangling
+            # reference that keeps the mutex alive even if the owner dies.
+            if mutex:
+                ctypes.windll.kernel32.CloseHandle(mutex)
+            return None
+        if not mutex:
             return None
         return mutex
+
+    def find_contextpulse_processes(self, exclude_pid: int | None = None) -> list[int]:
+        """Find PIDs of running ContextPulse daemon processes.
+
+        Scans for pythonw.exe processes whose command line contains
+        'contextpulse'. Optionally excludes a specific PID (e.g., self).
+        """
+        import subprocess
+        pids: list[int] = []
+        try:
+            result = subprocess.run(
+                ["powershell", "-Command",
+                 "Get-CimInstance Win32_Process -Filter \"Name='pythonw.exe'\" "
+                 "| Where-Object { $_.CommandLine -like '*contextpulse*' } "
+                 "| Select-Object -ExpandProperty ProcessId"],
+                capture_output=True, text=True, timeout=10,
+            )
+            for line in result.stdout.strip().splitlines():
+                line = line.strip()
+                if line.isdigit():
+                    pid = int(line)
+                    if pid != exclude_pid:
+                        pids.append(pid)
+        except Exception:
+            pass
+        return pids
+
+    def kill_process(self, pid: int) -> bool:
+        """Kill a process by PID. Returns True on success."""
+        import subprocess
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/PID", str(pid)],
+                capture_output=True, timeout=5,
+            )
+            return True
+        except Exception:
+            return False
 
     def release_single_instance_lock(self, handle: object) -> None:
         """Release a Windows named mutex."""

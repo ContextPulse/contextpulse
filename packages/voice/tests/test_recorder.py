@@ -2,12 +2,10 @@
 
 import io
 import wave
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
-import pytest
-
-from contextpulse_voice.recorder import Recorder, SAMPLE_RATE, CHANNELS
+from contextpulse_voice.recorder import CHANNELS, SAMPLE_RATE, Recorder
 
 
 class TestRecorder:

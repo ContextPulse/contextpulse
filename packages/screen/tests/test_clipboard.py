@@ -1,7 +1,7 @@
 """Tests for clipboard.py — clipboard monitoring logic."""
 
 import time
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from contextpulse_sight.activity import ActivityDB
 
@@ -84,7 +84,7 @@ class TestClipboardMonitor:
 
     def test_truncates_very_long_text(self, tmp_path):
         db = ActivityDB(db_path=tmp_path / "test.db")
-        from contextpulse_sight.clipboard import ClipboardMonitor, _MAX_LENGTH
+        from contextpulse_sight.clipboard import ClipboardMonitor
 
         monitor = ClipboardMonitor(db)
         monitor._sequence_number = 0

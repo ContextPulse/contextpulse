@@ -8,6 +8,7 @@ Missing keys in config.json are filled from _DEFAULTS on load.
 import json
 import logging
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -24,12 +25,18 @@ def env(key: str, default: str) -> str:
 
 
 # ── Platform-wide paths ──────────────────────────────────────────────
-APPDATA_DIR = Path(os.environ.get("APPDATA", "")) / "ContextPulse"
+if sys.platform == "darwin":
+    APPDATA_DIR = Path.home() / "Library" / "Application Support" / "ContextPulse"
+elif sys.platform == "win32":
+    APPDATA_DIR = Path(os.environ.get("APPDATA", "")) / "ContextPulse"
+else:  # Linux
+    APPDATA_DIR = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "ContextPulse"
 CONFIG_FILE = APPDATA_DIR / "config.json"
 CONTEXTPULSE_HOME = Path(env("CONTEXTPULSE_HOME", str(Path.home() / ".contextpulse")))
 
 # ── Data paths (shared across all packages) ──────────────────────────
-OUTPUT_DIR = Path(env("CONTEXTPULSE_OUTPUT_DIR", str(Path.home() / "screenshots")))
+_default_output = str(Path.home() / "Pictures" / "ContextPulse") if sys.platform == "darwin" else str(Path.home() / "screenshots")
+OUTPUT_DIR = Path(env("CONTEXTPULSE_OUTPUT_DIR", _default_output))
 ACTIVITY_DB_PATH = OUTPUT_DIR / env("CONTEXTPULSE_ACTIVITY_DB", "activity.db")
 
 # ── Defaults ─────────────────────────────────────────────────────────

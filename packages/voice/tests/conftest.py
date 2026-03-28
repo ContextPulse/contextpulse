@@ -44,6 +44,7 @@ sys.modules["anthropic"] = mock_anthropic
 
 # Mock ctypes.windll for non-Windows
 import ctypes
+
 if not hasattr(ctypes, "windll"):
     ctypes.windll = MagicMock()
 

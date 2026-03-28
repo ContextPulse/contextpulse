@@ -5,7 +5,7 @@ ContextPulse is a unified always-on context platform for AI agents. One process,
 
 **Tagline:** "Always-on context for AI agents"
 **Version:** 0.1.0
-**Status:** Production-testable (unified daemon, EXE installer, 726 tests)
+**Status:** Production-testable (unified daemon, EXE installer, 408+ tests, skills package)
 
 ## Architecture
 
@@ -47,7 +47,7 @@ ContextPulse Daemon (single process)
 | **contextpulse-memory** | 0.1.0 | 80 | 5 | Three-tier memory (hot/warm/cold), FTS5 search |
 | **contextpulse-agent** | 0.1.0 | — | — | Coming soon (v0.2 — agent coordination) |
 
-**Total: 803 tests, 28 MCP tools**
+**Total: 408 tests (voice+core), 28 MCP tools**
 
 ## MCP Tools
 
@@ -77,6 +77,8 @@ ContextPulse Daemon (single process)
 | get_recent_transcriptions | Recent voice dictation history |
 | get_voice_stats | Dictation count, duration, accuracy |
 | get_vocabulary | Current word corrections |
+| learn_from_session | Batch-analyze transcription history, auto-write corrections |
+| rebuild_context_vocabulary | Regenerate context vocab from projects + skills dirs |
 
 ### Touch
 | Tool | Description |
@@ -138,6 +140,34 @@ contextpulse-touch-mcp    # Read-only touch analytics
 | `contextpulse.spec` | PyInstaller build config |
 | `installer.iss` | Inno Setup installer script |
 | `build.cmd` | One-click build script |
+
+## Companion Skills (bundled via `contextpulse --setup`)
+
+| Skill | Installs to | Purpose |
+|-------|-------------|---------|
+| `using-contextpulse` | `~/.claude/skills/`, `~/.gemini/skills/` | Full Sight+Voice+Touch tool reference with fallback and daemon restart |
+| `analyzing-dictation` | `~/.claude/skills/`, `~/.gemini/skills/` | Voice vocabulary analysis workflow + safety rules |
+
+`using-contextpulse-sight` (old sight-only skill) is deprecated — replaced by `using-contextpulse`.
+
+## Voice Self-Learning Architecture
+
+Three-layer vocabulary system (priority: user > learned > context):
+1. **Context vocab** (`vocabulary_context.json`): Auto-rebuilt from `~/Projects/*/PROJECT_CONTEXT.md` + `~/.claude/skills/*/SKILL.md` → 72 entries
+2. **Learned vocab** (`vocabulary_learned.json`): Written by `session_learner.py` (end-of-session batch) + `_harvest_screen_corrections()` (OCR, per-dictation)
+3. **User vocab** (`vocabulary.json`): Hand-edited, highest priority
+
+LLM cleanup uses recent window titles (last 2 min from Sight events) as proper noun context hints — not current window (always "Claude" during dictation).
+
+## Next: macOS Port
+
+`packages/core/src/contextpulse_core/platform/macos.py` — all methods raise `NotImplementedError`. Needs:
+- Clipboard: `NSPasteboard`
+- Window info: `NSWorkspace` + `CGWindowListCopyWindowInfo`
+- Cursor: `Quartz`
+- Caret: Accessibility API (`AXUIElement`)
+- Session lock: `NSDistributedNotificationCenter`
+- Single-instance: `fcntl.flock`
 
 ## Domain Strategy
 - **Primary:** contextpulse.ai ($80/yr, Cloudflare)

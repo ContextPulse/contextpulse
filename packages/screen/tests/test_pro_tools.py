@@ -1,12 +1,10 @@
 """Tests for Pro-gated MCP tools: search_all_events, get_event_timeline, and _require_pro."""
 
-import json
 import time
 from unittest.mock import patch
 
 import pytest
-
-from contextpulse_core.spine import EventBus, EventType, Modality, ContextEvent
+from contextpulse_core.spine import EventBus
 from contextpulse_sight.sight_module import SightModule
 
 

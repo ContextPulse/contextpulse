@@ -1,8 +1,6 @@
 """Tests for activity.py — SQLite activity database with FTS5 search."""
 
 import time
-from pathlib import Path
-from unittest.mock import patch
 
 from contextpulse_sight.activity import ActivityDB
 

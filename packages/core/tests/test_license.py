@@ -2,19 +2,10 @@
 
 import base64
 import json
-import os
 import time
-from pathlib import Path
 
 import pytest
-
 from contextpulse_core.license import (
-    APPDATA_DIR,
-    EXPIRY_GRACE_DAYS,
-    LICENSE_FILE,
-    PRO_FEATURES,
-    TRIAL_FILE,
-    _PUBLIC_KEY_HEX,
     _write_trial,
     get_license_email,
     get_license_tier,
@@ -31,7 +22,6 @@ from contextpulse_core.license import (
     save_license,
     verify_key,
 )
-
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -190,7 +180,6 @@ class TestTrial:
         assert is_trial_expired() is False
 
     def test_trial_expired_after_time(self, isolated_license, monkeypatch):
-        import contextpulse_core.license as lic_mod
 
         # Write trial start 8 days ago (using _write_trial for HMAC)
         _write_trial({"start": int(time.time()) - 8 * 86400})

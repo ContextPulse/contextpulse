@@ -1,7 +1,6 @@
 """Tests for capture.py — downscale, save, bytes conversion."""
 
 from io import BytesIO
-from pathlib import Path
 
 from PIL import Image
 
@@ -135,6 +134,7 @@ class TestMonitorDetection:
 
     def test_find_monitor_at_cursor_single_monitor(self):
         from unittest.mock import MagicMock, patch
+
         from contextpulse_sight.capture import find_monitor_at_cursor
 
         sct = MagicMock()
@@ -151,6 +151,7 @@ class TestMonitorDetection:
 
     def test_find_monitor_at_cursor_dual_monitor(self):
         from unittest.mock import MagicMock, patch
+
         from contextpulse_sight.capture import find_monitor_at_cursor
 
         sct = MagicMock()
@@ -168,6 +169,7 @@ class TestMonitorDetection:
 
     def test_find_monitor_fallback_to_primary(self):
         from unittest.mock import MagicMock, patch
+
         from contextpulse_sight.capture import find_monitor_at_cursor
 
         sct = MagicMock()
@@ -185,6 +187,7 @@ class TestMonitorDetection:
     def test_find_monitor_only_virtual_desktop(self):
         """Edge case: only monitors[0] exists (shouldn't happen in practice)."""
         from unittest.mock import MagicMock, patch
+
         from contextpulse_sight.capture import find_monitor_at_cursor
 
         sct = MagicMock()
@@ -200,6 +203,7 @@ class TestMonitorDetection:
 
     def test_capture_single_monitor_valid(self):
         from unittest.mock import MagicMock, patch
+
         from contextpulse_sight.capture import capture_single_monitor
 
         mock_sct = MagicMock()
@@ -223,8 +227,9 @@ class TestMonitorDetection:
 
     def test_capture_single_monitor_invalid_raises(self):
         from unittest.mock import MagicMock, patch
-        from contextpulse_sight.capture import capture_single_monitor
+
         import pytest
+        from contextpulse_sight.capture import capture_single_monitor
 
         mock_sct = MagicMock()
         mock_sct.monitors = [
@@ -240,6 +245,7 @@ class TestMonitorDetection:
 
     def test_get_monitor_count(self):
         from unittest.mock import MagicMock, patch
+
         from contextpulse_sight.capture import get_monitor_count
 
         mock_sct = MagicMock()
@@ -256,6 +262,7 @@ class TestMonitorDetection:
 
     def test_capture_all_monitors_returns_list(self):
         from unittest.mock import MagicMock, patch
+
         from contextpulse_sight.capture import capture_all_monitors
 
         mock_sct = MagicMock()

@@ -8,8 +8,6 @@ trying to initialize real hardware/display resources during testing.
 import sys
 from unittest.mock import MagicMock
 
-import pytest
-
 # ---------------------------------------------------------------------------
 # Mock pystray (system tray) before any import can trigger it
 # ---------------------------------------------------------------------------
@@ -58,6 +56,7 @@ sys.modules.setdefault("tkinter.font", MagicMock())
 # Mock ctypes.windll for any non-Windows or headless environment
 # ---------------------------------------------------------------------------
 import ctypes
+
 if not hasattr(ctypes, "windll"):
     ctypes.windll = MagicMock()
 

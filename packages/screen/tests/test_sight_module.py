@@ -1,10 +1,8 @@
 """Tests for SightModule — the spine adapter for the Sight capture pipeline."""
 
 import time
-from pathlib import Path
 
 import pytest
-
 from contextpulse_core.spine import EventBus, EventType, Modality
 from contextpulse_sight.sight_module import SightModule
 

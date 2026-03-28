@@ -11,24 +11,20 @@ import os
 import sqlite3
 import threading
 import time
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
-
+from contextpulse_voice import vocabulary
+from contextpulse_voice.analyzer import find_corrections, load_entries_from_eventbus
+from contextpulse_voice.cleanup import clean, clean_basic
 from contextpulse_voice.vocabulary import (
-    apply_punctuation,
-    apply_vocabulary,
-    _compile_patterns,
-    _load_vocabulary,
-    reload_vocabulary,
     _DEFAULT_VOCABULARY,
     _PUNCTUATION,
+    _compile_patterns,
+    apply_punctuation,
+    apply_vocabulary,
+    reload_vocabulary,
 )
-from contextpulse_voice.cleanup import clean, clean_basic
-from contextpulse_voice.analyzer import find_corrections, load_entries_from_eventbus
-from contextpulse_voice import vocabulary
-
 
 # ═══════════════════════════════════════════════════════════════════════
 # Fixtures
@@ -475,7 +471,6 @@ class TestConfigEnvOverrides:
 
     def test_no_api_key(self):
         with patch.dict(os.environ, {}, clear=True):
-            from contextpulse_voice.config import get_voice_config
             # Clear the config-based key too
             with patch("contextpulse_voice.config.load_config", return_value={}):
                 from contextpulse_voice.config import get_api_key

@@ -1,7 +1,6 @@
 """Tests for the vocabulary module — word replacement and hot-reload."""
 
 import json
-import pytest
 from unittest.mock import patch
 
 from contextpulse_voice import vocabulary

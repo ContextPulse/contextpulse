@@ -1,7 +1,6 @@
 """Tests for RecordingOverlay — state transitions with mocked tkinter."""
 
 import sys
-import threading
 from unittest.mock import MagicMock, patch
 
 import pytest

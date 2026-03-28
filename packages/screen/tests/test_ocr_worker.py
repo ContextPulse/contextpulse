@@ -1,14 +1,12 @@
 """Tests for ocr_worker.py — background OCR processing."""
 
 import time
-from pathlib import Path
-from unittest.mock import patch, MagicMock
-
-from PIL import Image
+from unittest.mock import patch
 
 from contextpulse_sight.activity import ActivityDB
 from contextpulse_sight.buffer import RollingBuffer
 from contextpulse_sight.ocr_worker import OCRWorker
+from PIL import Image
 
 
 def _make_image(width=100, height=100, color=(128, 128, 128)):

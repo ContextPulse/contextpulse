@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="site/contextpulse-logo.svg" alt="ContextPulse" width="80" />
+  <img src="site/logo.png" alt="ContextPulse" width="80" />
 </p>
 
 <h1 align="center">ContextPulse</h1>

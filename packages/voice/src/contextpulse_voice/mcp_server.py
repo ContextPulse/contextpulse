@@ -170,6 +170,66 @@ def get_vocabulary(learned_only: bool = False) -> str:
         return f"Error reading vocabulary: {e}"
 
 
+@mcp_app.tool()
+def learn_from_session(hours: int = 24, dry_run: bool = True) -> str:
+    """Analyze recent dictation history and learn vocabulary corrections.
+
+    Compares raw Whisper output with cleaned transcripts to find patterns
+    where the LLM or existing vocabulary consistently corrected the same term.
+    Patterns appearing 2+ times are learned automatically.
+
+    Args:
+        hours: How many hours of history to analyze. Default 24.
+        dry_run: If True (default), show what would be learned without writing.
+                Set to False to actually save corrections to vocabulary.
+    """
+    try:
+        from contextpulse_voice.session_learner import learn_from_transcription_history
+        results = learn_from_transcription_history(hours=hours, dry_run=dry_run)
+
+        if not results:
+            return "No learnable patterns found in recent transcription history."
+
+        mode = "DRY RUN" if dry_run else "APPLIED"
+        lines = [f"=== Session Learning ({mode}) — {len(results)} patterns ===\n"]
+        for r in sorted(results, key=lambda x: -x["count"]):
+            lines.append(
+                f"  {r['original']!r:30s} -> {r['corrected']!r:20s} "
+                f"(seen {r['count']}x, confidence {r['confidence']:.0%})"
+            )
+
+        if dry_run:
+            lines.append("\nRun with dry_run=False to apply these corrections.")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error analyzing transcription history: {e}"
+
+
+@mcp_app.tool()
+def rebuild_context_vocabulary() -> str:
+    """Rebuild the context vocabulary from PROJECT_CONTEXT.md files.
+
+    Scans ~/Projects/ for CamelCase project names and domain-specific terms
+    that Whisper commonly splits. Writes to vocabulary_context.json which is
+    hot-reloaded by the vocabulary system.
+    """
+    try:
+        from contextpulse_voice.context_vocab import (
+            get_context_entries,
+        )
+        from contextpulse_voice.context_vocab import (
+            rebuild_context_vocabulary as rebuild,
+        )
+        count = rebuild()
+        entries = get_context_entries()
+        lines = [f"Rebuilt context vocabulary: {count} entries\n"]
+        for misheard, correct in sorted(entries.items()):
+            lines.append(f"  {misheard!r:30s} -> {correct!r}")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error rebuilding context vocabulary: {e}"
+
+
 def main():
     """Entry point for MCP stdio server."""
     mcp_app.run(transport="stdio")

@@ -3,8 +3,6 @@
 import time
 from unittest.mock import MagicMock
 
-import pytest
-
 from contextpulse_touch.burst_tracker import BurstTracker
 
 

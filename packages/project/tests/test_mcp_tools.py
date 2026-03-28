@@ -2,14 +2,13 @@
 
 import json
 
-from contextpulse_project import ProjectRegistry, ProjectRouter, ActiveProjectDetector
+from contextpulse_project import ActiveProjectDetector, ProjectRouter, mcp_server
 from contextpulse_project.mcp_server import (
-    identify_project,
     get_active_project,
-    list_projects,
     get_project_context,
+    identify_project,
+    list_projects,
 )
-from contextpulse_project import mcp_server
 
 
 class TestMCPTools:

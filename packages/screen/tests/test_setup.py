@@ -1,10 +1,9 @@
 """Tests for setup.py — MCP config generator."""
 
 import json
-from pathlib import Path
 from unittest.mock import patch
 
-from contextpulse_sight.setup import setup_client, _CLIENTS, SERVER_NAME
+from contextpulse_sight.setup import _CLIENTS, SERVER_NAME, setup_client
 
 
 class TestSetupClient:
