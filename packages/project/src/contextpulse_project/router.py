@@ -1,6 +1,5 @@
 """ProjectRouter — scores arbitrary text against all projects."""
 
-import math
 import re
 from dataclasses import dataclass
 

@@ -8,31 +8,37 @@ import time
 from pathlib import Path
 
 import pystray
-from pynput import keyboard
-
-from contextpulse_core.platform import get_platform_provider
-from contextpulse_sight import capture
-from contextpulse_sight.activity import ActivityDB
-from contextpulse_sight.buffer import RollingBuffer
-from contextpulse_sight.config import (
-    AUTO_INTERVAL, BUFFER_MAX_AGE, CHANGE_THRESHOLD,
-    FILE_LATEST, FILE_REGION, OUTPUT_DIR,
-)
-from contextpulse_sight.events import EventDetector
-from contextpulse_sight.icon import _COLORS, create_icon
-from contextpulse_sight.clipboard import ClipboardMonitor
-from contextpulse_sight.ocr_worker import OCRWorker
-from contextpulse_sight.privacy import (
-    SessionMonitor, get_foreground_process_name, get_foreground_window_title, is_blocked,
-)
-from contextpulse_sight.sight_module import SightModule
 
 # Core productization imports (settings, first-run, licensing)
 from contextpulse_core.first_run import is_first_run, show_welcome_dialog
-from contextpulse_core.settings import show_settings
-from contextpulse_core.license import is_licensed, has_memory_access
 from contextpulse_core.license_dialog import show_nag_dialog
+from contextpulse_core.platform import get_platform_provider
+from contextpulse_core.settings import show_settings
 from contextpulse_core.spine import EventBus
+from pynput import keyboard
+
+from contextpulse_sight import capture
+from contextpulse_sight.activity import ActivityDB
+from contextpulse_sight.buffer import RollingBuffer
+from contextpulse_sight.clipboard import ClipboardMonitor
+from contextpulse_sight.config import (
+    AUTO_INTERVAL,
+    BUFFER_MAX_AGE,
+    CHANGE_THRESHOLD,
+    FILE_LATEST,
+    FILE_REGION,
+    OUTPUT_DIR,
+)
+from contextpulse_sight.events import EventDetector
+from contextpulse_sight.icon import _COLORS, create_icon
+from contextpulse_sight.ocr_worker import OCRWorker
+from contextpulse_sight.privacy import (
+    SessionMonitor,
+    get_foreground_process_name,
+    get_foreground_window_title,
+    is_blocked,
+)
+from contextpulse_sight.sight_module import SightModule
 
 _WARNING_COLOR = _COLORS.get("dark", {}).get("warning", "#F0B429")
 
@@ -492,7 +498,7 @@ def main():
 
     # Handle --setup flag for MCP config generation
     if "--setup" in _sys.argv:
-        from contextpulse_sight.setup import setup_client, setup_all, print_config
+        from contextpulse_sight.setup import print_config, setup_all, setup_client
 
         idx = _sys.argv.index("--setup")
         if idx + 1 < len(_sys.argv):

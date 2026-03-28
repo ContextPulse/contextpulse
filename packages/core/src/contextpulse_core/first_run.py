@@ -7,8 +7,8 @@ Writes .first_run_complete marker to %APPDATA%/ContextPulse/.
 import logging
 import os
 import tkinter as tk
-from tkinter import ttk
 from pathlib import Path
+from tkinter import ttk
 
 from contextpulse_core import gui_theme
 

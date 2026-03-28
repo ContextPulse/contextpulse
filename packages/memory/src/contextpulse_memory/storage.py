@@ -16,7 +16,6 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
-
 # ---------------------------------------------------------------------------
 # Hot tier — in-memory dict with TTL eviction
 # ---------------------------------------------------------------------------

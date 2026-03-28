@@ -13,14 +13,13 @@ mcp_calls) without modifying them.
 
 from __future__ import annotations
 
-import json
 import logging
 import sqlite3
 import threading
 from pathlib import Path
 from typing import Any, Callable
 
-from .events import ContextEvent, Modality
+from .events import ContextEvent
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +114,6 @@ class EventBus:
                 self._conn.execute(
                     "SELECT 1 FROM sqlite_master WHERE name='events_fts'"
                 )
-                row = self._conn.fetchone() if hasattr(self._conn, 'fetchone') else None
                 # Use cursor properly
                 cursor = self._conn.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts'"

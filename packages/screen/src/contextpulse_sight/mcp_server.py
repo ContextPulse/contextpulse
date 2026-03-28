@@ -22,9 +22,11 @@ from pathlib import Path
 from typing import Any
 
 import mss as mss_lib
+from contextpulse_core.license import get_license_tier, has_pro_access
+from contextpulse_core.spine import EventBus
+from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Image as MCPImage
 from PIL import Image
-
-from mcp.server.fastmcp import FastMCP, Image as MCPImage
 
 from contextpulse_sight import capture
 from contextpulse_sight.activity import ActivityDB
@@ -37,9 +39,6 @@ from contextpulse_sight.buffer import (
 from contextpulse_sight.classifier import classify_and_extract
 from contextpulse_sight.config import FILE_LATEST, OUTPUT_DIR
 from contextpulse_sight.privacy import is_blocked, is_title_blocked
-
-from contextpulse_core.license import get_license_tier, has_pro_access
-from contextpulse_core.spine import EventBus
 
 logging.basicConfig(
     level=logging.INFO,
@@ -344,7 +343,7 @@ def get_activity_summary(hours: float = 8.0) -> str:
         lines.append("\nRecent window titles:")
         for title in summary["titles"][:10]:
             if is_title_blocked(title):
-                lines.append(f"  - [BLOCKED — matches privacy blocklist]")
+                lines.append("  - [BLOCKED — matches privacy blocklist]")
             else:
                 lines.append(f"  - {title[:80]}")
 

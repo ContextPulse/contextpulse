@@ -13,6 +13,7 @@ import threading
 import time
 
 from contextpulse_core.platform import get_platform_provider
+
 from contextpulse_sight.activity import ActivityDB
 
 logger = logging.getLogger("contextpulse.sight.clipboard")
