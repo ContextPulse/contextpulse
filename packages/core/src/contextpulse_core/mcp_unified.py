@@ -1,0 +1,147 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 Jerard Ventures LLC
+
+"""Unified MCP server for ContextPulse — all tools on a single HTTP endpoint.
+
+Consolidates sight, project, voice, and touch MCP servers into one
+long-lived process using streamable-http transport. This eliminates
+the per-session stdio process leak where each Claude Code session
+spawned 4+ python processes that were never reaped.
+
+Run standalone:
+    python -m contextpulse_core.mcp_unified
+
+Or let the daemon watchdog start it alongside the capture daemon.
+
+Architecture:
+    Claude Code ──HTTP──▶ localhost:8420/mcp  (this process)
+                                │
+                                ├── Sight tools  (screenshots, OCR, buffer, search)
+                                ├── Project tools (detection, routing, journal)
+                                ├── Voice tools  (transcription, vocabulary)
+                                └── Touch tools  (keyboard, mouse, corrections)
+                                         │
+                                    activity.db  (shared, written by daemon)
+"""
+
+import argparse
+import logging
+import signal
+import sys
+
+from mcp.server.fastmcp import FastMCP
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger("contextpulse.mcp.unified")
+
+MCP_PORT = 8420
+
+
+# ── Import and register tools from each package ─────────────────────
+
+mcp_app: FastMCP | None = None  # Created in main() with correct port
+
+
+def _register_sight_tools():
+    """Register all Sight tools (screenshots, OCR, buffer, search)."""
+    from contextpulse_sight.mcp_server import mcp_app as sight_app
+
+    for name, tool in sight_app._tool_manager._tools.items():
+        mcp_app._tool_manager._tools[name] = tool
+    logger.info("Registered %d Sight tools", len(sight_app._tool_manager._tools))
+
+
+def _register_project_tools():
+    """Register all Project tools (detection, routing, journal)."""
+    from contextpulse_project.mcp_server import mcp_app as project_app
+
+    for name, tool in project_app._tool_manager._tools.items():
+        mcp_app._tool_manager._tools[name] = tool
+    logger.info("Registered %d Project tools", len(project_app._tool_manager._tools))
+
+
+def _register_voice_tools():
+    """Register all Voice tools (transcription, vocabulary)."""
+    from contextpulse_voice.mcp_server import mcp_app as voice_app
+
+    for name, tool in voice_app._tool_manager._tools.items():
+        mcp_app._tool_manager._tools[name] = tool
+    logger.info("Registered %d Voice tools", len(voice_app._tool_manager._tools))
+
+
+def _register_touch_tools():
+    """Register all Touch tools (keyboard, mouse, corrections)."""
+    from contextpulse_touch.mcp_server import mcp_app as touch_app
+
+    for name, tool in touch_app._tool_manager._tools.items():
+        mcp_app._tool_manager._tools[name] = tool
+    logger.info("Registered %d Touch tools", len(touch_app._tool_manager._tools))
+
+
+def _register_all():
+    """Import and register tools from all packages.
+
+    Each package's mcp_server.py defines tools on its own FastMCP instance.
+    We copy the tool registrations into the unified app so all tools are
+    served from a single HTTP endpoint.
+    """
+    errors = []
+    for name, register_fn in [
+        ("sight", _register_sight_tools),
+        ("project", _register_project_tools),
+        ("voice", _register_voice_tools),
+        ("touch", _register_touch_tools),
+    ]:
+        try:
+            register_fn()
+        except Exception as exc:
+            logger.warning("Failed to register %s tools: %s", name, exc)
+            errors.append(f"{name}: {exc}")
+
+    total = len(mcp_app._tool_manager._tools)
+    logger.info("Unified MCP server: %d tools registered", total)
+    if errors:
+        logger.warning("Registration errors: %s", "; ".join(errors))
+
+
+def main():
+    global mcp_app
+
+    parser = argparse.ArgumentParser(description="ContextPulse Unified MCP Server")
+    parser.add_argument("--port", type=int, default=MCP_PORT, help="Port to listen on")
+    parser.add_argument("--host", default="127.0.0.1", help="Host to bind to")
+    parser.add_argument("--stdio", action="store_true", help="Use stdio transport (for testing)")
+    args = parser.parse_args()
+
+    # Graceful shutdown on SIGTERM/SIGINT
+    def _shutdown(signum, frame):
+        logger.info("Received signal %s, shutting down", signum)
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
+
+    # Create the FastMCP app with the configured host/port
+    mcp_app = FastMCP(
+        "ContextPulse",
+        host=args.host,
+        port=args.port,
+        stateless_http=True,  # No per-session state needed — all state is in SQLite
+    )
+
+    _register_all()
+
+    if args.stdio:
+        logger.info("Starting in stdio mode (testing)")
+        mcp_app.run(transport="stdio")
+    else:
+        logger.info("Starting unified MCP on http://%s:%d/mcp", args.host, args.port)
+        mcp_app.run(transport="streamable-http")
+
+
+if __name__ == "__main__":
+    main()

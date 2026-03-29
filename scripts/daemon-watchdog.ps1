@@ -14,6 +14,8 @@ $ErrorActionPreference = "Stop"
 $VenvPythonw = "C:\Users\david\Projects\ContextPulse\.venv\Scripts\pythonw.exe"
 $VenvPython  = "C:\Users\david\Projects\ContextPulse\.venv\Scripts\python.exe"
 $Module      = "contextpulse_core.daemon"
+$McpModule   = "contextpulse_core.mcp_unified"
+$McpPort     = 8420
 $WorkDir     = "C:\Users\david\Projects\ContextPulse"
 $LogFile     = "C:\Users\david\screenshots\daemon_watchdog.log"
 
@@ -39,7 +41,6 @@ function Get-RestartsInLastHour {
 function Kill-ZombieDaemons {
     # Kill ONLY leftover ContextPulse daemon processes.
     # Strictly matches "contextpulse_core.daemon" in command line — will NOT touch:
-    #   - MCP servers (contextpulse_sight.mcp_server, etc.)
     #   - monitor-hotkeys.pyw
     #   - Any other pythonw/python process
     $zombies = Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" -ErrorAction SilentlyContinue |
@@ -54,11 +55,58 @@ function Kill-ZombieDaemons {
     }
 }
 
+function Kill-ZombieMcpServers {
+    # Kill leftover stdio MCP server processes from old sessions.
+    # Matches "contextpulse_*.mcp_server" but NOT "contextpulse_core.mcp_unified".
+    $zombies = Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match "contextpulse_\w+\.mcp_server" }
+
+    if ($zombies) {
+        foreach ($z in $zombies) {
+            Write-Log "Killing zombie MCP server (pid=$($z.ProcessId), cmd=$($z.CommandLine))" "WARN"
+            Stop-Process -Id $z.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Start-McpServer {
+    # Start the unified MCP server if not already running on the configured port.
+    $listening = Test-NetConnection -ComputerName 127.0.0.1 -Port $McpPort -WarningAction SilentlyContinue
+    if ($listening.TcpTestSucceeded) {
+        Write-Log "Unified MCP server already running on port $McpPort"
+        return
+    }
+
+    # Kill any zombie per-session MCP servers from the old stdio era
+    Kill-ZombieMcpServers
+
+    Write-Log "Starting unified MCP server (python.exe -m $McpModule --port $McpPort)"
+    $mcpProc = Start-Process -FilePath $VenvPython `
+        -ArgumentList "-m", $McpModule, "--port", $McpPort `
+        -WorkingDirectory $WorkDir `
+        -PassThru -WindowStyle Hidden `
+        -RedirectStandardError "$WorkDir\mcp_unified_stderr.log"
+
+    Write-Log "Unified MCP server started (pid=$($mcpProc.Id))"
+
+    # Wait briefly and verify it came up
+    Start-Sleep -Seconds 3
+    $check = Test-NetConnection -ComputerName 127.0.0.1 -Port $McpPort -WarningAction SilentlyContinue
+    if ($check.TcpTestSucceeded) {
+        Write-Log "Unified MCP server confirmed healthy on port $McpPort"
+    } else {
+        Write-Log "Unified MCP server FAILED to start — check mcp_unified_stderr.log" "ERROR"
+    }
+}
+
 # --- Main Loop ---
 Write-Log "Watchdog starting (max $MaxRestartsPerHour restarts/hour, max backoff ${MaxBackoffSeconds}s)"
 
 # Kill any zombies from previous crash before first launch
 Kill-ZombieDaemons
+
+# Start the unified MCP server (shared across all Claude sessions)
+Start-McpServer
 
 while ($true) {
     # Check restart budget
