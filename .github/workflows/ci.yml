@@ -40,9 +40,9 @@ jobs:
 
       - name: Install cross-platform packages
         run: |
-          pip install -e packages/core[dev]
-          pip install -e packages/memory[dev]
-          pip install -e packages/project[dev]
+          pip install -e packages/core
+          pip install -e packages/memory
+          pip install -e packages/project
           pip install pytest
 
       - name: Run cross-platform tests
@@ -65,12 +65,12 @@ jobs:
 
       - name: Install all packages
         run: |
-          pip install -e packages/core[dev]
-          pip install -e packages/screen[dev]
-          pip install -e packages/voice[dev]
-          pip install -e packages/touch[dev]
-          pip install -e packages/memory[dev]
-          pip install -e packages/project[dev]
+          pip install -e packages/core
+          pip install -e packages/screen
+          pip install -e packages/voice
+          pip install -e packages/touch
+          pip install -e packages/memory
+          pip install -e packages/project
           pip install pytest
 
       - name: Run all tests
