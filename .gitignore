@@ -34,6 +34,8 @@ desktop.ini
 # Runtime output
 screenshots/
 logs/
+daemon_stderr.log
+daemon_stdout.log
 
 # Lambda build artifacts (regenerated via pip install)
 lambda/package/
