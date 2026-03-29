@@ -588,13 +588,19 @@ class MemoryStore:
         self,
         query: str,
         limit: int = 20,
-        fts_weight: float = 0.4,
-        semantic_weight: float = 0.6,
+        rrf_k: int = 60,
     ) -> list[dict[str, Any]]:
-        """Combine FTS5 keyword scores with semantic cosine similarity scores.
+        """Combine FTS5 keyword results with semantic vector results using
+        Reciprocal Rank Fusion (RRF).
 
-        Both score sets are normalised to [0, 1] before weighting.  Falls back
-        gracefully to pure FTS search when the embedding model is unavailable.
+        RRF score for each document = SUM(1 / (k + rank)) across result lists.
+        This is normalization-free — no need to rescale FTS BM25 scores and
+        cosine similarities onto the same scale. k=60 is the standard constant
+        from Cormack et al. (2009), adopted by Azure SQL, OpenSearch, and
+        SingleStore.
+
+        Falls back gracefully to pure FTS search when the embedding model is
+        unavailable.
         """
         try:
             from contextpulse_memory.embeddings import get_engine
@@ -612,35 +618,26 @@ class MemoryStore:
         fts_results = self.warm.search(query, limit=fetch)
         sem_results = self.warm.semantic_search(vec, limit=fetch)
 
-        # Build rank-based FTS scores: top result = 1.0, last = ~0
-        fts_scores: dict[str, float] = {
-            r["key"]: 1.0 - i / max(len(fts_results), 1)
-            for i, r in enumerate(fts_results)
-        }
-        # Semantic scores are already cosine similarities in [−1, 1]; clamp to [0, 1]
-        sem_scores: dict[str, float] = {
-            r["key"]: max(0.0, r.get("similarity", 0.0))
-            for r in sem_results
-        }
+        # Build RRF scores: score = 1 / (k + rank), where rank is 1-based
+        rrf_scores: dict[str, float] = {}
+        for rank_0, r in enumerate(fts_results):
+            rrf_scores[r["key"]] = rrf_scores.get(r["key"], 0.0) + 1.0 / (rrf_k + rank_0 + 1)
+        for rank_0, r in enumerate(sem_results):
+            rrf_scores[r["key"]] = rrf_scores.get(r["key"], 0.0) + 1.0 / (rrf_k + rank_0 + 1)
 
         # Merge all candidate result dicts (keyed by memory key)
         all_results: dict[str, dict[str, Any]] = {}
         for r in fts_results:
             all_results[r["key"]] = r
         for r in sem_results:
-            # Prefer the dict from semantic_search (has similarity field)
             all_results.setdefault(r["key"], r)
 
-        # Compute hybrid scores and sort
+        # Attach scores and sort
         scored: list[tuple[float, dict[str, Any]]] = []
         for key, result in all_results.items():
-            score = (
-                fts_weight * fts_scores.get(key, 0.0)
-                + semantic_weight * sem_scores.get(key, 0.0)
-            )
             entry = result.copy()
-            entry["hybrid_score"] = round(score, 4)
-            scored.append((score, entry))
+            entry["rrf_score"] = round(rrf_scores[key], 6)
+            scored.append((rrf_scores[key], entry))
 
         scored.sort(key=lambda x: x[0], reverse=True)
         return [entry for _, entry in scored[:limit]]

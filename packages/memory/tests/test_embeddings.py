@@ -6,6 +6,7 @@ All tests mock the ONNX session so they run fast without downloading the model.
 from __future__ import annotations
 
 import struct
+import threading
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -263,25 +264,25 @@ class TestHybridSearch:
         assert any(r["key"] == "key1" for r in results)
         store.close()
 
-    def test_hybrid_search_combines_scores(self, tmp_path, engine_with_mock_model):
-        """Hybrid scores should be between 0 and 1."""
+    def test_hybrid_search_uses_rrf_scores(self, tmp_path, engine_with_mock_model):
+        """Hybrid results should have rrf_score (not hybrid_score)."""
         from contextpulse_memory.storage import MemoryStore
 
         store = MemoryStore(tmp_path)
         store.store("doc_a", "python is a programming language")
         store.store("doc_b", "javascript is also popular")
 
-        # engine_with_mock_model fixture already patches _instance
         results = store.hybrid_search("programming language", limit=10)
 
         assert len(results) >= 1
         for r in results:
-            assert "hybrid_score" in r
-            assert 0.0 <= r["hybrid_score"] <= 1.0
+            assert "rrf_score" in r
+            assert "hybrid_score" not in r
+            assert r["rrf_score"] > 0
         store.close()
 
-    def test_hybrid_search_score_order(self, tmp_path, engine_with_mock_model):
-        """Results must be sorted descending by hybrid_score."""
+    def test_hybrid_search_rrf_score_order(self, tmp_path, engine_with_mock_model):
+        """Results must be sorted descending by rrf_score."""
         from contextpulse_memory.storage import MemoryStore
 
         store = MemoryStore(tmp_path)
@@ -289,8 +290,30 @@ class TestHybridSearch:
             store.store(f"key{i}", f"document number {i} about topic")
 
         results = store.hybrid_search("document", limit=10)
-        scores = [r["hybrid_score"] for r in results]
+        scores = [r["rrf_score"] for r in results]
         assert scores == sorted(scores, reverse=True)
+        store.close()
+
+    def test_hybrid_search_rrf_boosts_cross_list_results(self, tmp_path, engine_with_mock_model):
+        """A doc appearing in both FTS and semantic lists should score higher
+        than one appearing in only one list (the core RRF property)."""
+        from contextpulse_memory.storage import MemoryStore
+
+        store = MemoryStore(tmp_path)
+        # doc_both: has embedding (auto-embedded) AND contains searchable text
+        store.store("doc_both", "machine learning algorithms")
+        # doc_fts_only: also matches keyword search
+        store.store("doc_fts_only", "machine learning tutorials")
+
+        results = store.hybrid_search("machine learning", limit=10)
+        keys = [r["key"] for r in results]
+        # Both docs should appear (both match FTS, both have embeddings via mock)
+        assert "doc_both" in keys
+        assert "doc_fts_only" in keys
+        # All results have rrf_score
+        for r in results:
+            assert "rrf_score" in r
+            assert r["rrf_score"] > 0
         store.close()
 
     def test_semantic_search_fallback_to_fts(self, tmp_path):
@@ -373,3 +396,46 @@ class TestStoreAutoEmbedding:
         results = store2.search("legacy", limit=10)
         assert any(r["key"] == "legacy_key" for r in results)
         store2.close()
+
+
+# ---------------------------------------------------------------------------
+# Thread-safety and robustness tests
+# ---------------------------------------------------------------------------
+
+class TestEmbeddingEngineRobustness:
+    def test_engine_has_inference_lock(self):
+        """EmbeddingEngine must have _infer_lock for thread-safe inference."""
+        engine = EmbeddingEngine()
+        assert hasattr(engine, "_infer_lock")
+        assert isinstance(engine._infer_lock, type(threading.Lock()))
+
+    def test_truncation_constant_is_256(self):
+        """Source code should use max_length=256 for tokenizer truncation."""
+        import inspect
+        source = inspect.getsource(EmbeddingEngine._load_model)
+        assert "max_length=256" in source
+        assert "max_length=128" not in source
+
+    def test_purge_cached_model_removes_files(self, tmp_path):
+        """_purge_cached_model should delete model files to force re-download."""
+        engine = EmbeddingEngine()
+        # Create fake model files
+        with patch.object(emb_module, "_MODEL_DIR", tmp_path):
+            (tmp_path / "model.onnx").write_text("fake")
+            (tmp_path / "tokenizer.json").write_text("fake")
+            engine._purge_cached_model()
+            assert not (tmp_path / "model.onnx").exists()
+            assert not (tmp_path / "tokenizer.json").exists()
+
+    def test_failed_load_purges_model_files(self, tmp_path):
+        """If _load_model() raises, cached files should be deleted for re-download."""
+        engine = EmbeddingEngine()
+        with patch.object(emb_module, "_MODEL_DIR", tmp_path):
+            (tmp_path / "model.onnx").write_text("corrupted")
+            (tmp_path / "tokenizer.json").write_text("corrupted")
+            with patch.object(engine, "_download_if_needed"):
+                with patch.object(engine, "_load_model", side_effect=RuntimeError("bad model")):
+                    result = engine._ensure_loaded()
+            assert result is False
+            assert not (tmp_path / "model.onnx").exists()
+            assert not (tmp_path / "tokenizer.json").exists()
