@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -31,14 +32,18 @@ mcp_app = FastMCP("ContextPulse Memory")
 
 _DEFAULT_DIR = Path.home() / ".contextpulse" / "memory"
 _store: MemoryStore | None = None
+_store_lock = threading.Lock()
 
 
 def _get_store() -> MemoryStore:
     global _store
-    if _store is None:
-        db_dir = Path(os.environ.get("CONTEXTPULSE_MEMORY_DIR", str(_DEFAULT_DIR)))
-        _store = MemoryStore(db_dir)
-        logger.info("MemoryStore initialized at %s", db_dir)
+    if _store is not None:
+        return _store
+    with _store_lock:
+        if _store is None:
+            db_dir = Path(os.environ.get("CONTEXTPULSE_MEMORY_DIR", str(_DEFAULT_DIR)))
+            _store = MemoryStore(db_dir)
+            logger.info("MemoryStore initialized at %s", db_dir)
     return _store
 
 

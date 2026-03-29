@@ -145,20 +145,33 @@ class WindowsPlatformProvider(PlatformProvider):
         Uses SetLastError(0) before CreateMutexW to prevent stale error codes
         from masking ERROR_ALREADY_EXISTS. Closes the handle on duplicate to
         prevent zombie processes holding dangling mutex handles.
+
+        Retries up to 3 times with 2s gaps to handle the race condition where
+        a crashed daemon's mutex hasn't been released by the OS yet.
         """
+        import time
         ERROR_ALREADY_EXISTS = 183
-        ctypes.windll.kernel32.SetLastError(0)
-        mutex = ctypes.windll.kernel32.CreateMutexW(None, True, name)
-        last_error = ctypes.windll.kernel32.GetLastError()
-        if last_error == ERROR_ALREADY_EXISTS:
-            # Close the handle — otherwise this process holds a dangling
-            # reference that keeps the mutex alive even if the owner dies.
-            if mutex:
-                ctypes.windll.kernel32.CloseHandle(mutex)
-            return None
-        if not mutex:
-            return None
-        return mutex
+        for attempt in range(3):
+            ctypes.windll.kernel32.SetLastError(0)
+            mutex = ctypes.windll.kernel32.CreateMutexW(None, True, name)
+            last_error = ctypes.windll.kernel32.GetLastError()
+            if last_error == ERROR_ALREADY_EXISTS:
+                # Close the handle — otherwise this process holds a dangling
+                # reference that keeps the mutex alive even if the owner dies.
+                if mutex:
+                    ctypes.windll.kernel32.CloseHandle(mutex)
+                if attempt < 2:
+                    logger.info(
+                        "Mutex held by another process (attempt %d/3), retrying in 2s...",
+                        attempt + 1,
+                    )
+                    time.sleep(2)
+                    continue
+                return None
+            if not mutex:
+                return None
+            return mutex
+        return None
 
     def find_contextpulse_processes(self, exclude_pid: int | None = None) -> list[int]:
         """Find PIDs of running ContextPulse daemon processes.

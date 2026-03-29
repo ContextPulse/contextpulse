@@ -39,6 +39,7 @@ class EmbeddingEngine:
         self._session: ort.InferenceSession | None = None
         self._tokenizer: _Tokenizer | None = None
         self._load_lock = threading.Lock()
+        self._infer_lock = threading.Lock()
         self._available = False
         self._output_idx: int = 0  # index of last_hidden_state in session outputs
 
@@ -63,6 +64,9 @@ class EmbeddingEngine:
                     "EmbeddingEngine failed to load — semantic search unavailable"
                 )
                 self._available = False
+                # Delete cached model files so the next attempt re-downloads
+                # (handles corrupted/truncated downloads)
+                self._purge_cached_model()
             return self._available
 
     def _download_if_needed(self) -> None:
@@ -110,7 +114,7 @@ class EmbeddingEngine:
         )
 
         tokenizer = Tokenizer.from_file(str(tokenizer_path))
-        tokenizer.enable_truncation(max_length=128)
+        tokenizer.enable_truncation(max_length=256)
         tokenizer.no_padding()
         self._tokenizer = tokenizer
 
@@ -145,36 +149,42 @@ class EmbeddingEngine:
         return self._run_inference(texts)
 
     def _run_inference(self, texts: list[str]) -> list[list[float]]:
-        """Tokenize *texts*, run ONNX inference, mean-pool, and L2-normalise."""
+        """Tokenize *texts*, run ONNX inference, mean-pool, and L2-normalise.
+
+        Uses ``_infer_lock`` to prevent concurrent calls from interleaving
+        the batch-padding enable/disable on the shared tokenizer.
+        """
         assert self._tokenizer is not None
         assert self._session is not None
 
-        if len(texts) == 1:
-            enc = self._tokenizer.encode(texts[0])
-            input_ids = np.array([enc.ids], dtype=np.int64)
-            attention_mask = np.array([enc.attention_mask], dtype=np.int64)
-            token_type_ids = np.array([enc.type_ids], dtype=np.int64)
-        else:
-            # Pad batch to uniform length
-            self._tokenizer.enable_padding(pad_id=0, pad_token="[PAD]")
-            encodings = self._tokenizer.encode_batch(texts)
-            self._tokenizer.no_padding()
-            input_ids = np.array([e.ids for e in encodings], dtype=np.int64)
-            attention_mask = np.array(
-                [e.attention_mask for e in encodings], dtype=np.int64
-            )
-            token_type_ids = np.array([e.type_ids for e in encodings], dtype=np.int64)
+        with self._infer_lock:
+            if len(texts) == 1:
+                enc = self._tokenizer.encode(texts[0])
+                input_ids = np.array([enc.ids], dtype=np.int64)
+                attention_mask = np.array([enc.attention_mask], dtype=np.int64)
+                token_type_ids = np.array([enc.type_ids], dtype=np.int64)
+            else:
+                # Pad batch to uniform length
+                self._tokenizer.enable_padding(pad_id=0, pad_token="[PAD]")
+                encodings = self._tokenizer.encode_batch(texts)
+                self._tokenizer.no_padding()
+                input_ids = np.array([e.ids for e in encodings], dtype=np.int64)
+                attention_mask = np.array(
+                    [e.attention_mask for e in encodings], dtype=np.int64
+                )
+                token_type_ids = np.array([e.type_ids for e in encodings], dtype=np.int64)
 
-        # Build feed dict — only include token_type_ids if the model expects it
-        input_names = {inp.name for inp in self._session.get_inputs()}
-        feeds: dict[str, np.ndarray] = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-        }
-        if "token_type_ids" in input_names:
-            feeds["token_type_ids"] = token_type_ids
+            # Build feed dict — only include token_type_ids if the model expects it
+            input_names = {inp.name for inp in self._session.get_inputs()}
+            feeds: dict[str, np.ndarray] = {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+            }
+            if "token_type_ids" in input_names:
+                feeds["token_type_ids"] = token_type_ids
 
-        outputs = self._session.run(None, feeds)
+            outputs = self._session.run(None, feeds)
+
         hidden = outputs[self._output_idx].astype(np.float32)  # [B, T, 384]
 
         # Mean pooling over token dimension, weighted by attention mask
@@ -186,6 +196,16 @@ class EmbeddingEngine:
         normalised = pooled / (norms + 1e-9)
 
         return normalised.tolist()
+
+    def _purge_cached_model(self) -> None:
+        """Delete cached model files so the next load attempt re-downloads."""
+        for filename in (_MODEL_FILENAME, _TOKENIZER_FILENAME):
+            path = _MODEL_DIR / filename
+            try:
+                path.unlink(missing_ok=True)
+            except Exception:
+                pass
+        logger.info("Purged cached model files for re-download")
 
     # ------------------------------------------------------------------
     # Utilities
