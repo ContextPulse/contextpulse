@@ -19,6 +19,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+
+class MemoryQuotaExceeded(Exception):
+    """Raised when the warm-tier entry count reaches max_warm_entries."""
+
+
 # ---------------------------------------------------------------------------
 # Hot tier — in-memory dict with TTL eviction
 # ---------------------------------------------------------------------------
@@ -520,10 +525,12 @@ class MemoryStore:
 
     DEFAULT_HOT_TTL = 300.0   # 5 minutes
     DEFAULT_WARM_TTL = 86_400.0  # 24 hours
+    DEFAULT_MAX_WARM_ENTRIES = 50_000  # ~150 MB at 3 KB/entry average
 
-    def __init__(self, data_dir: Path | str):
+    def __init__(self, data_dir: Path | str, max_warm_entries: int = DEFAULT_MAX_WARM_ENTRIES):
         self._data_dir = Path(data_dir)
         self._data_dir.mkdir(parents=True, exist_ok=True)
+        self._max_warm_entries = max_warm_entries
         self.hot = HotTier(default_ttl=self.DEFAULT_HOT_TTL)
         self.warm = WarmTier(self._data_dir / "memory.db")
         self.cold = ColdTier(self._data_dir / "memory_cold.db")
@@ -538,6 +545,16 @@ class MemoryStore:
         source_event_id: str | None = None,
         modality: str | None = None,
     ) -> None:
+        # Quota check: if at capacity and this is a new key, block the write.
+        # Upserts (existing key) are always allowed — they don't grow the store.
+        if self._max_warm_entries and self.warm.get(key) is None:
+            count = self.warm.count()
+            if count >= self._max_warm_entries:
+                raise MemoryQuotaExceeded(
+                    f"Memory store is at capacity ({count}/{self._max_warm_entries} entries). "
+                    "Delete unused memories or increase max_entries."
+                )
+
         tags = tags or []
         expires_at = time.time() + (ttl_hours * 3600) if ttl_hours else None
         hot_ttl = min(ttl_hours * 3600, self.DEFAULT_HOT_TTL) if ttl_hours else self.DEFAULT_HOT_TTL
