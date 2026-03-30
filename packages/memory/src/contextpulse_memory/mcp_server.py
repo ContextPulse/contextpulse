@@ -263,9 +263,36 @@ def memory_stats() -> str:
     return json.dumps(stats, default=str)
 
 
+def _maintenance_loop(interval_s: int = 3600) -> None:
+    """Background thread: prune expired entries and optimize FTS indices.
+
+    Runs every *interval_s* seconds (default 1 hour). Safe to run concurrently
+    with all read/write operations — WarmTier and ColdTier are thread-safe.
+    """
+    import time as _time
+
+    while True:
+        _time.sleep(interval_s)
+        try:
+            store = _get_store()
+            pruned = store.prune()
+            store.optimize()
+            logger.info(
+                "Maintenance: pruned %d hot + %d warm entries; FTS indices optimized",
+                pruned.get("hot", 0), pruned.get("warm", 0),
+            )
+        except Exception:
+            logger.exception("Maintenance loop error (non-fatal)")
+
+
 def main() -> None:
     logger.info("Starting ContextPulse Memory MCP server")
     _get_store()
+    # Start background maintenance thread (prune + PRAGMA optimize every hour)
+    maintenance_thread = threading.Thread(
+        target=_maintenance_loop, daemon=True, name="memory-maintenance"
+    )
+    maintenance_thread.start()
     mcp_app.run(transport="stdio")
 
 

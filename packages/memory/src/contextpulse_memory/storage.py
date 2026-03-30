@@ -342,6 +342,12 @@ class WarmTier:
             self._conn.commit()
             return cursor.rowcount
 
+    def optimize(self) -> None:
+        """Run PRAGMA optimize to refresh FTS5 index statistics."""
+        with self._lock:
+            self._conn.execute("PRAGMA optimize")
+            self._conn.commit()
+
     def count(self) -> int:
         with self._lock:
             return self._conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
@@ -484,6 +490,12 @@ class ColdTier:
                 )
             rows = cursor.fetchall()
         return [dict(r) for r in rows]
+
+    def optimize(self) -> None:
+        """Run PRAGMA optimize to refresh FTS5 index statistics."""
+        with self._lock:
+            self._conn.execute("PRAGMA optimize")
+            self._conn.commit()
 
     def count(self) -> int:
         with self._lock:
@@ -656,6 +668,11 @@ class MemoryStore:
         hot_pruned = self.hot.evict_expired()
         warm_pruned = self.warm.prune_expired()
         return {"hot": hot_pruned, "warm": warm_pruned}
+
+    def optimize(self) -> None:
+        """Run PRAGMA optimize on warm and cold tiers to refresh FTS5 statistics."""
+        self.warm.optimize()
+        self.cold.optimize()
 
     def stats(self) -> dict[str, Any]:
         """Return storage statistics across all three tiers."""
