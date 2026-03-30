@@ -64,6 +64,9 @@ AI coding assistants are powerful but blind. They can't see your screen, hear yo
 
 ```bash
 pip install contextpulse-core contextpulse-sight contextpulse-voice contextpulse-touch
+
+# Optional: persistent memory tools (free CRUD + Pro semantic search)
+pip install contextpulse-memory
 ```
 
 Start the daemon and the unified MCP server:
@@ -86,7 +89,7 @@ Add to your Claude Code MCP config (`~/.claude.json`):
 }
 ```
 
-That's it. Your AI agent now has 25+ tools for reading your screen, voice, and activity.
+That's it. Your AI agent now has 29 tools for reading your screen, voice, activity, and memory.
 
 ## MCP Tools
 
@@ -131,14 +134,33 @@ That's it. Your AI agent now has 25+ tools for reading your screen, voice, and a
 | `get_project_context` | Full PROJECT_CONTEXT.md for a project |
 | `route_to_journal` | Route an insight to the project journal |
 
-### Pro (2 tools — requires license)
+### Memory (4 free + 2 Pro tools)
+
+Basic memory is **free forever** — no license required.
+
+| Tool | Tier | What it does |
+|------|------|-------------|
+| `memory_store` | Free | Store a key-value memory with optional tags and TTL |
+| `memory_recall` | Free | Retrieve a memory by exact key |
+| `memory_list` | Free | List memories, optionally filtered by tag |
+| `memory_forget` | Free | Delete a memory by key |
+| `memory_search` | Pro | Hybrid/keyword/semantic search across all stored memories |
+| `memory_semantic_search` | Pro | Pure vector search using all-MiniLM-L6-v2 embeddings |
+
+Memory uses a 3-tier hot/warm/cold architecture: in-memory LRU cache → SQLite WAL + FTS5 → compressed archive. The optional `pip install contextpulse-memory` package ships these tools.
+
+### Pro (4 tools — requires license or 30-day trial)
 
 | Tool | What it does |
 |------|-------------|
+| `memory_search` | Hybrid/keyword/semantic search across stored memories |
+| `memory_semantic_search` | Pure vector search using sentence embeddings |
 | `search_all_events` | Cross-modal full-text search across screen, voice, clipboard, keys |
 | `get_event_timeline` | Temporal view of all events across all modalities |
 
-**Free:** 23 tools across Sight, Voice, Touch, and Project. **Pro:** 2 cross-modal tools (`search_all_events`, `get_event_timeline`) that query across all modalities at once.
+**Free forever:** 25 tools (Sight × 10, Voice × 3, Touch × 3, Project × 5, Memory CRUD × 4)
+**Pro ($49/yr or $249 lifetime):** adds 4 search tools — semantic memory search + cross-modal Sight queries
+**Trial:** 30-day Pro trial on first use, no credit card required
 
 ## Architecture
 
@@ -151,6 +173,7 @@ ContextPulse is a monorepo with modular packages:
 | `contextpulse-voice` | Hold-to-dictate, Whisper transcription, vocabulary |
 | `contextpulse-touch` | Keyboard/mouse activity capture, correction detection |
 | `contextpulse-project` | Project detection and journal routing |
+| `contextpulse-memory` | Persistent key-value memory with semantic search (optional) |
 
 All modules emit events to a shared **EventBus** (the "spine"), which writes to a local SQLite database with FTS5 full-text search. MCP servers are read-only processes that query this database.
 
