@@ -5,7 +5,7 @@ ContextPulse is a unified always-on context platform for AI agents. One process,
 
 **Tagline:** "Always-on context for AI agents"
 **Version:** 0.1.0
-**Status:** Production-testable (unified daemon, EXE installer, 408+ tests, skills package)
+**Status:** Production-ready (pending COI approval for public release) — memory module production hardened, Lambda deployed, pricing finalized
 
 ## Architecture
 
@@ -44,10 +44,18 @@ ContextPulse Daemon (single process)
 | **contextpulse-voice** | 0.1.0 | 195 | 3 | Hold-to-dictate, Whisper transcription, vocabulary |
 | **contextpulse-touch** | 0.1.0 | 56 | 3 | Typing bursts, mouse events, correction detection |
 | **contextpulse-project** | 0.1.0 | 38 | 5 | Project detection, journal routing |
-| **contextpulse-memory** | 0.1.0 | 80 | 5 | Three-tier memory (hot/warm/cold), FTS5 search |
+| **contextpulse-memory** | 0.1.0 | 80 | 7 (5 free + 2 Pro) | Three-tier memory (hot/warm/cold), FTS5+semantic search, quota cap |
 | **contextpulse-agent** | 0.1.0 | — | — | Coming soon (v0.2 — agent coordination) |
 
-**Total: 408 tests (voice+core), 28 MCP tools**
+**Total: 408 tests (voice+core), 30 MCP tools (25 free + 5 Pro) + 4 voice tools = 34 total**
+
+## Memory Module (contextpulse-memory) — Production Hardened 2026-03-30
+- Free CRUD tools: memory_store, memory_recall, memory_list, memory_forget, memory_stats
+- Pro search tools: memory_search (hybrid/keyword/semantic), memory_semantic_search
+- MiniLM ONNX model pinned to HuggingFace commit 10244843, SHA-256 checksums filled
+- Hourly maintenance thread: prune expired + PRAGMA optimize (warm + cold tiers)
+- Quota cap: DEFAULT_MAX_WARM_ENTRIES=50_000 (~150 MB), raises MemoryQuotaExceeded
+- Lambda deployed to AWS with Pro-only tier (no Starter paid tier)
 
 ## MCP Tools
 
@@ -176,9 +184,11 @@ LLM cleanup uses recent window titles (last 2 min from Sight events) as proper n
 
 ## Licensing Model
 - **Sight:** Always free (screen capture, OCR, clipboard, activity)
-- **Memory/Agent:** Licensed (Ed25519 key verification, 7-day trial)
-- **Pro tools:** search_all_events, get_event_timeline gated behind Pro tier
+- **Memory CRUD:** Free forever (no license — memory_store/recall/list/forget)
+- **Pro ($49/yr or $249 lifetime):** semantic/hybrid search + cross-modal tools + 30-day trial
+- **Pro tools:** memory_search, memory_semantic_search, search_all_events, get_event_timeline
 - **Lambda:** Gumroad webhook → Ed25519 license key → SES email delivery
+- **No Starter paid tier** — CRUD is free, Pro is the only purchasable tier
 
 ## Performance Budget
 | Metric | Target | Actual |

@@ -11,6 +11,18 @@
 
 <!-- Archived 2026-03-26: Duplicate of GLOBAL_LESSONS_LEARNED.md "[2026-03-25] AI-generated marketing numbers need human verification" (same lesson, same incident) -->
 
+### [2026-03-30] gitleaks false-positives on SHA-256 hex digests — use # gitleaks:allow
+**Context:** Filling in `_FILE_CHECKSUMS` in `embeddings.py` with real SHA-256 hex strings triggered gitleaks, which pattern-matches on long hex strings as potential secrets. Pre-commit hook blocked the commit.
+**Lesson:** When committing file checksums, HMAC keys, or other intentional hex values that aren't secrets, add `# gitleaks:allow` inline comment. Alternatively, add to `.gitleaksignore`. This is the recommended gitleaks pattern for false positives.
+
+### [2026-03-30] Lambda package/ dir is gitignored — sync the source file, not the package
+**Context:** Tried to git add `lambda/package/license_webhook.py` and `lambda/lambda-deploy.zip` — both ignored by .gitignore. The canonical source is `lambda/license_webhook.py`; the package/ dir is the build artifact.
+**Lesson:** Lambda package/ and .zip files are build artifacts, not source. Always edit `lambda/license_webhook.py`, then run the sync/rebuild step separately. Don't try to commit the package or zip.
+
+### [2026-03-30] HuggingFace model commit SHA via API: `curl .../api/models/<org>/<model>` → `.sha`
+**Context:** Needed to pin the MiniLM ONNX model to a specific HuggingFace commit to make downloads reproducible. Found the commit SHA via `curl -s "https://huggingface.co/api/models/optimum/all-MiniLM-L6-v2" | jq .sha`.
+**Lesson:** Use the HuggingFace API endpoint to get the current HEAD commit SHA for any model repo. Then change `_HF_BASE` from `resolve/main` to `resolve/<sha>` to pin downloads. Update `_FILE_CHECKSUMS` in the same commit.
+
 ### [2026-03-28] activity.db lives in ~/screenshots/, not %APPDATA%/ContextPulse/
 **Context:** `session_learner.py` defaulted to `%APPDATA%/ContextPulse/activity.db` but dev-mode daemon writes to `~/screenshots/activity.db` (controlled by `OUTPUT_DIR` env var / `ACTIVITY_DB_PATH` in `contextpulse_core.config`).
 **Lesson:** Always use `ACTIVITY_DB_PATH` from `contextpulse_core.config` when reading activity.db — don't hardcode the path in voice tools. The MCP server gets this right; `session_learner.py` needs the same fix before shipping.
