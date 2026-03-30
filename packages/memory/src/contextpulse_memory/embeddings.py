@@ -21,7 +21,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger("contextpulse.memory.embeddings")
 
 # HuggingFace model repository (pre-exported ONNX via Optimum)
-_HF_BASE = "https://huggingface.co/optimum/all-MiniLM-L6-v2/resolve/main"
+# Pinned to commit 10244843 — update _FILE_CHECKSUMS when bumping this hash.
+_HF_COMMIT = "10244843eba3d9e479b27a4b81c94b56d8e9f4f2"
+_HF_BASE = f"https://huggingface.co/optimum/all-MiniLM-L6-v2/resolve/{_HF_COMMIT}"
 _MODEL_FILENAME = "model.onnx"
 _TOKENIZER_FILENAME = "tokenizer.json"
 _MODEL_DIR = Path.home() / ".contextpulse" / "models" / "minilm"
@@ -69,12 +71,12 @@ class EmbeddingEngine:
                 self._purge_cached_model()
             return self._available
 
-    # Known-good SHA-256 digests for the versioned model files.
-    # Regenerate with: sha256sum model.onnx tokenizer.json
-    # Set to None to skip verification for a file (not recommended in production).
+    # Known-good SHA-256 digests for pinned commit 10244843.
+    # Regenerate with: python -c "import hashlib,pathlib; ..."
+    # Set to None to skip verification for a file.
     _FILE_CHECKSUMS: dict[str, str | None] = {
-        _MODEL_FILENAME: None,      # populate after pinning a model version
-        _TOKENIZER_FILENAME: None,  # populate after pinning a model version
+        _MODEL_FILENAME: "4a64cee3d4134bbdc86eed96e1a660efec58975417204ecfcf134140edb6e0e2",  # gitleaks:allow
+        _TOKENIZER_FILENAME: "da0e79933b9ed51798a3ae27893d3c5fa4a201126cef75586296df9b4d2c62a0",  # gitleaks:allow
     }
 
     @staticmethod
