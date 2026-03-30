@@ -657,6 +657,19 @@ class MemoryStore:
         warm_pruned = self.warm.prune_expired()
         return {"hot": hot_pruned, "warm": warm_pruned}
 
+    def stats(self) -> dict[str, Any]:
+        """Return storage statistics across all three tiers."""
+        warm_db = self._data_dir / "memory.db"
+        cold_db = self._data_dir / "memory_cold.db"
+        return {
+            "hot_entries": len(self.hot),
+            "warm_entries": self.warm.count(),
+            "cold_windows": self.cold.count(),
+            "warm_db_bytes": warm_db.stat().st_size if warm_db.exists() else 0,
+            "cold_db_bytes": cold_db.stat().st_size if cold_db.exists() else 0,
+            "data_dir": str(self._data_dir),
+        }
+
     def close(self) -> None:
         self.warm.close()
         self.cold.close()
