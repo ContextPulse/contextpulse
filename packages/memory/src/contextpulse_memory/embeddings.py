@@ -69,6 +69,39 @@ class EmbeddingEngine:
                 self._purge_cached_model()
             return self._available
 
+    # Known-good SHA-256 digests for the versioned model files.
+    # Regenerate with: sha256sum model.onnx tokenizer.json
+    # Set to None to skip verification for a file (not recommended in production).
+    _FILE_CHECKSUMS: dict[str, str | None] = {
+        _MODEL_FILENAME: None,      # populate after pinning a model version
+        _TOKENIZER_FILENAME: None,  # populate after pinning a model version
+    }
+
+    @staticmethod
+    def _sha256(path: Path) -> str:
+        """Return lowercase hex SHA-256 of a file."""
+        import hashlib
+        h = hashlib.sha256()
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    def _verify_checksum(self, filename: str, path: Path) -> None:
+        """Verify file matches the expected SHA-256 checksum (if one is set)."""
+        expected = self._FILE_CHECKSUMS.get(filename)
+        if expected is None:
+            return  # no checksum pinned — skip verification
+        actual = self._sha256(path)
+        if actual != expected.lower():
+            path.unlink(missing_ok=True)
+            raise ValueError(
+                f"Checksum mismatch for {filename}: "
+                f"expected {expected}, got {actual}. "
+                "File deleted — will re-download on next use."
+            )
+        logger.debug("Checksum OK for %s", filename)
+
     def _download_if_needed(self) -> None:
         """Download model and tokenizer if not already cached."""
         _MODEL_DIR.mkdir(parents=True, exist_ok=True)
@@ -78,12 +111,20 @@ class EmbeddingEngine:
         ]
         for filename, dest in files:
             if dest.exists():
-                continue
+                # Verify existing file on startup (catches disk corruption)
+                try:
+                    self._verify_checksum(filename, dest)
+                except ValueError as exc:
+                    logger.warning("%s — re-downloading", exc)
+                    # File was deleted by _verify_checksum; fall through to download
+                else:
+                    continue
             url = f"{_HF_BASE}/{filename}"
             logger.info("Downloading %s …", filename)
             tmp = dest.with_suffix(".tmp")
             try:
                 urllib.request.urlretrieve(url, str(tmp))
+                self._verify_checksum(filename, tmp)
                 tmp.rename(dest)
                 logger.info(
                     "Saved %s (%.1f KB)", filename, dest.stat().st_size / 1024

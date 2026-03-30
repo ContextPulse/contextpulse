@@ -41,9 +41,25 @@ TIER_MAP = {
 }
 
 # Features unlocked per tier
+# Starter: basic memory CRUD (store, recall, list, forget)
+# Pro: everything in Starter + semantic/hybrid search + cross-modal Sight tools
 TIER_FEATURES = {
-    "starter": ["search_all_events", "get_event_timeline"],
-    "pro": ["search_all_events", "get_event_timeline"],
+    "starter": [
+        "memory_store",
+        "memory_recall",
+        "memory_list",
+        "memory_forget",
+    ],
+    "pro": [
+        "memory_store",
+        "memory_recall",
+        "memory_list",
+        "memory_forget",
+        "memory_search",
+        "memory_semantic_search",
+        "search_all_events",
+        "get_event_timeline",
+    ],
 }
 
 # Default license duration: 1 year from purchase

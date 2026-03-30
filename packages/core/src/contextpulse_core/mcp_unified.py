@@ -3,7 +3,7 @@
 
 """Unified MCP server for ContextPulse — all tools on a single HTTP endpoint.
 
-Consolidates sight, project, voice, and touch MCP servers into one
+Consolidates sight, project, voice, touch, and memory MCP servers into one
 long-lived process using streamable-http transport. This eliminates
 the per-session stdio process leak where each Claude Code session
 spawned 4+ python processes that were never reaped.
@@ -16,12 +16,13 @@ Or let the daemon watchdog start it alongside the capture daemon.
 Architecture:
     Claude Code ──HTTP──▶ localhost:8420/mcp  (this process)
                                 │
-                                ├── Sight tools  (screenshots, OCR, buffer, search)
+                                ├── Sight tools   (screenshots, OCR, buffer, search)
                                 ├── Project tools (detection, routing, journal)
-                                ├── Voice tools  (transcription, vocabulary)
-                                └── Touch tools  (keyboard, mouse, corrections)
+                                ├── Voice tools   (transcription, vocabulary)
+                                ├── Touch tools   (keyboard, mouse, corrections)
+                                └── Memory tools  (store, recall, search — license gated)
                                          │
-                                    activity.db  (shared, written by daemon)
+                                    activity.db + memory.db  (written by daemon)
 """
 
 import argparse
@@ -80,6 +81,11 @@ def _register_touch_tools():
     _import_tools(touch_app, "Touch")
 
 
+def _register_memory_tools():
+    from contextpulse_memory.mcp_server import mcp_app as memory_app
+    _import_tools(memory_app, "Memory")
+
+
 def _register_all():
     """Import and register tools from all packages.
 
@@ -93,6 +99,7 @@ def _register_all():
         ("project", _register_project_tools),
         ("voice", _register_voice_tools),
         ("touch", _register_touch_tools),
+        ("memory", _register_memory_tools),
     ]:
         try:
             register_fn()
