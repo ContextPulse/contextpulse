@@ -130,6 +130,15 @@ def _build_and_run() -> None:
         entry_type="combo", values=["smart", "visual", "both", "text"],
     )
 
+    gui_theme.make_label(
+        frame,
+        "smart  — screenshot only when screen changes significantly + OCR text (recommended)\n"
+        "text   — OCR text only, no screenshots (~10 MB/day, fastest search)\n"
+        "visual — screenshots only, no OCR (good for design/video work)\n"
+        "both   — screenshots + OCR every capture (~100 MB/day, most searchable)",
+        font=("Consolas", 8), fg=gui_theme.TEXT_MUTED,
+    ).pack(anchor="w", pady=(2, 8))
+
     quality_var = tk.IntVar(master=root, value=cfg.get("jpeg_quality", 75))
     _field_row(frame, "JPEG quality (1-100):", quality_var, entry_type="spin")
 
@@ -185,8 +194,13 @@ def _build_and_run() -> None:
     _field_row(frame, "Anthropic API key:", voice_api_var)
 
     gui_theme.make_label(
-        frame, "Larger models are more accurate but slower. 'base' is recommended.",
-        font=("Segoe UI", 8), fg=gui_theme.TEXT_MUTED,
+        frame,
+        "tiny      — fastest, ~40 MB RAM, fine for short commands, struggles with names/jargon\n"
+        "base      — recommended, ~150 MB RAM, strong accuracy for everyday speech\n"
+        "small     — better with accents and technical terms, ~500 MB RAM, ~2x slower\n"
+        "medium    — near-human accuracy, ~1.5 GB RAM, noticeable pause on long dictations\n"
+        "large-v3  — highest accuracy, ~3 GB RAM, slow on CPU — best with a GPU",
+        font=("Consolas", 8), fg=gui_theme.TEXT_MUTED,
     ).pack(anchor="w", pady=(2, 0))
 
     # ── Touch Section ─────────────────────────────────────────────
