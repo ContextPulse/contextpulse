@@ -117,12 +117,18 @@ def show_nag_dialog() -> bool:
     if trial_expired:
         trial_btn.state(["disabled"])
 
-    # Purchase link
-    gui_theme.make_label(
+    # Purchase link (clickable)
+    purchase_label = gui_theme.make_label(
         frame,
-        "Don't have a key? Purchase at contextpulse.ai",
-        font=("Segoe UI", 9, "underline"), fg=gui_theme.TEXT_MUTED,
-    ).pack(pady=(10, 0))
+        "Don't have a key? Buy at contextpulse.ai/pricing  (Starter $29 · Pro $49)",
+        font=("Segoe UI", 9, "underline"), fg=gui_theme.ACCENT,
+    )
+    purchase_label.pack(pady=(10, 0))
+    purchase_label.bind(
+        "<Button-1>",
+        lambda _: __import__("webbrowser").open("https://contextpulse.ai/pricing"),
+    )
+    purchase_label.config(cursor="hand2")
 
     def on_close():
         if trial_expired:
