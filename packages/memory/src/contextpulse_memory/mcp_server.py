@@ -237,6 +237,32 @@ def memory_forget(key: str) -> str:
     return json.dumps({"success": deleted, "key": key})
 
 
+@mcp_app.tool()
+@_require_starter
+def memory_stats() -> str:
+    """Return storage statistics for the memory system.
+
+    Reports entry counts per tier, database sizes, data directory path,
+    and whether the semantic embedding model is loaded.
+    """
+    store = _get_store()
+    stats = store.stats()
+
+    # Add embedding engine availability
+    try:
+        from contextpulse_memory.embeddings import get_engine
+        engine = get_engine()
+        stats["embedding_model_loaded"] = engine.is_available()
+    except Exception:
+        stats["embedding_model_loaded"] = False
+
+    # Human-friendly size fields
+    stats["warm_db_kb"] = round(stats["warm_db_bytes"] / 1024, 1)
+    stats["cold_db_kb"] = round(stats["cold_db_bytes"] / 1024, 1)
+
+    return json.dumps(stats, default=str)
+
+
 def main() -> None:
     logger.info("Starting ContextPulse Memory MCP server")
     _get_store()
