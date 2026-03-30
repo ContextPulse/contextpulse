@@ -258,30 +258,45 @@ def _build_and_run() -> None:
         license_text = f"Memory trial: {days} day{'s' if days != 1 else ''} remaining"
         license_color = gui_theme.PRIMARY_LIGHT
     else:
-        license_text = "Memory trial expired — enter a license key"
+        license_text = "Memory trial expired — enter a license key to continue"
         license_color = gui_theme.ERROR
 
     gui_theme.make_label(
         frame, license_text,
         font=("Segoe UI", 10), fg=license_color,
-    ).pack(anchor="w", pady=(0, 5))
+    ).pack(anchor="w", pady=(0, 4))
 
+    # What's included
     gui_theme.make_label(
-        frame, "Sight (screen capture) is always free. License is for Memory/Agent features.",
-        font=("Segoe UI", 8), fg=gui_theme.TEXT_MUTED,
-    ).pack(anchor="w", pady=(0, 5))
+        frame,
+        "Starter ($29/yr)  — persistent memory, recall, list, forget\n"
+        "Pro ($49/yr)          — everything in Starter + semantic search + cross-modal search\n"
+        "Sight (screen capture) is always free — no license required.",
+        font=("Consolas", 8), fg=gui_theme.TEXT_MUTED,
+    ).pack(anchor="w", pady=(0, 8))
 
-    # Enter Key button
+    # Buttons row
+    lic_btn_frame = tk.Frame(frame, bg=gui_theme.BG)
+    lic_btn_frame.pack(anchor="w", pady=(0, 5))
+
     def open_license_dialog():
         from contextpulse_core.license_dialog import show_nag_dialog
         show_nag_dialog()
-        # Refresh license display
         dlg.destroy()
 
+    def open_purchase_page():
+        import webbrowser
+        webbrowser.open("https://contextpulse.ai/pricing")
+
     ttk.Button(
-        frame, text="Enter License Key", style="Secondary.TButton",
+        lic_btn_frame, text="Buy / Upgrade", style="Accent.TButton",
+        command=open_purchase_page,
+    ).pack(side="left", padx=(0, 10))
+
+    ttk.Button(
+        lic_btn_frame, text="Enter License Key", style="Secondary.TButton",
         command=open_license_dialog,
-    ).pack(anchor="w", pady=(5, 0))
+    ).pack(side="left")
 
     # ── Save & Close ──────────────────────────────────────────────
     # Capture startup values for change detection
