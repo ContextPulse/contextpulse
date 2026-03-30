@@ -261,7 +261,7 @@ class ContextPulseDaemon:
             try:
                 heartbeat_path.write_text(str(time.time()), encoding="utf-8")
             except Exception:
-                pass  # best-effort
+                logger.debug("Heartbeat write failed", exc_info=True)
 
             # Stuck-pause detection: if Sight has been paused but the user
             # didn't manually pause, the session monitor may have died.
