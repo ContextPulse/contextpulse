@@ -1,16 +1,14 @@
 """MCP server exposing persistent memory tools to Claude Code.
 
-Free tier (trial or any license):
+Free forever (no license required):
   memory_store          — store a key-value memory with tags and TTL
   memory_recall         — retrieve a memory by key
   memory_list           — list memories with optional tag filter
   memory_forget         — delete a memory by key
 
-Pro tier (pro license or active trial):
+Pro license (or active 30-day trial):
   memory_search         — hybrid / keyword / semantic search across all memories
   memory_semantic_search — pure semantic (vector) search
-
-All tools are available during the 7-day trial regardless of tier.
 """
 
 from __future__ import annotations
@@ -39,18 +37,10 @@ mcp_app = FastMCP("ContextPulse Memory")
 # ── License gating ───────────────────────────────────────────────────
 
 def _require_starter(func):
-    """Gate a tool behind Starter or Pro license (or active trial)."""
+    """No-op gate — basic memory tools (store/recall/list/forget) are free forever."""
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        from contextpulse_core.license import has_starter_access, get_license_tier
-        if has_starter_access():
-            return func(*args, **kwargs)
-        tier = get_license_tier()
-        return json.dumps({
-            "error": "This tool requires a ContextPulse Starter or Pro license.",
-            "current_tier": tier or "free",
-            "upgrade_url": "https://contextpulse.ai/pricing",
-        })
+        return func(*args, **kwargs)
     return wrapper
 
 
