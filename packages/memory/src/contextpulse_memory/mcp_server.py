@@ -1,16 +1,21 @@
-"""MCP stdio server exposing persistent memory tools to Claude Code.
+"""MCP server exposing persistent memory tools to Claude Code.
 
-Tools:
+Free tier (trial or any license):
   memory_store          — store a key-value memory with tags and TTL
   memory_recall         — retrieve a memory by key
-  memory_search         — hybrid / keyword / semantic search across all memories
-  memory_semantic_search — pure semantic (vector) search
   memory_list           — list memories with optional tag filter
   memory_forget         — delete a memory by key
+
+Pro tier (pro license or active trial):
+  memory_search         — hybrid / keyword / semantic search across all memories
+  memory_semantic_search — pure semantic (vector) search
+
+All tools are available during the 7-day trial regardless of tier.
 """
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import os
@@ -30,6 +35,43 @@ logger = logging.getLogger("contextpulse.memory.mcp")
 
 mcp_app = FastMCP("ContextPulse Memory")
 
+
+# ── License gating ───────────────────────────────────────────────────
+
+def _require_starter(func):
+    """Gate a tool behind Starter or Pro license (or active trial)."""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        from contextpulse_core.license import has_starter_access, get_license_tier
+        if has_starter_access():
+            return func(*args, **kwargs)
+        tier = get_license_tier()
+        return json.dumps({
+            "error": "This tool requires a ContextPulse Starter or Pro license.",
+            "current_tier": tier or "free",
+            "upgrade_url": "https://contextpulse.ai/pricing",
+        })
+    return wrapper
+
+
+def _require_pro(func):
+    """Gate a tool behind Pro license (or active trial)."""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        from contextpulse_core.license import has_pro_access, get_license_tier
+        if has_pro_access():
+            return func(*args, **kwargs)
+        tier = get_license_tier()
+        return json.dumps({
+            "error": (
+                "This tool requires a ContextPulse Pro license. "
+                "Starter licenses include memory_store, memory_recall, memory_list, and memory_forget."
+            ),
+            "current_tier": tier or "free",
+            "upgrade_url": "https://contextpulse.ai/pricing",
+        })
+    return wrapper
+
 _DEFAULT_DIR = Path.home() / ".contextpulse" / "memory"
 _store: MemoryStore | None = None
 _store_lock = threading.Lock()
@@ -48,6 +90,7 @@ def _get_store() -> MemoryStore:
 
 
 @mcp_app.tool()
+@_require_starter
 def memory_store(
     key: str,
     value: str,
@@ -82,6 +125,7 @@ def memory_store(
 
 
 @mcp_app.tool()
+@_require_starter
 def memory_recall(key: str) -> str:
     """Retrieve a memory by exact key. Checks hot tier first, then warm tier.
 
@@ -98,6 +142,7 @@ def memory_recall(key: str) -> str:
 
 
 @mcp_app.tool()
+@_require_pro
 def memory_search(
     query: str,
     limit: int = 20,
@@ -141,6 +186,7 @@ def memory_search(
 
 
 @mcp_app.tool()
+@_require_pro
 def memory_semantic_search(query: str, limit: int = 20) -> str:
     """Search memories by semantic meaning using vector embeddings.
 
@@ -166,6 +212,7 @@ def memory_semantic_search(query: str, limit: int = 20) -> str:
 
 
 @mcp_app.tool()
+@_require_starter
 def memory_list(tag: str | None = None, limit: int = 50) -> str:
     """List stored memories, optionally filtered by tag.
 
@@ -186,6 +233,7 @@ def memory_list(tag: str | None = None, limit: int = 50) -> str:
 
 
 @mcp_app.tool()
+@_require_starter
 def memory_forget(key: str) -> str:
     """Delete a memory by key. Returns whether deletion succeeded.
 

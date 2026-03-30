@@ -233,8 +233,31 @@ def has_memory_access() -> bool:
 
 # -- Feature-based access checks ---------------------------------------------
 
-# Known Pro features that require a license
-PRO_FEATURES = frozenset({"search_all_events", "get_event_timeline"})
+# Starter: basic memory persistence (store, recall, list, delete)
+MEMORY_STARTER_FEATURES = frozenset({
+    "memory_store",
+    "memory_recall",
+    "memory_list",
+    "memory_forget",
+})
+
+# Pro: everything in Starter + semantic/hybrid search + cross-modal Sight tools
+MEMORY_PRO_FEATURES = frozenset({
+    *MEMORY_STARTER_FEATURES,
+    "memory_search",
+    "memory_semantic_search",
+    "search_all_events",
+    "get_event_timeline",
+})
+
+# Backwards-compat alias — Sight gating still uses this name
+PRO_FEATURES = MEMORY_PRO_FEATURES
+
+# Tier → canonical feature set (used for key generation and backwards compat)
+_TIER_FEATURE_SETS: dict[str, frozenset[str]] = {
+    "starter": MEMORY_STARTER_FEATURES,
+    "pro": MEMORY_PRO_FEATURES,
+}
 
 
 def get_licensed_features() -> list[str]:
@@ -260,37 +283,41 @@ def get_licensed_features() -> list[str]:
 
     # Backwards compat: derive features from tier
     tier = payload.get("tier", "")
-    if tier in ("starter", "pro"):
-        return list(PRO_FEATURES)
-    return []
+    feature_set = _TIER_FEATURE_SETS.get(tier, frozenset())
+    return list(feature_set)
 
 
 def has_feature(feature_name: str) -> bool:
     """Check if a specific feature is unlocked (by license OR trial)."""
-    # Licensed users: check feature list
     if is_licensed():
         return feature_name in get_licensed_features()
-
-    # Trial users: all Pro features are available during trial
-    if feature_name in PRO_FEATURES and not is_trial_expired():
-        return True
-
+    # Trial: all Pro features available during 7-day window
+    if not is_trial_expired():
+        return feature_name in MEMORY_PRO_FEATURES
     return False
 
 
-def has_pro_access() -> bool:
-    """Check if user has Pro-tier access (licensed with pro tier OR within trial).
+def has_starter_access() -> bool:
+    """Check if user can use Starter memory features (CRUD).
 
+    True for: starter license, pro license, or active trial.
+    """
+    if is_licensed():
+        return get_license_tier() in ("starter", "pro")
+    return not is_trial_expired()
+
+
+def has_pro_access() -> bool:
+    """Check if user can use Pro features (semantic search, cross-modal).
+
+    True for: pro license or active trial.
     This is the primary check used by _require_pro in MCP tools.
     """
     if is_licensed():
-        tier = get_license_tier()
-        if tier == "pro":
-            return True
-        # Starter tier also gets Pro tools (both tiers unlock the same features)
-        if tier == "starter":
-            return True
-        return False
-
-    # Trial: Pro features available during 7-day trial
+        return get_license_tier() == "pro"
     return not is_trial_expired()
+
+
+def has_memory_access() -> bool:
+    """Alias for has_starter_access() — kept for backwards compatibility."""
+    return has_starter_access()
