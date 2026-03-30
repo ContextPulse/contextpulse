@@ -7,7 +7,7 @@ Thanks for your interest in contributing! ContextPulse is open-source under AGPL
 **Requirements:** Python 3.11+, Windows 10/11, Git, [uv](https://docs.astral.sh/uv/)
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/junkyard-rules/contextpulse
 cd contextpulse
 uv venv
 .venv\Scripts\activate
@@ -20,12 +20,14 @@ This installs all packages in editable mode along with dev dependencies (pytest,
 
 ```bash
 # Full suite
-pytest tests/ -x -q
+pytest packages/ -x -q
 
 # Single package
-pytest tests/test_sight/ -x -q
-pytest tests/test_voice/ -x -q
-pytest tests/test_touch/ -x -q
+pytest packages/screen/tests/ -x -q
+pytest packages/voice/tests/ -x -q
+pytest packages/touch/tests/ -x -q
+pytest packages/memory/tests/ -x -q
+pytest packages/project/tests/ -x -q
 ```
 
 All tests must pass before submitting a PR.
