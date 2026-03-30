@@ -33,6 +33,12 @@ dependencies = [
     "contextpulse-core>=0.1.0",
 ]
 
+[project.optional-dependencies]
+macos = [
+    "pyobjc-framework-Vision>=10.0",
+    "pyobjc-framework-Quartz>=10.0",
+]
+
 [project.urls]
 Homepage = "https://contextpulse.ai"
 Repository = "https://github.com/junkyard-rules/contextpulse"

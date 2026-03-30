@@ -9,26 +9,31 @@ When Claude asks for screen context via MCP, we:
 """
 
 import logging
+import sys
 import threading
 import time
 
 import numpy as np
 from PIL import Image
-from rapidocr_onnxruntime import RapidOCR
 
 logger = logging.getLogger("contextpulse.sight.classifier")
 
 # Lazy-init OCR engine (loads model weights on first call)
-_ocr: RapidOCR | None = None
+_ocr = None
 _ocr_lock = threading.Lock()
 
 
-def _get_ocr() -> RapidOCR:
+def _get_ocr():
     global _ocr
     if _ocr is None:
         with _ocr_lock:
             if _ocr is None:
-                _ocr = RapidOCR()
+                if sys.platform == "darwin":
+                    from contextpulse_sight.ocr_macos import VisionOCR
+                    _ocr = VisionOCR()
+                else:
+                    from rapidocr_onnxruntime import RapidOCR
+                    _ocr = RapidOCR()
     return _ocr
 
 

@@ -41,6 +41,9 @@ Documentation = "https://github.com/junkyard-rules/contextpulse#readme"
 
 [project.optional-dependencies]
 openai = ["openai>=1.0"]
+macos = [
+    "mlx-whisper>=0.4",
+]
 
 [project.scripts]
 contextpulse-voice-mcp = "contextpulse_voice.mcp_server:main"
