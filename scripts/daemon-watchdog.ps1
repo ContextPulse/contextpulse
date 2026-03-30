@@ -95,7 +95,7 @@ function Start-McpServer {
     if ($check.TcpTestSucceeded) {
         Write-Log "Unified MCP server confirmed healthy on port $McpPort"
     } else {
-        Write-Log "Unified MCP server FAILED to start — check mcp_unified_stderr.log" "ERROR"
+        Write-Log "Unified MCP server FAILED to start - check mcp_unified_stderr.log" "ERROR"
     }
 }
 
@@ -112,7 +112,7 @@ while ($true) {
     # Check restart budget
     $recentRestarts = Get-RestartsInLastHour
     if ($recentRestarts -ge $MaxRestartsPerHour) {
-        Write-Log "Restart budget exhausted ($recentRestarts/$MaxRestartsPerHour in last hour). Sleeping 10 min before retry." "WARN"
+        Write-Log "Restart budget exhausted ($recentRestarts/$($MaxRestartsPerHour) in last hour). Sleeping 10 min before retry." "WARN"
         Start-Sleep -Seconds 600
         continue
     }

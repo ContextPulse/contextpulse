@@ -46,40 +46,38 @@ MCP_PORT = 8420
 mcp_app: FastMCP | None = None  # Created in main() with correct port
 
 
-def _register_sight_tools():
-    """Register all Sight tools (screenshots, OCR, buffer, search)."""
-    from contextpulse_sight.mcp_server import mcp_app as sight_app
+def _import_tools(source_app: FastMCP, label: str) -> int:
+    """Register all tools from source_app into the unified mcp_app.
 
-    for name, tool in sight_app._tool_manager._tools.items():
-        mcp_app._tool_manager._tools[name] = tool
-    logger.info("Registered %d Sight tools", len(sight_app._tool_manager._tools))
+    Uses the public add_tool(fn) API for registration so we don't depend on
+    SDK internals. The _tools dict is read-only here for iteration — the only
+    private access that has no public equivalent.
+    """
+    tools = source_app._tool_manager._tools
+    for tool in tools.values():
+        mcp_app._tool_manager.add_tool(tool.fn)
+    logger.info("Registered %d %s tools", len(tools), label)
+    return len(tools)
+
+
+def _register_sight_tools():
+    from contextpulse_sight.mcp_server import mcp_app as sight_app
+    _import_tools(sight_app, "Sight")
 
 
 def _register_project_tools():
-    """Register all Project tools (detection, routing, journal)."""
     from contextpulse_project.mcp_server import mcp_app as project_app
-
-    for name, tool in project_app._tool_manager._tools.items():
-        mcp_app._tool_manager._tools[name] = tool
-    logger.info("Registered %d Project tools", len(project_app._tool_manager._tools))
+    _import_tools(project_app, "Project")
 
 
 def _register_voice_tools():
-    """Register all Voice tools (transcription, vocabulary)."""
     from contextpulse_voice.mcp_server import mcp_app as voice_app
-
-    for name, tool in voice_app._tool_manager._tools.items():
-        mcp_app._tool_manager._tools[name] = tool
-    logger.info("Registered %d Voice tools", len(voice_app._tool_manager._tools))
+    _import_tools(voice_app, "Voice")
 
 
 def _register_touch_tools():
-    """Register all Touch tools (keyboard, mouse, corrections)."""
     from contextpulse_touch.mcp_server import mcp_app as touch_app
-
-    for name, tool in touch_app._tool_manager._tools.items():
-        mcp_app._tool_manager._tools[name] = tool
-    logger.info("Registered %d Touch tools", len(touch_app._tool_manager._tools))
+    _import_tools(touch_app, "Touch")
 
 
 def _register_all():
