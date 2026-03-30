@@ -55,16 +55,19 @@ ContextPulse is a background daemon that captures screen, voice, and input activ
 One monitor shows this Claude terminal — focus on the OTHER monitor(s) for useful context.
 
 **Fallback when MCP is unavailable:**
-```bash
-# Check freshness first
-python -c "import os,time; age=time.time()-os.path.getmtime('C:/Users/david/screenshots/screen_all.png'); print(f'Age: {age:.0f}s - {\"FRESH\" if age<30 else \"STALE\"}')"
+```python
+import os, time
+from pathlib import Path
+p = Path.home() / "screenshots" / "screen_all.png"
+age = time.time() - p.stat().st_mtime
+print(f"Age: {age:.0f}s - {'FRESH' if age < 30 else 'STALE'}")
 ```
-Files: `C:/Users/david/screenshots/screen_all.png` (both monitors), `screen_latest.png` (active).
+Default screenshot location: `~/screenshots/screen_all.png` (both monitors), `screen_latest.png` (active).
 
 **Daemon restart** (if `get_buffer_status()` returns empty):
 ```bash
 wmic process where "commandline like '%contextpulse_sight%'" call terminate 2>/dev/null
-cd ~/Projects/ContextPulse && .venv/Scripts/pythonw.exe -m contextpulse_sight.app &
+contextpulse-sight &
 ```
 **NEVER** `taskkill /IM pythonw.exe /F` — kills Voice and other Python services too.
 

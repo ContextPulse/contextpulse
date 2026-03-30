@@ -44,7 +44,7 @@ Everything stays local. No cloud. No telemetry. Your data never leaves your mach
 │              │ SQLite+FTS5  │                    │
 │              └──────────────┘                    │
 └────────────────────┬────────────────────────────┘
-                     │ MCP (stdio)
+                     │ MCP (streamable-http :8420)
         ┌────────────┼────────────┐
         ▼            ▼            ▼
    Claude Code    Cursor      Any MCP
@@ -66,34 +66,27 @@ AI coding assistants are powerful but blind. They can't see your screen, hear yo
 pip install contextpulse-core contextpulse-sight contextpulse-voice contextpulse-touch
 ```
 
+Start the daemon and the unified MCP server:
+
+```bash
+python -m contextpulse_core.daemon &
+contextpulse-mcp  # starts HTTP MCP server on port 8420
+```
+
 Add to your Claude Code MCP config (`~/.claude.json`):
 
 ```json
 {
   "mcpServers": {
-    "contextpulse-sight": {
-      "command": "python",
-      "args": ["-m", "contextpulse_sight.mcp_server"]
-    },
-    "contextpulse-voice": {
-      "command": "python",
-      "args": ["-m", "contextpulse_voice.mcp_server"]
-    },
-    "contextpulse-touch": {
-      "command": "python",
-      "args": ["-m", "contextpulse_touch.mcp_server"]
+    "contextpulse": {
+      "type": "http",
+      "url": "http://127.0.0.1:8420/mcp"
     }
   }
 }
 ```
 
-Start the daemon:
-
-```bash
-python -m contextpulse_core.daemon
-```
-
-That's it. Your AI agent now has 23 tools for reading your screen, voice, and activity.
+That's it. Your AI agent now has 25+ tools for reading your screen, voice, and activity.
 
 ## MCP Tools
 
@@ -145,7 +138,7 @@ That's it. Your AI agent now has 23 tools for reading your screen, voice, and ac
 | `search_all_events` | Cross-modal full-text search across screen, voice, clipboard, keys |
 | `get_event_timeline` | Temporal view of all events across all modalities |
 
-**Free:** 21 tools across Sight, Voice, Touch, and Project. **Pro:** 2 cross-modal tools (`search_all_events`, `get_event_timeline`) that query across all modalities at once.
+**Free:** 23 tools across Sight, Voice, Touch, and Project. **Pro:** 2 cross-modal tools (`search_all_events`, `get_event_timeline`) that query across all modalities at once.
 
 ## Architecture
 
@@ -170,12 +163,12 @@ All modules emit events to a shared **EventBus** (the "spine"), which writes to 
 ## Development
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/junkyard-rules/contextpulse
 cd contextpulse
 uv venv
 .venv\Scripts\activate
 uv pip install -e "packages/core[dev]" -e packages/screen -e packages/voice -e packages/touch -e packages/project
-pytest tests/ -x -q
+pytest packages/ -x -q
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
@@ -207,9 +200,9 @@ python scripts/canary_health_check.py --json
 1. Open Task Scheduler → Create Basic Task
 2. Trigger: Daily, repeat every 4 hours
 3. Action: Start a program
-   - Program: `C:\Users\david\Projects\ContextPulse\.venv\Scripts\python.exe`
+   - Program: `<path-to-contextpulse>\.venv\Scripts\python.exe`
    - Arguments: `scripts/canary_health_check.py`
-   - Start in: `C:\Users\david\Projects\ContextPulse`
+   - Start in: `<path-to-contextpulse>`
 
 ## License
 
