@@ -109,3 +109,7 @@
 <!-- Archived 2026-03-24: Incorporated into designing-logos skill (structural edit limitation section) -->
 
 <!-- Archived to skills: SQLite migrations → developing-python/references/windows-gotchas.md -->
+
+<!-- Archived 2026-03-30: gitleaks false positives on SHA-256 → open-source-readiness check #25 + developing-python/ML Model Pinning section -->
+<!-- Archived 2026-03-30: Lambda package/ gitignored → managing-serverless gotcha #9 -->
+<!-- Archived 2026-03-30: HuggingFace commit SHA pinning → developing-python/ML Model Pinning section -->
