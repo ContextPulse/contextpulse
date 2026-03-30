@@ -25,7 +25,7 @@ APPDATA_DIR = Path(os.environ.get("APPDATA", "")) / "ContextPulse"
 LICENSE_FILE = APPDATA_DIR / "license.key"
 TRIAL_FILE = APPDATA_DIR / "trial.json"
 
-TRIAL_DAYS = 7
+TRIAL_DAYS = 30
 EXPIRY_GRACE_DAYS = 3  # Grace period after license expiration before hard block
 
 

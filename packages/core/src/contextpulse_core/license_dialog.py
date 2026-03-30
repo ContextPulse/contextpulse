@@ -38,10 +38,10 @@ def show_nag_dialog() -> bool:
     trial_expired = days_left <= 0
 
     if trial_expired:
-        trial_msg = "Your 7-day Memory trial has expired. Enter a license key to continue using Memory features."
+        trial_msg = "Your 30-day Pro trial has expired. Upgrade to keep semantic search and cross-modal tools."
         trial_color = gui_theme.ERROR
     else:
-        trial_msg = f"You have {days_left} day{'s' if days_left != 1 else ''} left in your Memory trial."
+        trial_msg = f"Pro trial: {days_left} day{'s' if days_left != 1 else ''} remaining — memory store/recall/list/forget stay free forever."
         trial_color = gui_theme.TEXT_MUTED
 
     gui_theme.make_label(
@@ -49,10 +49,10 @@ def show_nag_dialog() -> bool:
         font=("Segoe UI", 10), fg=trial_color,
     ).pack(pady=(5, 3))
 
-    # "Sight remains free" reassurance
+    # Free forever reassurance
     gui_theme.make_label(
         frame,
-        "ContextPulse Sight (screen capture) is free forever — no license required.",
+        "Sight (screen capture) and basic memory (store/recall/list/forget) are free forever.",
         font=("Segoe UI", 9), fg=gui_theme.TEXT_MUTED,
     ).pack(pady=(0, 15))
 
@@ -120,7 +120,7 @@ def show_nag_dialog() -> bool:
     # Purchase link (clickable)
     purchase_label = gui_theme.make_label(
         frame,
-        "Don't have a key? Buy at contextpulse.ai/pricing  (Starter $29 · Pro $49)",
+        "Upgrade at contextpulse.ai/pricing  (Pro $49/yr · Lifetime $249)",
         font=("Segoe UI", 9, "underline"), fg=gui_theme.ACCENT,
     )
     purchase_label.pack(pady=(10, 0))

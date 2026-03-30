@@ -269,8 +269,8 @@ def _build_and_run() -> None:
     # What's included
     gui_theme.make_label(
         frame,
-        "Starter ($29/yr)  — persistent memory, recall, list, forget\n"
-        "Pro ($49/yr)          — everything in Starter + semantic search + cross-modal search\n"
+        "Free forever  — memory store, recall, list, forget (no license needed)\n"
+        "Pro ($49/yr)   — adds semantic search + cross-modal search  |  Lifetime: $249\n"
         "Sight (screen capture) is always free — no license required.",
         font=("Consolas", 8), fg=gui_theme.TEXT_MUTED,
     ).pack(anchor="w", pady=(0, 8))
