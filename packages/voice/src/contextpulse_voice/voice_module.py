@@ -139,17 +139,12 @@ class VoiceModule(ModalityModule):
         logger.info("VoiceModule stopped")
 
     def is_alive(self) -> bool:
-        if not self._running:
-            return False
-        # Check actual listener thread liveness — the _running flag can stay
-        # True even after the pynput listener thread dies from an unhandled
-        # exception (e.g. PortAudioError when audio device disappears).
-        if self._listener is not None and not self._listener.is_alive():
-            logger.warning("Voice keyboard listener thread died — marking as not alive")
-            self._running = False
-            self._error = "Keyboard listener thread died unexpectedly"
-            return False
-        return True
+        # On Windows, pynput's keyboard Listener thread can report is_alive()=False
+        # even while the OS-level hook is still installed and processing events.
+        # Using _listener.is_alive() here causes false negatives and a permanent
+        # voice=OFF tray status. _running is set True by start() and False only
+        # by stop() or a genuine exception, so it is the reliable source of truth.
+        return self._running
 
     def get_status(self) -> dict[str, Any]:
         return {
