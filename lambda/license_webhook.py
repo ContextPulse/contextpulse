@@ -343,10 +343,32 @@ def lambda_handler(event, context):
     except Exception:
         logger.exception(
             "License stored but email delivery failed for %s (sale_id=%s). "
-            "Manual re-send required.",
+            "Flagging in DynamoDB for manual re-send.",
             email, sale_id,
         )
+        # Mark delivery failure in DynamoDB so failed deliveries are queryable
+        try:
+            licenses_table.update_item(
+                Key={"email": email},
+                UpdateExpression="SET email_sent = :f, email_failed_at = :t",
+                ExpressionAttributeValues={
+                    ":f": False,
+                    ":t": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                },
+            )
+        except Exception:
+            logger.exception("Failed to flag delivery failure in DynamoDB for %s", email)
         # Return 200 -- license IS created, email is a delivery concern
         return {"statusCode": 200, "body": "License created, email delivery failed"}
+
+    # Mark email as successfully sent
+    try:
+        licenses_table.update_item(
+            Key={"email": email},
+            UpdateExpression="SET email_sent = :t",
+            ExpressionAttributeValues={":t": True},
+        )
+    except Exception:
+        logger.debug("Failed to set email_sent flag for %s", email, exc_info=True)
 
     return {"statusCode": 200, "body": "OK"}

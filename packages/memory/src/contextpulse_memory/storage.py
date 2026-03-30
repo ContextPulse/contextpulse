@@ -9,12 +9,15 @@ Tiers:
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Hot tier — in-memory dict with TTL eviction
@@ -539,7 +542,7 @@ class MemoryStore:
             if vec is not None:
                 embedding_bytes = np.array(vec, dtype=np.float32).tobytes()
         except Exception:
-            pass
+            logger.debug("Embedding skipped for key=%r", key, exc_info=True)
 
         self.warm.upsert(
             key=key, value=value, tags=tags, expires_at=expires_at,

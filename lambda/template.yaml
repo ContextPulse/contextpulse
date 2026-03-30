@@ -109,6 +109,24 @@ Resources:
           ThrottlingBurstLimit: 10
           ThrottlingRateLimit: 5
 
+  # -- CloudWatch Alarm for Lambda errors ------------------------------------
+  LicenseWebhookErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: contextpulse-license-webhook-errors
+      AlarmDescription: Alerts when the license webhook Lambda has errors (failed deliveries, crashes)
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref LicenseWebhookFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
 Outputs:
   WebhookUrl:
     Description: Gumroad webhook URL (configure in Gumroad product settings)

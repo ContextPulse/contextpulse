@@ -8,7 +8,7 @@ on:
 
 jobs:
   lint:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -25,9 +25,11 @@ jobs:
           ruff check packages/core/src packages/memory/src packages/project/src packages/screen/src packages/voice/src packages/touch/src
 
   test-cross-platform:
-    runs-on: windows-latest
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         python-version: ["3.12"]
 
     steps:
