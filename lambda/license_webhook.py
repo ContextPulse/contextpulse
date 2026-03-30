@@ -33,23 +33,17 @@ SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "license@contextpulse.ai")
 GUMROAD_PRODUCT_ID = os.environ.get("GUMROAD_PRODUCT_ID", "")
 
 # Tier mapping: Gumroad variant name -> tier string
+# Only "pro" is a paid tier. Basic memory CRUD is free forever (no license needed).
 TIER_MAP = {
     "pro": "pro",
     "memory pro": "pro",
-    "starter": "starter",
-    "memory starter": "starter",
+    "lifetime": "pro",
+    "memory lifetime": "pro",
 }
 
 # Features unlocked per tier
-# Starter: basic memory CRUD (store, recall, list, forget)
-# Pro: everything in Starter + semantic/hybrid search + cross-modal Sight tools
+# Pro: semantic/hybrid search + cross-modal Sight tools (CRUD is free -- no license)
 TIER_FEATURES = {
-    "starter": [
-        "memory_store",
-        "memory_recall",
-        "memory_list",
-        "memory_forget",
-    ],
     "pro": [
         "memory_store",
         "memory_recall",
@@ -99,22 +93,14 @@ def _verify_gumroad_signature(body_raw: str, signature_header: str | None) -> bo
 # -- Tier detection -----------------------------------------------------------
 
 def _detect_tier(params: dict) -> str:
-    """Detect tier from Gumroad variant or price."""
-    # Try variant name first
+    """Detect tier from Gumroad variant. All paid purchases are 'pro'."""
     variants = params.get("variants", [None])[0]
     if variants:
         for variant_name, tier_key in TIER_MAP.items():
             if variant_name in variants.lower():
                 return tier_key
-
-    # Fall back to price-based detection
-    price_cents = params.get("price", [None])[0]
-    price_dollars = int(price_cents) / 100 if price_cents else 0
-    if price_dollars >= 49:
-        return "pro"
-    elif price_dollars >= 29:
-        return "starter"
-    return "starter"  # default
+    # Any Gumroad sale = Pro (basic CRUD is free, no Starter paid tier)
+    return "pro"
 
 
 # -- License key generation ---------------------------------------------------
@@ -154,14 +140,14 @@ def _generate_license_key(email: str, tier: str) -> str:
 
 def _send_license_email(email: str, license_key: str, tier: str) -> None:
     """Send the license key via SES with branded HTML + plain text fallback."""
-    tier_display = "Memory Starter" if tier == "starter" else "Memory Pro"
+    tier_display = "Memory Pro"
 
     ses.send_email(
         Source=SENDER_EMAIL,
         Destination={"ToAddresses": [email]},
         Message={
             "Subject": {
-                "Data": f"Your ContextPulse {tier_display} License Key",
+                "Data": "Your ContextPulse Pro License Key",
                 "Charset": "UTF-8",
             },
             "Body": {
@@ -170,20 +156,20 @@ def _send_license_email(email: str, license_key: str, tier: str) -> None:
                     "Data": f"""<html>
 <body style="font-family: 'Inter', 'Segoe UI', Arial, sans-serif; background: #0D1117; color: #E6EDF3; padding: 40px;">
 <div style="max-width: 600px; margin: 0 auto;">
-  <h1 style="color: #00E676; margin-bottom: 5px;">Thank you for purchasing ContextPulse!</h1>
-  <p style="color: #8B949E;">Your <strong>{tier_display}</strong> license key is below.</p>
+  <h1 style="color: #00E676; margin-bottom: 5px;">Thank you for purchasing ContextPulse Pro!</h1>
+  <p style="color: #8B949E;">Your <strong>Memory Pro</strong> license key is below. It unlocks semantic search, hybrid search, and cross-modal Sight tools.</p>
   <div style="background: #161B22; padding: 16px 20px; border-radius: 8px; border: 1px solid #30363D; margin: 20px 0; word-break: break-all;">
     <code style="color: #00E676; font-size: 14px;">{license_key}</code>
   </div>
   <h3 style="color: #E6EDF3;">How to activate:</h3>
   <ol style="color: #8B949E; line-height: 1.8;">
     <li>Right-click the ContextPulse tray icon</li>
-    <li>Select <strong>Enter License Key</strong></li>
+    <li>Select <strong>Settings</strong> &rarr; <strong>Enter License Key</strong></li>
     <li>Paste the key above and click <strong>Activate License</strong></li>
   </ol>
   <p style="color: #8B949E; margin-top: 20px;">
-    Your license is valid for {LICENSE_DURATION_DAYS} days from purchase.
-    ContextPulse Sight (screen capture) remains free forever.
+    Your license is valid for {LICENSE_DURATION_DAYS} days from purchase.<br>
+    Basic memory (store/recall/list/forget) and Sight (screen capture) are free forever &mdash; no license needed.
   </p>
   <hr style="border: 1px solid #30363D; margin: 30px 0;">
   <p style="color: #8B949E; font-size: 12px;">
@@ -197,18 +183,20 @@ def _send_license_email(email: str, license_key: str, tier: str) -> None:
                 },
                 "Text": {
                     "Charset": "UTF-8",
-                    "Data": f"""Thank you for purchasing ContextPulse!
+                    "Data": f"""Thank you for purchasing ContextPulse Pro!
 
-Your {tier_display} license key:
+Your Memory Pro license key:
 {license_key}
+
+What's unlocked: semantic search, hybrid search, cross-modal Sight tools.
 
 How to activate:
 1. Right-click the ContextPulse tray icon
-2. Select "Enter License Key"
+2. Select Settings > Enter License Key
 3. Paste the key above and click "Activate License"
 
 Your license is valid for {LICENSE_DURATION_DAYS} days.
-ContextPulse Sight (screen capture) remains free forever.
+Basic memory (store/recall/list/forget) and Sight are free forever -- no license needed.
 
 Keep this email safe. Reply to this email if you need help.
 ContextPulse -- Always-on context for AI agents | https://contextpulse.ai
