@@ -78,3 +78,26 @@ jobs:
       - name: Run all tests
         run: |
           pytest packages/ -v --tb=short --ignore=packages/agent
+
+  test-macos:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install packages with macOS extras
+        run: |
+          pip install -e "packages/core[macos]" -e packages/screen -e packages/voice -e packages/touch -e packages/memory -e packages/project
+          pip install pytest
+
+      - name: Run tests (skip Windows-only)
+        run: |
+          pytest packages/ -v --tb=short --ignore=packages/agent -k "not windows"

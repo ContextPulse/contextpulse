@@ -25,7 +25,11 @@ import time
 import traceback
 from pathlib import Path
 
-import pystray
+if sys.platform == "darwin":
+    # rumps imported lazily in tray_macos.py
+    pass
+else:
+    import pystray
 
 from contextpulse_core.first_run import is_first_run, show_welcome_dialog
 from contextpulse_core.license_dialog import show_nag_dialog
@@ -35,10 +39,9 @@ from contextpulse_core.spine import EventBus
 
 logger = logging.getLogger("contextpulse.daemon")
 
-# Resolve output dir (same as Sight config)
-OUTPUT_DIR = Path(os.environ.get(
-    "CONTEXTPULSE_OUTPUT_DIR", str(Path.home() / "screenshots")
-))
+# Resolve output dir — use platform-aware default from config.py
+from contextpulse_core.config import OUTPUT_DIR as _cfg_output_dir
+OUTPUT_DIR = _cfg_output_dir
 LOG_FILE = OUTPUT_DIR / "contextpulse.log"
 CRASH_LOG = OUTPUT_DIR / "contextpulse_crash.log"
 ACTIVITY_DB_PATH = OUTPUT_DIR / os.environ.get("CONTEXTPULSE_ACTIVITY_DB", "activity.db")
@@ -80,6 +83,26 @@ class ContextPulseDaemon:
         self._init_sight()
         self._init_voice()
         self._init_touch()
+
+    # ── Properties for tray integration (used by tray_macos) ────────
+
+    @property
+    def paused(self) -> bool:
+        """Whether screen capture is currently paused."""
+        return bool(self._sight_app and self._sight_app.paused)
+
+    @property
+    def output_dir(self) -> Path:
+        return OUTPUT_DIR
+
+    def toggle_pause(self) -> None:
+        """Toggle Sight capture pause state."""
+        if self._sight_app:
+            self._sight_app.toggle_pause()
+
+    def shutdown(self) -> None:
+        """Graceful shutdown — stop modules and clean up."""
+        self._quit()
 
     # ── Module Initialization ─────────────────────────────────────
 
@@ -527,16 +550,22 @@ class ContextPulseDaemon:
         )
         self._daemon_watchdog_thread.start()
 
-        # System tray
-        from contextpulse_sight.icon import create_icon
-        self.tray = pystray.Icon(
-            name="ContextPulse",
-            icon=create_icon(),
-            title=self._get_status_text(),
-            menu=self._create_tray_menu(),
-        )
-        logger.info("ContextPulse running — Sight + Voice + Touch")
-        self.tray.run()  # blocks until quit
+        # System tray — platform-branched
+        if sys.platform == "darwin":
+            from contextpulse_core.tray_macos import create_tray
+            self.tray = create_tray(self)
+            logger.info("ContextPulse running — Sight + Voice + Touch (macOS menu bar)")
+            self.tray.run()  # blocks on main thread (AppKit requirement)
+        else:
+            from contextpulse_sight.icon import create_icon
+            self.tray = pystray.Icon(
+                name="ContextPulse",
+                icon=create_icon(),
+                title=self._get_status_text(),
+                menu=self._create_tray_menu(),
+            )
+            logger.info("ContextPulse running — Sight + Voice + Touch")
+            self.tray.run()  # blocks until quit
 
 
 def main() -> None:
