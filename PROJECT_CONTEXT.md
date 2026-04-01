@@ -5,7 +5,7 @@ ContextPulse is a unified always-on context platform for AI agents. One process,
 
 **Tagline:** "Always-on context for AI agents"
 **Version:** 0.1.0
-**Status:** Production-ready (pending COI approval for public release) — memory module production hardened, Lambda deployed, pricing finalized
+**Status:** Production-ready (open source, pending COI approval for public GitHub release) — memory module production hardened, Lambda deployed, pricing finalized
 
 ## Architecture
 
@@ -183,12 +183,14 @@ LLM cleanup uses recent window titles (last 2 min from Sight events) as proper n
 - **Bonus:** context-pulse.com ($10/yr)
 
 ## Licensing Model
-- **Sight:** Always free (screen capture, OCR, clipboard, activity)
-- **Memory CRUD:** Free forever (no license — memory_store/recall/list/forget)
-- **Pro ($49/yr or $249 lifetime):** semantic/hybrid search + cross-modal tools + 30-day trial
+
+ContextPulse is open source (open-core model). License: MIT (pending final decision).
+
+- **Community edition (free):** All core tools — Sight capture/OCR/clipboard, Voice dictation, Touch analytics, Project routing, Memory CRUD (store/recall/list/forget/stats)
+- **Pro ($49/yr or $249 lifetime):** Advanced features requiring more compute — semantic/hybrid memory search, cross-modal analytics, priority support
 - **Pro tools:** memory_search, memory_semantic_search, search_all_events, get_event_timeline
-- **Lambda:** Gumroad webhook → Ed25519 license key → SES email delivery
-- **No Starter paid tier** — CRUD is free, Pro is the only purchasable tier
+- **License delivery:** Gumroad webhook -> Ed25519 license key -> SES email
+- **No Starter paid tier** — Community is fully functional, Pro adds advanced capabilities
 
 ## Performance Budget
 | Metric | Target | Actual |

@@ -4,7 +4,9 @@
 **ContextPulse**
 
 ## Tagline
-> Always-on context for AI agents
+> The memory layer for AI agents -- open source, privacy-first
+
+*(Alternative: "Always-on context for AI agents -- open source")*
 
 ## Positioning
 ContextPulse is invisible infrastructure that gives AI agents persistent awareness of your desktop, your work history, and your project state. It runs in the background, captures what matters, and makes it instantly available to any AI agent via MCP.
@@ -51,18 +53,18 @@ The parent brand is **ContextPulse**. Sub-products use `Context[Noun]` format �
 4. **Precise** — the right context at the right time, not a firehose
 5. **Developer-native** — CLI-first, MCP protocol, env vars, no GUI bloat
 
-## Revenue Model
+## Open Source Model
 
-ContextPulse is NOT open source. The GitHub repo is private. Code is distributed via PyPI packages with license verification.
+ContextPulse is open source (open-core model). The repository is public on GitHub. License: MIT (pending final decision).
 
-| Product | Free Tier | Paid Tier |
-|---------|-----------|-----------|
-| **Sight** | Core capture, 3 MCP tools, basic buffer, privacy controls | **Sight Pro ($29 one-time)** — all 10 MCP tools, OCR search, smart storage, activity DB, clipboard, multi-agent stats |
-| **Touch** | — | TBD |
-| **Ear** | — | TBD |
-| **Memory** | — | $29-49 one-time (TBD) |
-| **Heart** | — | TBD |
-| **People** | — | TBD |
+**Positioning: "The memory layer for AI agents -- open source, privacy-first"**
+
+| Edition | What's included | Price |
+|---------|----------------|-------|
+| **Community** | All core tools across Sight, Voice, Touch, Project, Memory CRUD | Free forever (MIT) |
+| **Pro** | Semantic search, advanced memory (hybrid/vector), cross-modal analytics, priority support | Paid ($49/yr or $249 lifetime) |
+
+Community edition is fully functional -- Pro adds advanced features that require more compute or infrastructure. No feature is arbitrarily gated behind a paywall; Pro tools are meaningfully more powerful.
 
 ## Logo System
 
