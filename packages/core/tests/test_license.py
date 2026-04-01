@@ -172,9 +172,9 @@ class TestLicenseStatus:
 # ── Trial system tests ───────────────────────────────────────────────
 
 class TestTrial:
-    def test_trial_starts_at_7_days(self, isolated_license):
+    def test_trial_starts_at_30_days(self, isolated_license):
         days = get_trial_days_remaining()
-        assert days == 7
+        assert days == 30
 
     def test_trial_not_expired_initially(self, isolated_license):
         assert is_trial_expired() is False

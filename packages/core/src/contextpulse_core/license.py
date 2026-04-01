@@ -5,7 +5,7 @@ Payload: {"email": "...", "tier": "starter|pro", "features": [...], "exp": unix_
 
 Sight is always free. Licensing gates Pro features (search_all_events, get_event_timeline).
 Expired license = warning + nag, NOT hard block.
-7-day trial for Pro features on first use.
+30-day trial for Pro features on first use.
 """
 
 import base64
@@ -219,7 +219,7 @@ def get_trial_days_remaining() -> int:
 
 
 def is_trial_expired() -> bool:
-    """Check if the 7-day Memory trial has expired."""
+    """Check if the 30-day Memory trial has expired."""
     return get_trial_days_remaining() <= 0
 
 
@@ -291,7 +291,7 @@ def has_feature(feature_name: str) -> bool:
     """Check if a specific feature is unlocked (by license OR trial)."""
     if is_licensed():
         return feature_name in get_licensed_features()
-    # Trial: all Pro features available during 7-day window
+    # Trial: all Pro features available during 30-day window
     if not is_trial_expired():
         return feature_name in MEMORY_PRO_FEATURES
     return False

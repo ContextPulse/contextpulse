@@ -6,8 +6,30 @@ build-backend = "setuptools.build_meta"
 name = "contextpulse"
 version = "0.1.0"
 description = "Always-on context for AI agents"
-requires-python = ">=3.10"
-dependencies = []
+requires-python = ">=3.12"
+dependencies = [
+    "contextpulse-core>=0.1.0",
+    "contextpulse-sight>=0.1.0",
+    "contextpulse-voice>=0.1.0",
+    "contextpulse-touch>=0.1.0",
+    "contextpulse-memory>=0.1.0",
+    "python-dotenv>=1.0",
+    "cryptography>=43.0",
+    "mss>=9.0",
+    "pynput>=1.7",
+    "pystray>=0.19",
+    "Pillow>=10.0",
+    "numpy>=1.26",
+    "rapidocr-onnxruntime>=1.2",
+    "mcp>=1.0",
+    "faster-whisper>=1.0",
+    "sounddevice>=0.4",
+    "pyperclip>=1.8",
+    "pyautogui>=0.9",
+    "anthropic>=0.39",
+    "onnxruntime>=1.17",
+    "tokenizers>=0.19",
+]
 
 [project.scripts]
 contextpulse = "contextpulse_core.daemon:main"

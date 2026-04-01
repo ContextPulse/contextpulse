@@ -15,8 +15,12 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
-load_dotenv(Path.home() / "Projects" / ".env", override=True)  # global workspace credentials
-load_dotenv(override=True)                                      # local project overrides
+# Load optional workspace-level .env from CONTEXTPULSE_DOTENV env var, then local overrides.
+# This avoids hardcoding any specific user's directory structure.
+_workspace_dotenv = os.environ.get("CONTEXTPULSE_DOTENV", "")
+if _workspace_dotenv:
+    load_dotenv(_workspace_dotenv, override=True)
+load_dotenv(override=True)  # local .env overrides everything
 
 
 def env(key: str, default: str) -> str:

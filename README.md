@@ -11,8 +11,8 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue.svg" alt="AGPL-3.0" /></a>
-  <img src="https://img.shields.io/badge/python-3.11+-3776AB.svg" alt="Python 3.11+" />
-  <img src="https://img.shields.io/badge/platform-Windows-0078D6.svg" alt="Windows" />
+  <img src="https://img.shields.io/badge/python-3.12+-3776AB.svg" alt="Python 3.12+" />
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078D6.svg" alt="Windows | macOS | Linux" />
   <img src="https://img.shields.io/badge/MCP-native-orange.svg" alt="MCP Native" />
 </p>
 
