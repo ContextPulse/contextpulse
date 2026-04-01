@@ -31,7 +31,7 @@ SCENARIOS = [
     ("GitHub code", "url", "https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/_client.py", 5),
     ("Google Docs blank", "url", "https://docs.google.com", 4),
     # Local apps
-    ("File Explorer", "shell", "explorer C:\\Users\\david\\Projects", 3),
+    ("File Explorer", "shell", "explorer .", 3),
     ("Notepad empty", "shell", "notepad", 3),
     # Current state (whatever is on screen right now)
     ("Current screen", "none", None, 0),

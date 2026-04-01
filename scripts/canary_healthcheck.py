@@ -7,9 +7,9 @@ Setup as a cron job (Task Scheduler on Windows):
   1. Open Task Scheduler -> Create Basic Task
   2. Trigger: Daily (or every N hours)
   3. Action: Start a program
-     Program: C:\\Users\\david\\Projects\\ContextPulse\\.venv\\Scripts\\python.exe
-     Arguments: C:\\Users\\david\\Projects\\ContextPulse\\scripts\\canary_healthcheck.py
-     Start in: C:\\Users\\david\\Projects\\ContextPulse
+     Program: <path-to-contextpulse>\\.venv\\Scripts\\python.exe
+     Arguments: scripts\\canary_healthcheck.py
+     Start in: <path-to-contextpulse>
   4. The script exits with code 0 if all tools pass, 1 if any fail.
 
 Or run manually:

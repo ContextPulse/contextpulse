@@ -19,7 +19,7 @@ def sample_projects(tmp_path):
             "overview": "Dryer vent cleaning business targeting Aspen luxury B2B and Boulder residential B2C.",
             "goals": ["- Target $5K/month/market by Q3 2026\n- PE exit by 2031"],
             "tech": ["- Python\n- Claude API\n- AWS Lambda"],
-            "extra": "Partners: Chris Jerard, Dan Gault.",
+            "extra": "Partners: Jane Smith, Dan G.",
         },
         "Voiceasy": {
             "overview": "Local-first voice dictation for Windows. Hold Ctrl+Space to speak, faster-whisper transcription.",

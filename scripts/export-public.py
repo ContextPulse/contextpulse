@@ -7,8 +7,8 @@ internal strategy docs, personal config, and benchmark results.
 import shutil
 from pathlib import Path
 
-SRC = Path(r"C:\Users\david\Projects\ContextPulse")
-DST = Path(r"C:\Users\david\Projects\ContextPulse-public")
+SRC = Path(__file__).resolve().parent.parent
+DST = SRC.parent / "ContextPulse-public"
 
 # ── Directories to COMPLETELY EXCLUDE ──
 EXCLUDE_DIRS = {
@@ -87,6 +87,8 @@ KEEP_DOCS = {
     "docs/PRODUCT_ROADMAP.md",
     "docs/SELF_IMPROVING_CONTEXT.md",
     "docs/ecosystem-roadmap.md",
+    "docs/UNINSTALL.md",
+    "docs/mcp-configs/README.md",
 }
 
 

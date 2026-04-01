@@ -76,7 +76,7 @@ APPS_AND_TITLES = {
         "Notion - Sprint Backlog - Google Chrome",
     ],
     "WindowsTerminal.exe": [
-        "PowerShell - C:\\Users\\david\\Projects\\ContextPulse",
+        "PowerShell - C:\\Users\\testuser\\Projects\\ContextPulse",
         "PowerShell - pytest -x packages/core",
         "PowerShell - git log --oneline",
         "PowerShell - pip install -e .",
@@ -84,9 +84,9 @@ APPS_AND_TITLES = {
         "cmd.exe - build.cmd",
     ],
     "Slack.exe": [
-        "Slack - #contextpulse-dev - Jerard Ventures",
-        "Slack - #general - Jerard Ventures",
-        "Slack - DM: Chris Jerard",
+        "Slack - #contextpulse-dev - Acme Corp",
+        "Slack - #general - Acme Corp",
+        "Slack - DM: Jane Smith",
         "Slack - #random",
     ],
     "explorer.exe": [
@@ -126,14 +126,14 @@ OCR_BROWSER_SNIPPETS = [
 ]
 
 OCR_CHAT_SNIPPETS = [
-    "Chris: Hey did you see the new capture metrics? Looking good\nDavid: Yeah the smart mode is saving about 60% disk writes\nChris: Nice, lets discuss at the Thursday sync",
-    "David: @team the v0.1.0 build is ready for testing\nAlice: On it! Running the installer now\nBob: I'll test the MCP tools with Claude",
-    "Chris: The correction detector caught 15 voice typos today\nDavid: That's the self-improving vocabulary working\nChris: We should add that to the launch blog post",
+    "Jane: Hey did you see the new capture metrics? Looking good\nAlex: Yeah the smart mode is saving about 60% disk writes\nJane: Nice, lets discuss at the Thursday sync",
+    "Alex: @team the v0.1.0 build is ready for testing\nAlice: On it! Running the installer now\nBob: I'll test the MCP tools with Claude",
+    "Jane: The correction detector caught 15 voice typos today\nAlex: That's the self-improving vocabulary working\nJane: We should add that to the launch blog post",
 ]
 
 OCR_DOCS_SNIPPETS = [
     "ContextPulse Architecture\n\nThe EventBus is the central nervous system. Every modality module emits\nContextEvent objects that get persisted to the events table with FTS5 indexing.",
-    "Meeting Notes - March 26\n\nAgenda:\n1. Review soak test results\n2. Discuss Pro pricing tiers\n3. Plan beta launch timeline\n\nAction items: David to build data generator",
+    "Meeting Notes - March 26\n\nAgenda:\n1. Review soak test results\n2. Discuss Pro pricing tiers\n3. Plan beta launch timeline\n\nAction items: Alex to build data generator",
     "Daily Note\n\n- Fixed the FTS5 trigger issue (was missing COALESCE on payload extraction)\n- Voice module now emits SPEECH_START/END events correctly\n- Touch module correction detection working across app switches",
 ]
 
@@ -147,7 +147,7 @@ VOICE_TRANSCRIPTS = [
     "open the context pulse project in VS Code",
     "run the soak tests and check the performance numbers",
     "the clipboard monitor is capturing too many short snippets",
-    "schedule a meeting with Chris to discuss the beta launch",
+    "schedule a meeting with the team to discuss the beta launch",
     "note to self the FTS5 tokenizer should use porter stemming",
     "search for all events mentioning the deploy error",
     "let me dictate the release notes for version zero point one",
@@ -162,7 +162,7 @@ VOICE_TRANSCRIPTS = [
 
 CLIPBOARD_SNIPPETS = [
     "ConnectionRefusedError: [WinError 10061] No connection could be made",
-    "https://github.com/jerardventures/contextpulse/pull/142",
+    "https://github.com/junkyard-rules/contextpulse/pull/142",
     "def search(self, query: str, minutes_ago: float = 30) -> list[dict]:",
     "pip install contextpulse==0.1.0",
     "SELECT e.*, rank FROM events_fts fts JOIN events e ON e.rowid = fts.rowid WHERE events_fts MATCH ?",
