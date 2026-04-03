@@ -21,9 +21,7 @@
 **Context:** `session_learner.py` defaulted to `%APPDATA%/ContextPulse/activity.db` but dev-mode daemon writes to `~/screenshots/activity.db` (controlled by `OUTPUT_DIR` env var / `ACTIVITY_DB_PATH` in `contextpulse_core.config`).
 **Lesson:** Always use `ACTIVITY_DB_PATH` from `contextpulse_core.config` when reading activity.db — don't hardcode the path in voice tools. The MCP server gets this right; `session_learner.py` needs the same fix before shipping.
 
-### [2026-03-28] New Voice MCP tools need MCP server restart before they appear in session
-**Context:** `learn_from_session` and `rebuild_context_vocabulary` were added to `mcp_server.py` last session, but weren't available via `ToolSearch` this session — the MCP process was stale.
-**Lesson:** After adding new MCP tools, restart the relevant MCP server process (or restart Claude Code) before expecting them in ToolSearch. Fallback: call the underlying Python functions directly.
+<!-- Archived 2026-04-03: New MCP tools need server restart → incorporated into managing-mcp-servers skill ("New tools not appearing after adding to an MCP server" troubleshooting section). -->
 
 ### [2026-03-25] Waitlist forms need a real backend before launch — localStorage is a placeholder
 **Context:** Added a waitlist email form to the Pro pricing card but it only saves to localStorage. This captures zero leads if the user clears their browser.
