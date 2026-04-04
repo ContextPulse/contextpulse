@@ -1,6 +1,6 @@
 """Transcription module — converts audio to text via local Whisper or cloud APIs.
 
-Ported from Voiceasy with import paths updated.
+Whisper transcription backend (local and cloud).
 Supports two local backends:
   - ctranslate2 (faster-whisper) — Windows/Linux, CUDA or CPU
   - mlx-whisper — macOS Apple Silicon (Metal acceleration)

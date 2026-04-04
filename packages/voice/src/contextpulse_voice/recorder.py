@@ -1,6 +1,6 @@
 """Audio recording module — captures mic input while hotkey is held.
 
-Ported from Voiceasy with no functional changes.
+Audio recording via sounddevice.
 """
 
 import io

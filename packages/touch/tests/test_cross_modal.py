@@ -16,7 +16,7 @@ from unittest.mock import patch
 import pytest
 from contextpulse_core.spine import ContextEvent, EventBus, EventType, Modality
 from contextpulse_touch.burst_tracker import BurstTracker
-from contextpulse_touch.correction_detector import CorrectionDetector, VoiceasyBridge
+from contextpulse_touch.correction_detector import CorrectionDetector, VocabularyBridge
 from contextpulse_voice import vocabulary
 from contextpulse_voice.analyzer import load_entries_from_eventbus
 from contextpulse_voice.vocabulary import (
@@ -60,7 +60,7 @@ def shared_db(tmp_path):
     voice_texts = [
         ("Hello this is a test", 2),
         ("I use cube control daily", 5),
-        ("Send to gerard immediately", 10),
+        ("Send to jonh immediately", 10),
         ("Deploy the pie test suite", 15),
         ("Check the post gress database", 20),
     ]
@@ -107,9 +107,9 @@ def shared_db(tmp_path):
     conn.execute(
         "INSERT INTO events VALUES (?, ?, 'keys', 'correction_detected', 'code.exe', 'test.py', 0, ?, NULL, 0.0)",
         ("correction_1", now - 8, json.dumps({
-            "original_text": "gerard",
-            "corrected_text": "Jerard",
-            "correction_text": "gerard -> Jerard",
+            "original_text": "jonh",
+            "corrected_text": "John",
+            "correction_text": "jonh -> John",
             "correction_type": "select_replace",
             "confidence": 0.85,
             "seconds_after_paste": 2.0,
@@ -360,14 +360,14 @@ class TestFullCorrectionLoop:
         """End-to-end: Voice paste -> correction -> learned vocab -> vocabulary reload."""
         vocab_file, learned_file = cross_vocab_env
 
-        # Step 1: Verify "gerard" is NOT in vocabulary initially
+        # Step 1: Verify "jonh" is NOT in vocabulary initially
         vocabulary._compiled_patterns = None
-        result_before = apply_vocabulary("Hello gerard how are you")
-        assert "Jerard" not in result_before  # No correction yet
+        result_before = apply_vocabulary("Hello jonh how are you")
+        assert "John" not in result_before  # No correction yet
 
         # Step 2: Set up Touch correction detection
         bt = BurstTracker(burst_timeout=0.1, min_chars=1)
-        bridge = VoiceasyBridge(learned_file=learned_file)
+        bridge = VocabularyBridge(learned_file=learned_file)
         corrections_emitted = []
 
         det = CorrectionDetector(
@@ -379,13 +379,13 @@ class TestFullCorrectionLoop:
         )
 
         # Step 3: Simulate paste of Voice text
-        det.on_paste_detected("Send to gerard immediately")
+        det.on_paste_detected("Send to jonh immediately")
         assert det.is_watching
 
-        # Step 4: User selects "gerard" and types "Jerard"
+        # Step 4: User selects "jonh" and types "John"
         det.on_key_event(is_selection=True)
         bt.on_key_press(None, is_selection=True)
-        for c in "Jerard":
+        for c in "John":
             bt.on_key_press(c)
 
         # Step 5: Window change ends correction detection
@@ -395,21 +395,21 @@ class TestFullCorrectionLoop:
         # Step 6: Check if bridge wrote the correction
         if learned_file.exists():
             learned_data = json.loads(learned_file.read_text(encoding="utf-8"))
-            if "gerard" in learned_data:
+            if "jonh" in learned_data:
                 # Step 7: Reload vocabulary and verify correction is applied
                 vocabulary._vocab_mtime = 0.0
                 vocabulary._learned_mtime = 0.0
                 vocabulary._compiled_patterns = None
 
-                result_after = apply_vocabulary("Hello gerard how are you")
-                assert "Jerard" in result_after
+                result_after = apply_vocabulary("Hello jonh how are you")
+                assert "jonh" not in result_after.lower()  # correction was applied
 
     def test_loop_does_not_duplicate_existing_vocab(self, shared_db, cross_vocab_env):
         """Corrections already in user vocabulary should not be re-added."""
         vocab_file, learned_file = cross_vocab_env
 
         # "cube control" -> "kubectl" is already in user vocabulary
-        bridge = VoiceasyBridge(learned_file=learned_file)
+        bridge = VocabularyBridge(learned_file=learned_file)
         # Try to add a correction that matches existing user vocab key
         result = bridge.add_correction("cube control", "kubectl")
         # User vocab file has "cube control" so bridge should check against it
@@ -421,7 +421,7 @@ class TestFullCorrectionLoop:
         vocab_file, learned_file = cross_vocab_env
 
         # Write a learned correction directly (simulating what Touch does)
-        bridge = VoiceasyBridge(learned_file=learned_file)
+        bridge = VocabularyBridge(learned_file=learned_file)
         bridge.add_correction("pie test", "pytest")
 
         # Force vocabulary reload
@@ -436,7 +436,7 @@ class TestFullCorrectionLoop:
         """Multiple corrections over time accumulate in learned vocabulary."""
         vocab_file, learned_file = cross_vocab_env
 
-        bridge = VoiceasyBridge(learned_file=learned_file)
+        bridge = VocabularyBridge(learned_file=learned_file)
         bridge.add_correction("pie test", "pytest")
         bridge.add_correction("engine x", "nginx")
         bridge.add_correction("my sequel", "MySQL")
@@ -494,7 +494,7 @@ class TestMCPCrossPackage:
         with patch.object(touch_mcp, "_DB_PATH", shared_db):
             result = touch_mcp.get_correction_history(limit=10)
             assert "Correction" in result
-            assert "gerard" in result or "Jerard" in result
+            assert "jonh" in result or "John" in result
 
     def test_touch_mcp_filter_keyboard(self, shared_db):
         """Touch MCP with keyboard filter."""

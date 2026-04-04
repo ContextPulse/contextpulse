@@ -34,7 +34,7 @@ For Session B (productization code) and any UI work. All tkinter dialogs, tray i
 ## Logo
 
 **Current concept:** Eye shape formed by a pulse/heartbeat line, teal-to-green gradient.
-**Generated image:** `C:\Users\david\Documents\nanobanana_generated\generated_1774132479357.png`
+**Generated image:** (see brand/assets/logo_concept.png)
 
 For system tray, use the existing programmatic icon (icon.py) until the logo is finalized as SVG. The current circle-with-dot design is clean and works at 16x16.
 
@@ -233,7 +233,7 @@ For system tray, use the existing programmatic icon (icon.py) until the logo is 
 
 ## Tkinter Implementation Notes
 
-1. **CRITICAL: Never create multiple `tk.Tk()` instances.** Use `gui_theme.py` singleton root + `tk.Toplevel` for all dialogs. This was a Voiceasy bug that took 20+ minutes to debug.
+1. **CRITICAL: Never create multiple `tk.Tk()` instances.** Use `gui_theme.py` singleton root + `tk.Toplevel` for all dialogs.
 
 2. **Dark theme in tkinter:** Set `root.configure(bg="#0D1117")`. For ttk widgets, configure styles:
    ```python

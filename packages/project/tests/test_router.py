@@ -6,24 +6,24 @@ from contextpulse_project.router import ProjectRouter
 class TestProjectRouter:
     def test_exact_name_match(self, registry):
         router = ProjectRouter(registry)
-        matches = router.route("We should add this to SwingPulse")
-        assert matches[0].project == "SwingPulse"
+        matches = router.route("We should add this to DataVault")
+        assert matches[0].project == "DataVault"
         assert matches[0].score == 1.0
 
     def test_keyword_match(self, registry):
         router = ProjectRouter(registry)
         matches = router.route("faster-whisper transcription voice dictation windows")
-        assert matches[0].project == "Voiceasy"
+        assert matches[0].project == "SampleApp"
 
     def test_dryer_vent_match(self, registry):
         router = ProjectRouter(registry)
         matches = router.route("dryer vent cleaning business Aspen luxury market")
-        assert matches[0].project == "DryerVentCo"
+        assert matches[0].project == "WeatherApp"
 
     def test_alias_match(self, registry):
         router = ProjectRouter(registry)
         matches = router.route("TradeFoundry needs a new backend")
-        assert matches[0].project == "SwingPulse"
+        assert matches[0].project == "DataVault"
 
     def test_no_match(self, registry):
         router = ProjectRouter(registry)
@@ -37,7 +37,7 @@ class TestProjectRouter:
 
     def test_scores_normalized(self, registry):
         router = ProjectRouter(registry)
-        matches = router.route("SwingPulse trading platform")
+        matches = router.route("DataVault trading platform")
         assert matches[0].score == 1.0
         for m in matches[1:]:
             assert 0 <= m.score <= 1.0

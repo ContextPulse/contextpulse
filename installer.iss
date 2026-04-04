@@ -1,6 +1,6 @@
 ; ContextPulse Windows Installer — Inno Setup Script
 ; Builds from PyInstaller dist/ContextPulse/ output
-; Replaces both Voiceasy AND the Sight .cmd startup
+; Replaces the Sight .cmd startup
 
 #define MyAppName "ContextPulse"
 #define MyAppVersion "0.1.0"
@@ -59,8 +59,7 @@ function InitializeSetup(): Boolean;
 var
   ResultCode: Integer;
 begin
-  // Close running ContextPulse and Voiceasy before installing
+  // Close running ContextPulse before installing
   Exec('taskkill', '/f /im ContextPulse.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Exec('taskkill', '/f /im Voiceasy.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Result := True;
 end;

@@ -32,7 +32,7 @@ class TestMCPTools:
     def test_identify_project(self, registry):
         self._setup_registry(registry)
         result = json.loads(identify_project("faster-whisper dictation windows"))
-        assert result["project"] == "Voiceasy"
+        assert result["project"] == "SampleApp"
         assert result["score"] > 0
 
     def test_identify_project_no_match(self, registry):
@@ -43,8 +43,8 @@ class TestMCPTools:
     def test_get_active_project_cwd(self, registry, sample_projects):
         mcp_server._registry = registry
         mcp_server._detector = ActiveProjectDetector(registry, projects_root=sample_projects)
-        result = json.loads(get_active_project(cwd=str(sample_projects / "DryerVentCo")))
-        assert result["project"] == "DryerVentCo"
+        result = json.loads(get_active_project(cwd=str(sample_projects / "WeatherApp")))
+        assert result["project"] == "WeatherApp"
 
     def test_get_active_project_empty(self, registry):
         self._setup_registry(registry)
@@ -54,14 +54,14 @@ class TestMCPTools:
     def test_list_projects(self, registry):
         self._setup_registry(registry)
         result = list_projects()
-        assert "SwingPulse" in result
-        assert "DryerVentCo" in result
-        assert "Voiceasy" in result
+        assert "DataVault" in result
+        assert "WeatherApp" in result
+        assert "SampleApp" in result
         assert "ContextPulse" in result
 
     def test_get_project_context_found(self, registry):
         self._setup_registry(registry)
-        result = get_project_context("SwingPulse")
+        result = get_project_context("DataVault")
         assert "trading" in result.lower()
 
     def test_get_project_context_not_found(self, registry):

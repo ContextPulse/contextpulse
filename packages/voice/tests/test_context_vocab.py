@@ -23,10 +23,10 @@ class TestSplitCamelToPhrase:
         assert _split_camel_to_phrase("ContextPulse") == "context pulse"
 
     def test_three_parts(self):
-        assert _split_camel_to_phrase("StockTrader") == "stock trader"
+        assert _split_camel_to_phrase("TaskRunner") == "task runner"
 
     def test_with_co_suffix(self):
-        assert _split_camel_to_phrase("DryerVentCo") == "dryer vent co"
+        assert _split_camel_to_phrase("WeatherApp") == "weather app"
 
     def test_multi_part(self):
         assert _split_camel_to_phrase("OutsideCatalyst") == "outside catalyst"
@@ -59,10 +59,10 @@ class TestExtractNamesFromContext:
     """Tests for extracting proper nouns from PROJECT_CONTEXT.md content."""
 
     def test_finds_camel_case(self):
-        text = "This is about ContextPulse and StockTrader integration."
+        text = "This is about ContextPulse and TaskRunner integration."
         names = _extract_names_from_context(text)
         assert "ContextPulse" in names
-        assert "StockTrader" in names
+        assert "TaskRunner" in names
 
     def test_ignores_short_words(self):
         text = "The MyApp tool."
@@ -87,14 +87,14 @@ class TestBuildContextVocabulary:
     def test_scans_project_dirs(self, tmp_path):
         # Create mock project directories
         (tmp_path / "ContextPulse").mkdir()
-        (tmp_path / "StockTrader").mkdir()
+        (tmp_path / "TaskRunner").mkdir()
         (tmp_path / "simple").mkdir()  # lowercase, should not generate entry
 
         vocab = build_context_vocabulary(tmp_path, skills_dirs=[])
         assert "context pulse" in vocab
         assert vocab["context pulse"] == "ContextPulse"
-        assert "stock trader" in vocab
-        assert vocab["stock trader"] == "StockTrader"
+        assert "task runner" in vocab
+        assert vocab["task runner"] == "TaskRunner"
 
     def test_skips_hidden_dirs(self, tmp_path):
         (tmp_path / ".git").mkdir()
@@ -149,7 +149,7 @@ class TestRebuildAndGet:
         projects = tmp_path / "projects"
         projects.mkdir()
         (projects / "ContextPulse").mkdir()
-        (projects / "StockTrader").mkdir()
+        (projects / "TaskRunner").mkdir()
 
         count = rebuild_context_vocabulary(projects)
         assert count >= 2
@@ -169,7 +169,7 @@ class TestRebuildAndGet:
     def test_get_known_proper_nouns(self, monkeypatch, tmp_path):
         vocab_file = tmp_path / "vocabulary_context.json"
         vocab_file.write_text(
-            json.dumps({"context pulse": "ContextPulse", "stock trader": "StockTrader"}),
+            json.dumps({"context pulse": "ContextPulse", "task runner": "TaskRunner"}),
         )
         monkeypatch.setattr(
             "contextpulse_voice.context_vocab.CONTEXT_VOCAB_FILE",
@@ -177,7 +177,7 @@ class TestRebuildAndGet:
         )
         nouns = get_known_proper_nouns()
         assert "ContextPulse" in nouns
-        assert "StockTrader" in nouns
+        assert "TaskRunner" in nouns
 
 
 class TestVocabularyMerge:
@@ -198,14 +198,14 @@ class TestVocabularyMerge:
         # Context vocab
         context_file = tmp_path / "vocabulary_context.json"
         context_file.write_text(
-            json.dumps({"context pulse": "ContextPulse", "stock trader": "StockTrader"})
+            json.dumps({"context pulse": "ContextPulse", "task runner": "TaskRunner"})
         )
         monkeypatch.setattr(vocabulary, "CONTEXT_VOCAB_FILE", context_file)
 
         data = vocabulary._load_vocabulary()
         assert data["git hub"] == "GitHub"
         assert data["context pulse"] == "ContextPulse"
-        assert data["stock trader"] == "StockTrader"
+        assert data["task runner"] == "TaskRunner"
 
     def test_user_overrides_context(self, monkeypatch, tmp_path):
         from contextpulse_voice import vocabulary

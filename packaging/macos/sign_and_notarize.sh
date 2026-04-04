@@ -10,7 +10,7 @@
 #
 # Usage:
 #   export IDENTITY="Developer ID Application: Jerard Ventures LLC (XXXXXXXXXX)"
-#   export APPLE_ID="david@jerardventures.com"
+#   export APPLE_ID="your-apple-id@example.com"
 #   export TEAM_ID="XXXXXXXXXX"
 #   export APP_SPECIFIC_PASSWORD="xxxx-xxxx-xxxx-xxxx"
 #   ./packaging/macos/sign_and_notarize.sh dist/ContextPulse.app

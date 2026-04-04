@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from contextpulse_touch.burst_tracker import BurstTracker
-from contextpulse_touch.correction_detector import CorrectionDetector, VoiceasyBridge
+from contextpulse_touch.correction_detector import CorrectionDetector, VocabularyBridge
 
 
 class TestBurstTrackerEdgeCases:
@@ -107,11 +107,11 @@ class TestBurstTrackerEdgeCases:
         bt.stop()
 
 
-class TestVoiceasyBridgeEdgeCases:
+class TestVocabularyBridgeEdgeCases:
     def test_concurrent_writes(self, tmp_path):
         """Multiple threads writing corrections simultaneously."""
         learned_file = tmp_path / "voice" / "vocabulary_learned.json"
-        bridge = VoiceasyBridge(learned_file=learned_file)
+        bridge = VocabularyBridge(learned_file=learned_file)
 
         def write_correction(i):
             bridge.add_correction(f"word{i}", f"Word{i}")
@@ -134,13 +134,13 @@ class TestVoiceasyBridgeEdgeCases:
         learned_file = voice_dir / "vocabulary_learned.json"
         learned_file.write_text("not valid json!!!", encoding="utf-8")
 
-        bridge = VoiceasyBridge(learned_file=learned_file)
+        bridge = VocabularyBridge(learned_file=learned_file)
         result = bridge.add_correction("test", "Test123")
         assert result is True  # Should overwrite corrupted file
 
     def test_unicode_correction(self, tmp_path):
         learned_file = tmp_path / "voice" / "vocabulary_learned.json"
-        bridge = VoiceasyBridge(learned_file=learned_file)
+        bridge = VocabularyBridge(learned_file=learned_file)
         result = bridge.add_correction("café", "Café")
         assert result is True
         data = json.loads(learned_file.read_text(encoding="utf-8"))
@@ -148,14 +148,14 @@ class TestVoiceasyBridgeEdgeCases:
 
     def test_very_long_correction(self, tmp_path):
         learned_file = tmp_path / "voice" / "vocabulary_learned.json"
-        bridge = VoiceasyBridge(learned_file=learned_file)
+        bridge = VocabularyBridge(learned_file=learned_file)
         long_word = "a" * 500
         result = bridge.add_correction(long_word, "short")
         assert result is True
 
     def test_special_chars_in_correction(self, tmp_path):
         learned_file = tmp_path / "voice" / "vocabulary_learned.json"
-        bridge = VoiceasyBridge(learned_file=learned_file)
+        bridge = VocabularyBridge(learned_file=learned_file)
         result = bridge.add_correction('test"quote', 'test\\"quote')
         assert result is True
         # File should be valid JSON

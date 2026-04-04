@@ -4,7 +4,7 @@ Thanks for your interest in contributing! ContextPulse is open-source under AGPL
 
 ## Development Setup
 
-**Requirements:** Python 3.11+, Windows 10/11, Git, [uv](https://docs.astral.sh/uv/)
+**Requirements:** Python 3.12+, Windows 10/11 or macOS 13+, Git, [uv](https://docs.astral.sh/uv/)
 
 ```bash
 git clone https://github.com/junkyard-rules/contextpulse

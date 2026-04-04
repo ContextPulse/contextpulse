@@ -7,7 +7,7 @@ The self-improving loop:
 4. Track backspaces, selections, undo
 5. On window expiry or window switch: extract corrections
 6. Emit CORRECTION_DETECTED event
-7. Write corrections to vocabulary via VoiceasyBridge
+7. Write corrections to vocabulary via VocabularyBridge
 """
 
 import hashlib
@@ -27,7 +27,7 @@ from contextpulse_touch.config import CORRECTION_CONFIDENCE_THRESHOLD
 logger = logging.getLogger(__name__)
 
 
-class VoiceasyBridge:
+class VocabularyBridge:
     """Writes corrections to Voice's vocabulary_learned.json.
 
     File-based integration — zero coupling between packages.
@@ -117,12 +117,12 @@ class CorrectionDetector:
         on_correction: Callable[[dict[str, Any]], None] | None = None,
         watch_seconds: float = 15.0,
         db_path: Path | None = None,
-        bridge: VoiceasyBridge | None = None,
+        bridge: VocabularyBridge | None = None,
     ) -> None:
         self._burst_tracker = burst_tracker
         self._on_correction = on_correction
         self._watch_seconds = watch_seconds
-        self._bridge = bridge or VoiceasyBridge()
+        self._bridge = bridge or VocabularyBridge()
 
         # EventBus DB path for querying Voice events
         if db_path is None:

@@ -17,7 +17,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Ed25519 public key (hex) — generated for ContextPulse (NOT shared with Voiceasy)
+# Ed25519 public key (hex) — used for offline license verification
 # Private key lives in Lambda env var only
 _PUBLIC_KEY_HEX = "6fd4deee73d32f2006f24331b552bc1f4b34f5bbda03e86ad1175bd3972c95ec"
 

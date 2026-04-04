@@ -174,7 +174,7 @@ For systematic errors not caught by vocabulary, add manually to
 ## Safety Rules (Non-Negotiable)
 
 1. **ALWAYS dry-run first** — never write without reviewing
-2. **REJECT common-word swaps** — "stock trader" → "StockTrader" is GOOD; "stock" → "StockTrader" is BAD
+2. **REJECT common-word swaps** — "task runner" → "TaskRunner" is GOOD; "task" → "TaskRunner" is BAD
 3. **Minimum key length** — keys must be 6+ characters
 4. **Backup before write** — session_learner.py auto-creates .bak files
 5. **User vocab overrides** — never overwrite user's manually set entries

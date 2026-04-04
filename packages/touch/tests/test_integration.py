@@ -1,7 +1,7 @@
 """Integration tests for the Touch package.
 
 Covers: BurstTracker -> TouchModule event chain, CorrectionDetector full flow,
-VoiceasyBridge concurrent writes, mouse event debouncing, and edge cases
+VocabularyBridge concurrent writes, mouse event debouncing, and edge cases
 (rapid-fire keystrokes, long correction windows, empty clipboard paste).
 """
 
@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from contextpulse_core.spine import EventType, Modality
 from contextpulse_touch.burst_tracker import BurstTracker
-from contextpulse_touch.correction_detector import CorrectionDetector, VoiceasyBridge
+from contextpulse_touch.correction_detector import CorrectionDetector, VocabularyBridge
 
 # ═══════════════════════════════════════════════════════════════════════
 # Fixtures
@@ -47,7 +47,7 @@ def voice_db(tmp_path):
     texts = [
         ("hello world test", "voice_evt_1", 5),
         ("I use cube control daily", "voice_evt_2", 10),
-        ("send to gerard immediately", "voice_evt_3", 15),
+        ("send to jonh immediately", "voice_evt_3", 15),
     ]
     for text, evt_id, seconds_ago in texts:
         text_hash = hashlib.sha256(text.encode()).hexdigest()[:16]
@@ -189,7 +189,7 @@ class TestCorrectionDetectorFlow:
         bt = BurstTracker(burst_timeout=0.1, min_chars=1)
         corrections_received = []
         learned_file = tmp_path / "voice" / "vocabulary_learned.json"
-        bridge = VoiceasyBridge(learned_file=learned_file)
+        bridge = VocabularyBridge(learned_file=learned_file)
 
         det = CorrectionDetector(
             burst_tracker=bt,
@@ -220,7 +220,7 @@ class TestCorrectionDetectorFlow:
         bt = BurstTracker(burst_timeout=0.1, min_chars=1)
         corrections_received = []
         learned_file = tmp_path / "voice" / "vocabulary_learned.json"
-        bridge = VoiceasyBridge(learned_file=learned_file)
+        bridge = VocabularyBridge(learned_file=learned_file)
 
         det = CorrectionDetector(
             burst_tracker=bt,
@@ -230,13 +230,13 @@ class TestCorrectionDetectorFlow:
             bridge=bridge,
         )
 
-        det.on_paste_detected("send to gerard immediately")
+        det.on_paste_detected("send to jonh immediately")
         assert det.is_watching
 
-        # User selects "gerard" and types "Jerard"
+        # User selects "jonh" and types "John"
         det.on_key_event(is_selection=True)
         bt.on_key_press(None, is_selection=True)
-        for c in "Jerard":
+        for c in "John":
             bt.on_key_press(c)
 
         det.on_window_change()
@@ -247,7 +247,7 @@ class TestCorrectionDetectorFlow:
         bt = BurstTracker(burst_timeout=0.1, min_chars=1)
         on_correction = MagicMock()
         learned_file = tmp_path / "voice" / "vocabulary_learned.json"
-        bridge = VoiceasyBridge(learned_file=learned_file)
+        bridge = VocabularyBridge(learned_file=learned_file)
 
         det = CorrectionDetector(
             burst_tracker=bt,
@@ -303,7 +303,7 @@ class TestCorrectionDetectorFlow:
         """corrections_detected counter increments on valid correction."""
         bt = BurstTracker(burst_timeout=0.1, min_chars=1)
         learned_file = tmp_path / "voice" / "vocabulary_learned.json"
-        bridge = VoiceasyBridge(learned_file=learned_file)
+        bridge = VocabularyBridge(learned_file=learned_file)
 
         det = CorrectionDetector(
             burst_tracker=bt,
@@ -324,11 +324,11 @@ class TestCorrectionDetectorFlow:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# VoiceasyBridge Concurrent Writes
+# VocabularyBridge Concurrent Writes
 # ═══════════════════════════════════════════════════════════════════════
 
-class TestVoiceasyBridgeConcurrent:
-    """Test VoiceasyBridge atomic writes under concurrent access."""
+class TestVocabularyBridgeConcurrent:
+    """Test VocabularyBridge atomic writes under concurrent access."""
 
     def test_concurrent_adds(self, tmp_path):
         """Multiple threads adding corrections simultaneously.
@@ -338,7 +338,7 @@ class TestVoiceasyBridgeConcurrent:
         We verify that at least some writes succeed and the file is not corrupted.
         """
         learned_file = tmp_path / "voice" / "vocabulary_learned.json"
-        bridge = VoiceasyBridge(learned_file=learned_file)
+        bridge = VocabularyBridge(learned_file=learned_file)
         errors = []
 
         def add_corrections(thread_id):
@@ -365,7 +365,7 @@ class TestVoiceasyBridgeConcurrent:
     def test_atomic_write_survives_crash(self, tmp_path):
         """Atomic write should not corrupt existing data on error."""
         learned_file = tmp_path / "voice" / "vocabulary_learned.json"
-        bridge = VoiceasyBridge(learned_file=learned_file)
+        bridge = VocabularyBridge(learned_file=learned_file)
         bridge.add_correction("initial", "Initial")
 
         # Verify initial data is intact
@@ -384,7 +384,7 @@ class TestVoiceasyBridgeConcurrent:
         learned_file.parent.mkdir(parents=True, exist_ok=True)
         learned_file.write_text("NOT JSON {{{", encoding="utf-8")
 
-        bridge = VoiceasyBridge(learned_file=learned_file)
+        bridge = VocabularyBridge(learned_file=learned_file)
         result = bridge.add_correction("word", "Corrected")
         assert result is True
         # File should now be valid
@@ -394,7 +394,7 @@ class TestVoiceasyBridgeConcurrent:
     def test_bridge_get_recent_with_limit(self, tmp_path):
         """get_recent_corrections respects limit parameter."""
         learned_file = tmp_path / "voice" / "vocabulary_learned.json"
-        bridge = VoiceasyBridge(learned_file=learned_file)
+        bridge = VocabularyBridge(learned_file=learned_file)
         for i in range(10):
             bridge.add_correction(f"word_{i}", f"Correct_{i}")
         result = bridge.get_recent_corrections(limit=5)
@@ -403,7 +403,7 @@ class TestVoiceasyBridgeConcurrent:
     def test_bridge_empty_strings_rejected(self, tmp_path):
         """Empty or whitespace-only strings are rejected."""
         learned_file = tmp_path / "voice" / "vocabulary_learned.json"
-        bridge = VoiceasyBridge(learned_file=learned_file)
+        bridge = VocabularyBridge(learned_file=learned_file)
         assert bridge.add_correction("", "test") is False
         assert bridge.add_correction("test", "") is False
         assert bridge.add_correction("  ", "  ") is False
@@ -527,7 +527,7 @@ class TestEdgeCases:
         """Long watch windows should still work correctly."""
         bt = BurstTracker(burst_timeout=0.1, min_chars=1)
         learned_file = tmp_path / "voice" / "vocabulary_learned.json"
-        bridge = VoiceasyBridge(learned_file=learned_file)
+        bridge = VocabularyBridge(learned_file=learned_file)
         on_correction = MagicMock()
 
         det = CorrectionDetector(
@@ -653,7 +653,7 @@ class TestEdgeCases:
         """Second paste during watch should cancel first watch and start new one."""
         bt = BurstTracker(burst_timeout=0.1, min_chars=1)
         learned_file = tmp_path / "voice" / "vocabulary_learned.json"
-        bridge = VoiceasyBridge(learned_file=learned_file)
+        bridge = VocabularyBridge(learned_file=learned_file)
 
         det = CorrectionDetector(
             burst_tracker=bt,

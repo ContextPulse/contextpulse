@@ -1,6 +1,6 @@
 """Text cleanup module — polishes raw transcription before pasting.
 
-Ported from Voiceasy. Proxy endpoint removed (ContextPulse uses direct API only).
+LLM-based transcript cleanup (direct API only).
 """
 
 import logging

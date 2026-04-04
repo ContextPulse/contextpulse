@@ -14,14 +14,14 @@ class TestFindCorrections:
     def test_finds_consistent_correction(self):
         # Need 3+ occurrences of a single-word substitution
         entries = [
-            {"raw": "use gerard system", "cleaned": "use jerard system"},
-            {"raw": "call gerard now", "cleaned": "call jerard now"},
-            {"raw": "ask gerard here", "cleaned": "ask jerard here"},
-            {"raw": "tell gerard that", "cleaned": "tell jerard that"},
+            {"raw": "use jonh system", "cleaned": "use john system"},
+            {"raw": "call jonh now", "cleaned": "call john now"},
+            {"raw": "ask jonh here", "cleaned": "ask john here"},
+            {"raw": "tell jonh that", "cleaned": "tell john that"},
         ]
         result = find_corrections(entries)
-        assert "gerard" in result
-        assert result["gerard"]["replacement"] == "jerard"
+        assert "jonh" in result
+        assert result["jonh"]["replacement"] == "john"
 
     def test_ignores_single_occurrence(self):
         entries = [

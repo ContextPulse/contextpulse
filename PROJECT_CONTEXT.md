@@ -5,7 +5,7 @@ ContextPulse is a unified always-on context platform for AI agents. One process,
 
 **Tagline:** "Always-on context for AI agents"
 **Version:** 0.1.0
-**Status:** Production-ready (open source, pending COI approval for public GitHub release) — memory module production hardened, Lambda deployed, pricing finalized
+**Status:** Production-ready (open-core, AGPL-3.0) — memory module production hardened, Lambda deployed, pricing finalized
 
 ## Architecture
 
@@ -167,24 +167,27 @@ Three-layer vocabulary system (priority: user > learned > context):
 
 LLM cleanup uses recent window titles (last 2 min from Sight events) as proper noun context hints — not current window (always "Claude" during dictation).
 
-## Next: macOS Port
+## macOS Port — Complete
 
-`packages/core/src/contextpulse_core/platform/macos.py` — all methods raise `NotImplementedError`. Needs:
-- Clipboard: `NSPasteboard`
-- Window info: `NSWorkspace` + `CGWindowListCopyWindowInfo`
-- Cursor: `Quartz`
-- Caret: Accessibility API (`AXUIElement`)
-- Session lock: `NSDistributedNotificationCenter`
-- Single-instance: `fcntl.flock`
+All platform methods fully implemented in `packages/core/src/contextpulse_core/platform/macos.py`:
+- Clipboard: `NSPasteboard` ✅
+- Window info: `NSWorkspace` + `CGWindowListCopyWindowInfo` ✅
+- Cursor: `Quartz` (`CGEventCreate` + `CGEventGetLocation`) ✅
+- Caret: Accessibility API (`AXUIElement`) ✅
+- Session lock: `NSDistributedNotificationCenter` ✅
+- Single-instance: `fcntl.flock` ✅
+- TCC permissions: `macos_permissions.py` (Screen Recording, Accessibility, Input Monitoring, Microphone) ✅
+- Menu bar: `tray_macos.py` via rumps ✅
+- OCR: Native Apple Vision framework via `ocr_macos.py` ✅
+- Transcription: mlx-whisper for Apple Silicon, faster-whisper fallback for Intel ✅
+- PyInstaller: `packaging/macos/contextpulse_macos.spec` ✅
 
-## Domain Strategy
-- **Primary:** contextpulse.ai ($80/yr, Cloudflare)
-- **Backup:** contextpulse.dev ($12/yr), contextpulse.io ($34/yr)
-- **Bonus:** context-pulse.com ($10/yr)
+## Domain
+- **Primary:** contextpulse.ai
 
 ## Licensing Model
 
-ContextPulse is open source (open-core model). License: MIT (pending final decision).
+ContextPulse is open source (open-core model). License: AGPL-3.0-or-later.
 
 - **Community edition (free):** All core tools — Sight capture/OCR/clipboard, Voice dictation, Touch analytics, Project routing, Memory CRUD (store/recall/list/forget/stats)
 - **Pro ($49/yr or $249 lifetime):** Advanced features requiring more compute — semantic/hybrid memory search, cross-modal analytics, priority support

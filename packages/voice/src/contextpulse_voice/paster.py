@@ -1,6 +1,6 @@
 """Text injection module — pastes transcribed text into the active window.
 
-Ported from Voiceasy with no functional changes.
+Clipboard paste automation.
 """
 
 import hashlib

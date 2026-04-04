@@ -48,3 +48,39 @@ lambda/*.zip
 ip/
 .wrangler/
 leak.json
+
+# Internal strategy docs (not for public repo)
+business-plan/
+business-plan-prompt.md
+technical-plan-prompt.md
+TONIGHT_WORK_PLAN.md
+CLAUDE.md
+README_DRAFT.md
+
+# Internal docs (marketing, strategy, prompts, competitive analysis)
+docs/LICENSE_PIPELINE.md
+docs/DOMAINS.md
+docs/COMPETITIVE_LANDSCAPE_AND_FEATURE_ROADMAP.md
+docs/MONETIZATION.md
+docs/ecosystem-roadmap.md
+docs/MARKETING_ASSETS.md
+docs/LANDING_PAGE_COPY.md
+docs/LEAD_MAGNET.md
+docs/LAUNCH_POSTS.md
+docs/VOICEASY_LONG_RUNNING_ANALYSIS.md
+docs/concept-synapseai-original.md
+docs/gen_docx.js
+docs/ContextPulse-Market-Research.docx
+docs/NAMING.md
+docs/SESSION_B_DESIGN_SPEC_PROMPT.md
+docs/SESSION_B_FEATURE_EVAL_PROMPT.md
+docs/FEATURE_EVAL_PROMPT.md
+docs/POSITIONING.md
+docs/SELF_IMPROVING_CONTEXT.md
+docs/PRODUCT_ROADMAP.md
+docs/FEATURE_IDEAS.md
+docs/FEATURE_PROPOSALS.md
+launch/
+
+# Benchmark data (may contain window titles and PII)
+packages/screen/benchmark_results/

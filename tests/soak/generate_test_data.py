@@ -162,7 +162,7 @@ VOICE_TRANSCRIPTS = [
 
 CLIPBOARD_SNIPPETS = [
     "ConnectionRefusedError: [WinError 10061] No connection could be made",
-    "https://github.com/junkyard-rules/contextpulse/pull/142",
+    "https://github.com/example/myproject/pull/142",
     "def search(self, query: str, minutes_ago: float = 30) -> list[dict]:",
     "pip install contextpulse==0.1.0",
     "SELECT e.*, rank FROM events_fts fts JOIN events e ON e.rowid = fts.rowid WHERE events_fts MATCH ?",
@@ -637,21 +637,21 @@ def _workflow_browse_and_share(ts: float) -> list[ContextEvent]:
         ContextEvent(
             event_id=_uid(), timestamp=ts + 4.0,
             modality=Modality.SYSTEM, event_type=EventType.WINDOW_FOCUS,
-            app_name="Slack.exe", window_title="Slack - #contextpulse-dev - Jerard Ventures",
+            app_name="Slack.exe", window_title="Slack - #dev-general - Acme Corp",
             correlation_id=cid,
             payload={**SOAK_MARKER},
         ),
         ContextEvent(
             event_id=_uid(), timestamp=ts + 5.0,
             modality=Modality.KEYS, event_type=EventType.PASTE_DETECTED,
-            app_name="Slack.exe", window_title="Slack - #contextpulse-dev - Jerard Ventures",
+            app_name="Slack.exe", window_title="Slack - #dev-general - Acme Corp",
             correlation_id=cid,
             payload={**SOAK_MARKER, "text": url, "source_app": "chrome.exe"},
         ),
         ContextEvent(
             event_id=_uid(), timestamp=ts + 6.0,
             modality=Modality.KEYS, event_type=EventType.TYPING_BURST,
-            app_name="Slack.exe", window_title="Slack - #contextpulse-dev - Jerard Ventures",
+            app_name="Slack.exe", window_title="Slack - #dev-general - Acme Corp",
             correlation_id=cid,
             payload={**SOAK_MARKER, "word_count": 8, "wpm": 55.0, "text": "check out this sqlite3 docs page"},
         ),

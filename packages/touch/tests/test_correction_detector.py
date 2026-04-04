@@ -1,4 +1,4 @@
-"""Tests for CorrectionDetector and VoiceasyBridge."""
+"""Tests for CorrectionDetector and VocabularyBridge."""
 
 import json
 import time
@@ -7,13 +7,13 @@ from unittest.mock import MagicMock
 
 import pytest
 from contextpulse_touch.burst_tracker import BurstTracker
-from contextpulse_touch.correction_detector import CorrectionDetector, VoiceasyBridge
+from contextpulse_touch.correction_detector import CorrectionDetector, VocabularyBridge
 
 
-class TestVoiceasyBridge:
+class TestVocabularyBridge:
     def test_add_correction(self, tmp_path):
         learned_file = tmp_path / "voice" / "vocabulary_learned.json"
-        bridge = VoiceasyBridge(learned_file=learned_file)
+        bridge = VocabularyBridge(learned_file=learned_file)
         result = bridge.add_correction("cube control", "kubectl")
         assert result is True
         assert learned_file.exists()
@@ -22,20 +22,20 @@ class TestVoiceasyBridge:
 
     def test_duplicate_rejected(self, tmp_path):
         learned_file = tmp_path / "voice" / "vocabulary_learned.json"
-        bridge = VoiceasyBridge(learned_file=learned_file)
-        bridge.add_correction("gerard", "Jerard")
-        result = bridge.add_correction("gerard", "Jerard2")
+        bridge = VocabularyBridge(learned_file=learned_file)
+        bridge.add_correction("jonh", "John")
+        result = bridge.add_correction("jonh", "John2")
         assert result is False  # Already exists (same key)
 
     def test_same_word_rejected(self, tmp_path):
         learned_file = tmp_path / "voice" / "vocabulary_learned.json"
-        bridge = VoiceasyBridge(learned_file=learned_file)
+        bridge = VocabularyBridge(learned_file=learned_file)
         result = bridge.add_correction("hello", "hello")
         assert result is False
 
     def test_empty_rejected(self, tmp_path):
         learned_file = tmp_path / "voice" / "vocabulary_learned.json"
-        bridge = VoiceasyBridge(learned_file=learned_file)
+        bridge = VocabularyBridge(learned_file=learned_file)
         assert bridge.add_correction("", "test") is False
         assert bridge.add_correction("test", "") is False
 
@@ -46,20 +46,20 @@ class TestVoiceasyBridge:
         user_vocab = voice_dir / "vocabulary.json"
         user_vocab.write_text(json.dumps({"existing": "value"}), encoding="utf-8")
 
-        bridge = VoiceasyBridge(learned_file=learned_file)
+        bridge = VocabularyBridge(learned_file=learned_file)
         result = bridge.add_correction("existing", "new_value")
         assert result is False  # User vocab takes priority
 
     def test_get_recent_corrections(self, tmp_path):
         learned_file = tmp_path / "voice" / "vocabulary_learned.json"
-        bridge = VoiceasyBridge(learned_file=learned_file)
-        bridge.add_correction("gerard", "Jerard")
+        bridge = VocabularyBridge(learned_file=learned_file)
+        bridge.add_correction("jonh", "John")
         bridge.add_correction("cube control", "kubectl")
         corrections = bridge.get_recent_corrections()
         assert len(corrections) == 2
 
     def test_get_corrections_empty(self, tmp_path):
-        bridge = VoiceasyBridge(learned_file=tmp_path / "nonexistent.json")
+        bridge = VocabularyBridge(learned_file=tmp_path / "nonexistent.json")
         assert bridge.get_recent_corrections() == []
 
 
@@ -69,7 +69,7 @@ class TestCorrectionDetector:
         db_path, text, text_hash = activity_db
         bt = BurstTracker(burst_timeout=0.1, min_chars=1)
         on_correction = MagicMock()
-        bridge = VoiceasyBridge(learned_file=Path("/tmp/test_learned.json"))
+        bridge = VocabularyBridge(learned_file=Path("/tmp/test_learned.json"))
         bridge.add_correction = MagicMock(return_value=True)
 
         det = CorrectionDetector(

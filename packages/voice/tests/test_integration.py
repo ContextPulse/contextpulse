@@ -75,13 +75,13 @@ def large_activity_db(tmp_path):
     now = time.time()
     entries = []
 
-    # 5 entries with "gerard" -> "Jerard" pattern
+    # 5 entries with "jonh" -> "John" pattern
     for i in range(5):
         entries.append((
-            f"evt_gerard_{i}", now - (i * 60),
+            f"evt_jonh_{i}", now - (i * 60),
             json.dumps({
-                "raw_transcript": f"Hello gerard this is test {i}",
-                "transcript": f"Hello Jerard this is test {i}",
+                "raw_transcript": f"Hello jonh this is test {i}",
+                "transcript": f"Hello John this is test {i}",
                 "confidence": 0.85, "language": "en",
                 "duration_seconds": 3.0,
                 "paste_text_hash": f"hash_g_{i}",
@@ -360,13 +360,13 @@ class TestAnalyzerRealisticData:
         assert len(entries) == 25  # 5+4+3+8+5
 
     def test_find_corrections_detects_patterns(self, large_activity_db):
-        """Analyzer should detect 'gerard' -> 'Jerard' (5 occurrences, >= threshold)."""
+        """Analyzer should detect 'jonh' -> 'John' (5 occurrences, >= threshold)."""
         entries = load_entries_from_eventbus(large_activity_db)
         corrections = find_corrections(entries)
-        # "gerard" -> "jerard" should be found (5 occurrences >= 3 threshold)
-        assert "gerard" in corrections
-        assert corrections["gerard"]["count"] >= 3
-        assert corrections["gerard"]["confidence"] >= 0.7
+        # "jonh" -> "john" should be found (5 occurrences >= 3 threshold)
+        assert "jonh" in corrections
+        assert corrections["jonh"]["count"] >= 3
+        assert corrections["jonh"]["confidence"] >= 0.7
 
     def test_find_corrections_cube_control(self, large_activity_db):
         """Analyzer should detect 'cube control' if present as single-word diff."""
@@ -401,7 +401,7 @@ class TestAnalyzerRealisticData:
 
     def test_find_corrections_single_entry(self):
         """Single entry cannot reach the 3-occurrence threshold."""
-        entries = [{"raw": "hello gerard", "cleaned": "hello Jerard"}]
+        entries = [{"raw": "hello jonh", "cleaned": "hello John"}]
         corrections = find_corrections(entries)
         assert len(corrections) == 0  # Below threshold
 

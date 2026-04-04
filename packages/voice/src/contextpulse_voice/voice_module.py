@@ -4,7 +4,7 @@
 """VoiceModule — ModalityModule implementation for voice capture and transcription.
 
 Wraps the recorder, transcriber, cleanup, vocabulary, and paster pipeline
-to emit ContextEvents through the EventBus. Replaces Voiceasy's app.py
+to emit ContextEvents through the EventBus.
 with a spine-compatible lifecycle.
 """
 
@@ -497,7 +497,7 @@ class VoiceModule(ModalityModule):
             import sqlite3
 
             from contextpulse_core.config import ACTIVITY_DB_PATH
-            from contextpulse_touch.correction_detector import VoiceasyBridge
+            from contextpulse_touch.correction_detector import VocabularyBridge
 
             if not ACTIVITY_DB_PATH.exists():
                 return
@@ -532,7 +532,7 @@ class VoiceModule(ModalityModule):
             if not camel_words:
                 return
 
-            bridge = VoiceasyBridge()
+            bridge = VocabularyBridge()
             raw_lower = raw_text.lower()
 
             for word in camel_words:

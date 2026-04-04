@@ -9,19 +9,19 @@ from contextpulse_project.registry import ProjectRegistry
 def sample_projects(tmp_path):
     """Create a minimal project tree with PROJECT_CONTEXT.md files."""
     projects = {
-        "SwingPulse": {
+        "DataVault": {
             "overview": "AI-powered trading platform combining journaling, automated execution, backtesting, and curated picks.",
             "goals": ["- Build SwingPicks email alerts\n- Reach $10K MRR in 6 months"],
             "tech": ["- Next.js\n- FastAPI\n- Supabase\n- Alpaca"],
             "extra": "Registered swingpulse.io. Formerly TradeFoundry.",
         },
-        "DryerVentCo": {
+        "WeatherApp": {
             "overview": "Dryer vent cleaning business targeting Aspen luxury B2B and Boulder residential B2C.",
             "goals": ["- Target $5K/month/market by Q3 2026\n- PE exit by 2031"],
             "tech": ["- Python\n- Claude API\n- AWS Lambda"],
             "extra": "Partners: Jane Smith, Dan G.",
         },
-        "Voiceasy": {
+        "SampleApp": {
             "overview": "Local-first voice dictation for Windows. Hold Ctrl+Space to speak, faster-whisper transcription.",
             "goals": ["- Launch on Product Hunt\n- Build paid subscription tier"],
             "tech": ["- Python 3.14\n- faster-whisper\n- PyInstaller\n- Inno Setup"],

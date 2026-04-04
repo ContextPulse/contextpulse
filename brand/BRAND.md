@@ -98,5 +98,5 @@ Logo files: `brand/logo/`
 | **Heart** | contextheart.ai, contextheart.com |
 | **People** | contextpeople.ai, contextpeople.com |
 
-**Registrar:** Cloudflare (david@jerardventures.com)
+**Registrar:** Cloudflare
 **Current deployment:** contextpulse.pages.dev (Cloudflare Pages)

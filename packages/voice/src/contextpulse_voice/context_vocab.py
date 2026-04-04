@@ -38,13 +38,13 @@ def _split_camel_to_phrase(name: str) -> str | None:
 
     Examples:
         "ContextPulse" → "context pulse"
-        "StockTrader" → "stock trader"
-        "DryerVentCo" → "dryer vent co"
+        "TaskRunner" → "task runner"
+        "WeatherApp" → "weather app"
         "AWS" → None (single word)
     """
     # Insert spaces before uppercase letters following lowercase
     spaced = re.sub(r"([a-z])([A-Z])", r"\1 \2", name)
-    # Also split between sequential uppercase and lowercase: "DryerVentCo" → "Dryer Vent Co"
+    # Also split between sequential uppercase and lowercase: "WeatherApp" → "Dryer Vent Co"
     spaced = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", spaced)
     parts = spaced.split()
     if len(parts) < 2:

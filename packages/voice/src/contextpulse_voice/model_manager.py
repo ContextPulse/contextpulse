@@ -1,6 +1,6 @@
 """Whisper model manager — downloads model on first run with progress.
 
-Ported from Voiceasy with paths updated to ContextPulse voice directory.
+Whisper model download and management.
 """
 
 import logging

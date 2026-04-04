@@ -1,6 +1,6 @@
 """Transcript analyzer — learns patterns from dictation history.
 
-Ported from Voiceasy. Now reads from EventBus (events table in activity.db)
+Transcription analyzer. Reads from EventBus (events table in activity.db)
 instead of history.jsonl. The analyzer can still be run standalone or auto-triggered.
 """
 
@@ -230,7 +230,7 @@ def analyze_with_llm(entries: list[dict]) -> dict[str, str] | None:
                     "CLEANED = what the user actually meant). Find patterns where the speech-to-text "
                     "engine consistently MISHEARS specific words or phrases.\n\n"
                     "ONLY include genuine mishearings — words that SOUND similar but are spelled wrong. "
-                    "Examples: 'gerard' -> 'Jerard', 'system tree' -> 'system tray'.\n\n"
+                    "Examples: 'jonh' -> 'John', 'system tree' -> 'system tray'.\n\n"
                     "DO NOT include style/tone changes, grammar fixes, filler word removal, "
                     "capitalization-only changes, or sentence restructuring.\n\n"
                     "Return ONLY a JSON object mapping misheard words/phrases to their correct form. "

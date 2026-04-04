@@ -92,7 +92,7 @@ def vocab_files(voice_data_dir):
     vocab_file.write_text(json.dumps(vocab), encoding="utf-8")
 
     learned_file = voice_data_dir / "vocabulary_learned.json"
-    learned = {"gerard": "Jerard"}
+    learned = {"jonh": "John"}
     learned_file.write_text(json.dumps(learned), encoding="utf-8")
 
     return vocab_file, learned_file

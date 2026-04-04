@@ -181,8 +181,8 @@ class TestTrial:
 
     def test_trial_expired_after_time(self, isolated_license, monkeypatch):
 
-        # Write trial start 8 days ago (using _write_trial for HMAC)
-        _write_trial({"start": int(time.time()) - 8 * 86400})
+        # Write trial start 31 days ago (using _write_trial for HMAC)
+        _write_trial({"start": int(time.time()) - 31 * 86400})
 
         assert is_trial_expired() is True
         assert get_trial_days_remaining() == 0
@@ -214,7 +214,7 @@ class TestMemoryAccess:
         assert has_memory_access() is True  # trial starts fresh
 
     def test_no_access_after_trial_expired(self, isolated_license):
-        _write_trial({"start": int(time.time()) - 8 * 86400})
+        _write_trial({"start": int(time.time()) - 31 * 86400})
         assert has_memory_access() is False
 
 
@@ -226,16 +226,17 @@ class TestProAccess:
         save_license(key)
         assert has_pro_access() is True
 
-    def test_pro_access_with_starter_license(self, isolated_license):
+    def test_no_pro_access_with_starter_license(self, isolated_license):
+        # Starter tier does NOT grant Pro access (no Starter paid tier exists)
         key = _generate_test_key(tier="starter")
         save_license(key)
-        assert has_pro_access() is True
+        assert has_pro_access() is False
 
     def test_pro_access_during_trial(self, isolated_license):
         assert has_pro_access() is True  # trial starts fresh
 
     def test_no_pro_access_after_trial_expired(self, isolated_license):
-        _write_trial({"start": int(time.time()) - 8 * 86400})
+        _write_trial({"start": int(time.time()) - 31 * 86400})
         assert has_pro_access() is False
 
     def test_no_pro_access_with_expired_license(self, isolated_license):
@@ -243,7 +244,7 @@ class TestProAccess:
         key = _generate_test_key(tier="pro", exp=int(time.time()) - 4 * 86400)
         save_license(key)
         # Also expire the trial
-        _write_trial({"start": int(time.time()) - 8 * 86400})
+        _write_trial({"start": int(time.time()) - 31 * 86400})
         assert has_pro_access() is False
 
 
@@ -261,7 +262,7 @@ class TestFeatureAccess:
         assert has_feature("get_event_timeline") is True
 
     def test_no_feature_after_trial_expired(self, isolated_license):
-        _write_trial({"start": int(time.time()) - 8 * 86400})
+        _write_trial({"start": int(time.time()) - 31 * 86400})
         assert has_feature("search_all_events") is False
 
     def test_unknown_feature_returns_false(self, isolated_license):
@@ -269,12 +270,19 @@ class TestFeatureAccess:
         save_license(key)
         assert has_feature("nonexistent_feature") is False
 
-    def test_get_licensed_features_with_license(self, isolated_license):
-        key = _generate_test_key(tier="starter")
+    def test_get_licensed_features_with_pro_license(self, isolated_license):
+        key = _generate_test_key(tier="pro")
         save_license(key)
         features = get_licensed_features()
         assert "search_all_events" in features
         assert "get_event_timeline" in features
+
+    def test_get_licensed_features_with_starter_license(self, isolated_license):
+        # Starter only gets basic memory features, not Pro features
+        key = _generate_test_key(tier="starter")
+        save_license(key)
+        features = get_licensed_features()
+        assert "search_all_events" not in features
 
     def test_get_licensed_features_no_license(self, isolated_license):
         assert get_licensed_features() == []

@@ -1,6 +1,6 @@
 """Custom vocabulary replacement — fixes common Whisper misrecognitions.
 
-Ported from Voiceasy with paths updated to ContextPulse voice directory.
+Three-layer vocabulary system (user > learned > context).
 Hot-reloads on file change — corrections take effect without restart.
 """
 
@@ -107,8 +107,8 @@ def _ensure_vocab_file() -> Path:
             "=======================================\n\n"
             "Edit vocabulary.json to add your own corrections.\n\n"
             "FORMAT:  \"what whisper hears\" : \"what you want\"\n\n"
-            "EXAMPLE: If Whisper types 'Gerard' but you want 'Jerard',\n"
-            "         add:  \"Gerard\": \"Jerard\"\n\n"
+            "EXAMPLE: If Whisper types 'Jonh' but you want 'John',\n"
+            "         add:  \"Jonh\": \"John\"\n\n"
             "The LEFT side must match what Whisper actually outputs.\n"
             "To find out, dictate the word and check what appears.\n"
             "Then add a correction mapping that misspelling to the right word.\n\n"

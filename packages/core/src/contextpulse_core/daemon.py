@@ -364,6 +364,9 @@ class ContextPulseDaemon:
                         "Keyboard/mouse capture is unavailable. Check the log for details."
                     )
 
+            # Refresh tray tooltip so it reflects current module state
+            self._update_tray()
+
         logger.info("Daemon watchdog stopped")
 
     # ── Crash Reporting ───────────────────────────────────────────
@@ -462,13 +465,14 @@ class ContextPulseDaemon:
         )
 
     def _update_tray(self) -> None:
-        """Update tray icon based on state."""
+        """Update tray icon and tooltip based on current module state."""
         if not hasattr(self, "tray") or not self.tray:
             return
         from contextpulse_sight.icon import _COLORS, create_icon
         warning = _COLORS.get("dark", {}).get("warning", "#F0B429")
         paused = self._sight_app and self._sight_app.paused
         self.tray.icon = create_icon(warning if paused else None)
+        self.tray.title = self._get_status_text()
 
     def _quit(self) -> None:
         logger.info("ContextPulse shutting down")

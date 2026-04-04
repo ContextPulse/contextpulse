@@ -1,6 +1,6 @@
 """Shared tkinter infrastructure for ContextPulse GUI dialogs.
 
-Provides a singleton hidden Tk root (fixes Voiceasy's multiple-Tk bug),
+Provides a singleton hidden Tk root (prevents multiple-Tk-instance bugs),
 a dialog factory, and brand-consistent styles.
 """
 

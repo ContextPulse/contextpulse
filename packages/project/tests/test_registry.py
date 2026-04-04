@@ -8,51 +8,51 @@ class TestProjectRegistry:
         projects = registry.list_all()
         assert len(projects) == 4
         names = {p.name for p in projects}
-        assert names == {"SwingPulse", "DryerVentCo", "Voiceasy", "ContextPulse"}
+        assert names == {"DataVault", "WeatherApp", "SampleApp", "ContextPulse"}
 
     def test_get_by_name(self, registry):
-        info = registry.get("SwingPulse")
+        info = registry.get("DataVault")
         assert info is not None
-        assert info.name == "SwingPulse"
+        assert info.name == "DataVault"
         assert "trading" in info.overview.lower()
 
     def test_get_case_insensitive(self, registry):
-        info = registry.get("swingpulse")
+        info = registry.get("datavault")
         assert info is not None
-        assert info.name == "SwingPulse"
+        assert info.name == "DataVault"
 
     def test_get_nonexistent(self, registry):
         assert registry.get("NonExistent") is None
 
     def test_keywords_include_name_variants(self, registry):
-        info = registry.get("SwingPulse")
-        assert "swingpulse" in info.keywords
-        assert "swing" in info.keywords
-        assert "pulse" in info.keywords
+        info = registry.get("DataVault")
+        assert "datavault" in info.keywords
+        assert "data" in info.keywords
+        assert "vault" in info.keywords
 
     def test_keywords_include_tech_stack(self, registry):
-        info = registry.get("SwingPulse")
+        info = registry.get("DataVault")
         assert "next.js" in info.keywords or "fastapi" in info.keywords
         assert "supabase" in info.keywords
 
     def test_keywords_include_domains(self, registry):
-        info = registry.get("Voiceasy")
+        info = registry.get("SampleApp")
         assert "voiceasy.app" in info.keywords
 
     def test_aliases_extracted(self, registry):
-        info = registry.get("SwingPulse")
+        info = registry.get("DataVault")
         assert "TradeFoundry" in info.aliases
 
     def test_alias_keywords(self, registry):
-        info = registry.get("SwingPulse")
+        info = registry.get("DataVault")
         assert "tradefoundry" in info.keywords
 
     def test_overview_extracted(self, registry):
-        info = registry.get("DryerVentCo")
+        info = registry.get("WeatherApp")
         assert "dryer vent" in info.overview.lower()
 
     def test_goals_extracted(self, registry):
-        info = registry.get("DryerVentCo")
+        info = registry.get("WeatherApp")
         assert any("$5K" in g for g in info.goals)
 
     def test_empty_dir(self, tmp_path):
