@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Jerard Ventures LLC
 """Detect macOS TCC (Transparency, Consent, and Control) permissions.
 
 macOS requires explicit user consent for screen recording, accessibility,
@@ -11,7 +13,6 @@ imported on any platform without ImportError.
 from __future__ import annotations
 
 import subprocess
-import sys
 from typing import Any
 
 

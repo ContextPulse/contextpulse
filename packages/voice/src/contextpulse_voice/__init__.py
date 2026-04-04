@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Jerard Ventures LLC
 """ContextPulse Voice — voice capture and transcription for AI agents.
 
 Voice dictation module with spine contract integration.

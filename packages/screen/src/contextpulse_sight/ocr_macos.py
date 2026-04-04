@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Jerard Ventures LLC
 """Apple Vision-framework OCR wrapper with the same interface as RapidOCR.
 
 On macOS this is used in place of rapidocr_onnxruntime so that ContextPulse
@@ -44,12 +46,12 @@ class VisionOCR:
             found, otherwise a list of ``[bbox, text, confidence]``.
         """
         from CoreGraphics import (  # type: ignore[import-not-found]
+            CGColorSpaceCreateWithName,
             CGDataProviderCreateWithData,
             CGImageCreate,
             kCGBitmapByteOrderDefault,
             kCGColorSpaceGenericRGB,
             kCGImageAlphaNoneSkipLast,
-            CGColorSpaceCreateWithName,
         )
         from Quartz import CIImage  # type: ignore[import-not-found]
         from Vision import (  # type: ignore[import-not-found]

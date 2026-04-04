@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Jerard Ventures LLC
 """ContextPulse Spine — Unified event schema for multi-modal context capture.
 
 Every modality (Sight, Voice, Keys, Flow) emits ContextEvent objects through

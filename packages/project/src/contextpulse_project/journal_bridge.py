@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Jerard Ventures LLC
 """JournalBridge — routes insights to the journal via log-entry.py subprocess."""
 
 import subprocess

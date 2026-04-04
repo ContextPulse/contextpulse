@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Jerard Ventures LLC
 """Embedding engine using all-MiniLM-L6-v2 via ONNX runtime.
 
 No PyTorch required — uses a pre-exported ONNX model with the tokenizers library.

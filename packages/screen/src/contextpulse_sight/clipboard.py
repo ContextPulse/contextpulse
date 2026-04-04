@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Jerard Ventures LLC
 """Clipboard context capture — monitors clipboard for text content.
 
 Captures clipboard text (error messages, URLs, stack traces, code snippets)

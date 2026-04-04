@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Jerard Ventures LLC
 """Screen content classifier: decides whether to send text or image to Claude.
 
 OCR runs on-demand at full native resolution (not on downscaled buffer frames).

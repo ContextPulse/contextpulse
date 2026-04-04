@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Jerard Ventures LLC
 """Abstract base class for platform-specific operations.
 
 Each method documents what it should do so contributors can implement

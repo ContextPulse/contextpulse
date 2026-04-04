@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Jerard Ventures LLC
 """Ed25519 license verification with tiers, features, and expiration.
 
 Key format: base64url(json_payload) + "." + base64url(ed25519_signature)
@@ -221,14 +223,6 @@ def get_trial_days_remaining() -> int:
 def is_trial_expired() -> bool:
     """Check if the 30-day Memory trial has expired."""
     return get_trial_days_remaining() <= 0
-
-
-def has_memory_access() -> bool:
-    """Check if user can use Memory features (licensed OR within trial)."""
-    if is_licensed():
-        tier = get_license_tier()
-        return tier in ("starter", "pro")
-    return not is_trial_expired()
 
 
 # -- Feature-based access checks ---------------------------------------------

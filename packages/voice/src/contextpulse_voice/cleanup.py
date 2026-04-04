@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Jerard Ventures LLC
 """Text cleanup module — polishes raw transcription before pasting.
 
 LLM-based transcript cleanup (direct API only).

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Jerard Ventures LLC
 """Shared tkinter infrastructure for ContextPulse GUI dialogs.
 
 Provides a singleton hidden Tk root (prevents multiple-Tk-instance bugs),

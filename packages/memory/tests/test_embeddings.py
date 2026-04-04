@@ -5,7 +5,6 @@ All tests mock the ONNX session so they run fast without downloading the model.
 
 from __future__ import annotations
 
-import struct
 import threading
 from unittest.mock import MagicMock, patch
 

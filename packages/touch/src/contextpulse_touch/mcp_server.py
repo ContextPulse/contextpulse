@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Jerard Ventures LLC
 """MCP server for ContextPulse Touch — exposes input activity and correction history.
 
 Entry point: contextpulse-touch-mcp (see pyproject.toml).

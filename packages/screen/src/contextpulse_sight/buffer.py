@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Jerard Ventures LLC
 """Rolling screenshot buffer with change detection and OCR classification.
 
 Keeps only the last N minutes of captures on disk. Skips frames that are

@@ -41,6 +41,7 @@ logger = logging.getLogger("contextpulse.daemon")
 
 # Resolve output dir — use platform-aware default from config.py
 from contextpulse_core.config import OUTPUT_DIR as _cfg_output_dir
+
 OUTPUT_DIR = _cfg_output_dir
 LOG_FILE = OUTPUT_DIR / "contextpulse.log"
 CRASH_LOG = OUTPUT_DIR / "contextpulse_crash.log"

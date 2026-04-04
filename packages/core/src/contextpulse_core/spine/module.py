@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Jerard Ventures LLC
 """ContextPulse Spine — ModalityModule abstract base class.
 
 Every capture module (Sight, Voice, Keys, Flow) implements this interface

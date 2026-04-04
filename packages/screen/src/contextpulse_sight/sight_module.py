@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Jerard Ventures LLC
 """SightModule — Adapts the existing Sight capture pipeline to the spine contract.
 
 This module wraps the existing capture, OCR, clipboard, and event detection

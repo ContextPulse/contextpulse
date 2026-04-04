@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Jerard Ventures LLC
 """MCP server for ContextPulse Voice — exposes transcription history and vocabulary tools.
 
 Entry point: contextpulse-voice-mcp (see pyproject.toml).

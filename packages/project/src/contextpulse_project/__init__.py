@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Jerard Ventures LLC
 """ContextPulse Project — project-aware routing layer for AI agents."""
 
 __version__ = "0.1.0"

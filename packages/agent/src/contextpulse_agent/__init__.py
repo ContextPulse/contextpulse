@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Jerard Ventures LLC
 """ContextPulse Agent — Agent coordination and session protocol for AI agents.
 
 Status: Coming Soon (v0.2 milestone)

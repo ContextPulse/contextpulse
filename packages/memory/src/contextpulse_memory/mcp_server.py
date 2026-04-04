@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Jerard Ventures LLC
 """MCP server exposing persistent memory tools to Claude Code.
 
 Free forever (no license required):
@@ -48,7 +50,7 @@ def _require_pro(func):
     """Gate a tool behind Pro license (or active trial)."""
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        from contextpulse_core.license import has_pro_access, get_license_tier
+        from contextpulse_core.license import get_license_tier, has_pro_access
         if has_pro_access():
             return func(*args, **kwargs)
         tier = get_license_tier()

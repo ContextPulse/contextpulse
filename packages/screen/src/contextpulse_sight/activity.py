@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Jerard Ventures LLC
 """SQLite-backed activity tracking with FTS5 full-text search.
 
 Records which apps/windows the user visits, links to buffer frames,

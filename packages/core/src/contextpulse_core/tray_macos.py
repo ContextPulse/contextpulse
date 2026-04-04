@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Jerard Ventures LLC
 """macOS menu bar icon using rumps.
 
 rumps.App.run() must execute on the main thread (AppKit requirement).
@@ -5,6 +7,7 @@ The daemon restructures so: main thread = menu bar, background threads = modules
 """
 
 import subprocess
+
 import rumps
 
 

@@ -6,7 +6,26 @@ build-backend = "setuptools.build_meta"
 name = "contextpulse"
 version = "0.1.0"
 description = "Always-on context for AI agents"
+readme = "README.md"
+license = "AGPL-3.0-or-later"
 requires-python = ">=3.12"
+authors = [{ name = "David Jerard", email = "david@jerardventures.com" }]
+keywords = ["ai", "context", "screen-capture", "voice", "mcp", "ambient-computing"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
+    "Topic :: Software Development :: Libraries",
+]
+
+[project.urls]
+Homepage = "https://contextpulse.ai"
+Repository = "https://github.com/junkyard-rules/contextpulse"
+Issues = "https://github.com/junkyard-rules/contextpulse/issues"
+Documentation = "https://github.com/junkyard-rules/contextpulse#readme"
 dependencies = [
     "contextpulse-core>=0.1.0",
     "contextpulse-sight>=0.1.0",

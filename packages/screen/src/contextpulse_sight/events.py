@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Jerard Ventures LLC
 """Event-driven capture detection: window focus, monitor boundary, idle-then-active."""
 
 import logging

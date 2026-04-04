@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Jerard Ventures LLC
 """Custom vocabulary replacement — fixes common Whisper misrecognitions.
 
 Three-layer vocabulary system (user > learned > context).

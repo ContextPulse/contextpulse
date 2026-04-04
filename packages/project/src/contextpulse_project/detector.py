@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Jerard Ventures LLC
 """ActiveProjectDetector — determines which project is currently in focus."""
 
 from pathlib import Path
