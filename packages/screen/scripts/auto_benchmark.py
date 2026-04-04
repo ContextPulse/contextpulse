@@ -45,7 +45,7 @@ def open_url(url):
 
 def open_app(cmd):
     """Open a local app."""
-    return subprocess.Popen(cmd, shell=True)
+    return subprocess.Popen(cmd.split())
 
 
 def close_foreground():
