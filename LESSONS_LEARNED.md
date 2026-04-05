@@ -50,9 +50,7 @@
 <!-- Archived 2026-03-23: numpy bool identity check → developing-python skill (Anti-patterns) + validating-dataframes skill. Already in GLOBAL_LESSONS_LEARNED_ARCHIVE.md 2026-03-15 -->
 
 
-### [2026-03-15] PEP 639 — don't mix license field with license classifiers
-**Context:** `pip install -e .` failed with `InvalidConfigError: License classifiers have been superseded by license expressions` when pyproject.toml had both `license = "MIT"` and a `License :: OSI Approved :: MIT License` classifier.
-**Lesson:** With PEP 639, use `license = "MIT"` (SPDX expression) and remove all `License ::` classifiers from pyproject.toml. They are mutually exclusive.
+<!-- Archived 2026-04-05: PEP 639 license/classifier conflict → developing-python skill (pyproject.toml packaging gotchas section). -->
 
 <!-- Archived 2026-04-01: Duplicate of GLOBAL "[2026-03-21] Auto-restart loops need duplicate instance guards" — same principle, Windows mutex variant. Global lesson covers the pattern. -->
 
@@ -76,9 +74,7 @@
 **Context:** Benchmarked OCR classification across 11 scenarios (Amazon, Reddit, Maps, YouTube, etc.). 45% of captures were text-heavy enough to store text-only. OCR text is ~3-5KB vs ~130KB for the image.
 **Lesson:** Always store OCR text as searchable metadata alongside images. For text-heavy frames (100+ chars, 70%+ confidence), the image can be dropped. But certain apps (thinkorswim, Figma) need both image + text regardless — use app-level overrides.
 
-### [2026-03-21] FastMCP @tool() decorator wraps functions — can't test them directly via import
-**Context:** Tried `from mcp_server import get_screenshot` and calling it in tests. The `@mcp_app.tool()` decorator wraps the function, so the import returns a MagicMock, not the real function.
-**Lesson:** Test MCP tool logic by testing the underlying data layer (ActivityDB, RollingBuffer) directly rather than trying to call the decorated tool functions. The MCP tools are thin wrappers over the data layer.
+<!-- Archived 2026-04-05: FastMCP @tool() decorator test isolation → managing-mcp-servers skill (Troubleshooting: "Testing FastMCP / MCP tool logic" section). -->
 
 <!-- Archived 2026-04-01: Captured in feedback_automate_testing.md memory (applied every session: "Never ask user to manually cycle through apps — automate test sequences with scripts"). -->
 
