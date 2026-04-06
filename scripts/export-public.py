@@ -62,9 +62,11 @@ EXCLUDE_FILES = {
     "docs/elevator-pitch.md",
     # Benchmark with real window titles
     "packages/screen/benchmark_results/auto_benchmark_20260321_140502.json",
-    # Internal scripts with hardcoded paths
+    # Internal scripts with hardcoded paths or infra details
     "scripts/canary_health_check.py",
     "scripts/canary_healthcheck.py",
+    # Lambda deploy with S3 bucket name and SSM paths
+    "lambda/deploy.sh",
     # Lambda deploy artifacts
     "lambda/lambda-deploy.zip",
     # Brand internal docs (keep assets, exclude strategy)
