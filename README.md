@@ -51,14 +51,71 @@ Everything stays local. No cloud. No telemetry. Your data never leaves your mach
                               Client
 ```
 
+## Quick Demo
+
+```
+> You: "What am I looking at right now?"
+
+Claude calls get_screenshot → get_screen_text:
+
+  Active window: VS Code — src/auth/middleware.ts
+  OCR text: "export async function validateToken(req: Request)..."
+  Clipboard: "Bearer eyJhbGciOiJIUzI1NiIs..."
+
+> Claude: "You're editing the auth middleware in VS Code.
+>          I can see the validateToken function, and you have
+>          a Bearer token in your clipboard — want me to help
+>          debug the token validation?"
+```
+
+```
+> You hold Ctrl+Space and say: "refactor this to use the new auth provider"
+
+ContextPulse Voice transcribes → pastes into editor
+Claude calls get_recent_transcriptions → get_screen_text:
+
+> Claude: "I can see your dictation and the current file.
+>          Here's the refactored middleware using AuthProvider..."
+```
+
+```
+> You: "What was I working on before lunch?"
+
+Claude calls get_activity_summary(hours=4) → search_history("auth"):
+
+  10:15 AM  VS Code — auth/middleware.ts (45 min)
+  11:00 AM  Chrome — JWT.io (12 min)
+  11:15 AM  VS Code — auth/tests/test_middleware.py (30 min)
+  11:45 AM  Slack — #backend channel (15 min)
+
+> Claude: "You spent the morning on auth middleware — writing
+>          the implementation, checking JWT specs, then adding
+>          tests. You were in Slack #backend right before lunch."
+```
+
 ## Why ContextPulse?
 
 AI coding assistants are powerful but blind. They can't see your screen, hear your voice notes, or know what you were just doing. ContextPulse bridges this gap:
 
-- **Screen awareness** — your AI knows what app you're in, what's on screen, what you just copied
-- **Voice input** — hold a key, speak, release. Transcribed and pasted instantly. Your AI can read the transcription history.
-- **Activity patterns** — typing speed, app switching, focus time. Your AI understands your work rhythm.
-- **Cross-modal search** — "what was I looking at when I said that?" queries across all modalities *(Pro)*
+- **Local-first, zero cloud dependency.** Your screen, voice, and input data never leave your machine. No accounts, no subscriptions, no third-party servers. Privacy by architecture, not by policy.
+- **MCP-native from day one.** ContextPulse exposes all context as MCP tools. Any MCP client — Claude Desktop, Cursor, Windsurf, VS Code — gets full context without custom integrations.
+- **True multi-modal in a single daemon.** Screen capture, voice dictation, keyboard/mouse input, and semantic memory run in one lightweight process (<1% CPU). No stitching multiple tools together.
+- **Open source (AGPL-3.0).** Fully auditable, self-hostable, and extensible. No vendor lock-in, no SaaS dependency, no risk of acquisition-driven shutdowns.
+
+### Comparison
+
+| Feature | ContextPulse | screenpipe | Limitless | OpenAdapt |
+|---|---|---|---|---|
+| **Screen capture + OCR** | Yes | Yes | Discontinued | Yes |
+| **Voice / audio** | Yes (local Whisper) | Yes (local Whisper) | Cloud | No |
+| **Keyboard + mouse** | Yes | No | No | Yes |
+| **Semantic memory** | Yes | No | Partial | No |
+| **MCP-native** | Yes | Yes | No | No |
+| **100% local** | Yes | Yes | No (cloud) | Partial |
+| **Open source** | AGPL-3.0 | MIT (core) | No | MIT |
+| **CPU overhead** | <1% | ~2-5% | N/A | Variable |
+
+> screenpipe is the closest alternative — excellent for screen + audio capture. ContextPulse adds keyboard/mouse input tracking, semantic memory with hybrid search, and a unified EventBus architecture that ties all modalities together.
 
 ## Installation
 

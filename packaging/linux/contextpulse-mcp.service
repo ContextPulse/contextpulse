@@ -1,0 +1,24 @@
+# ContextPulse MCP server systemd user service
+# Install: cp contextpulse-mcp.service ~/.config/systemd/user/
+# Enable:  systemctl --user enable contextpulse-mcp
+# Start:   systemctl --user start contextpulse-mcp
+
+[Unit]
+Description=ContextPulse MCP Server (HTTP :8420)
+After=contextpulse.service
+Requires=contextpulse.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/contextpulse-mcp
+Restart=on-failure
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=3600
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=contextpulse-mcp
+
+[Install]
+WantedBy=default.target
