@@ -60,6 +60,10 @@ class EventDetector:
         """Stop the event detection thread."""
         self._stop.set()
 
+    def is_alive(self) -> bool:
+        """Return True if the polling thread is running."""
+        return self._thread.is_alive()
+
     def has_pending_event(self) -> bool:
         """Check if an event has been triggered since last clear."""
         return self._pending_event.is_set()

@@ -471,12 +471,12 @@ def test_daemon_lifecycle():
             _label("Auto-capture producing frames", "FAIL",
                    "no frames after 10s")
 
-        # screen_latest.png written
+        # screen_latest.jpg written
         if _wait_for_file(FILE_LATEST, timeout=5):
-            _label("screen_latest.png written", "PASS",
+            _label("screen_latest.jpg written", "PASS",
                    f"{FILE_LATEST.stat().st_size:,} bytes")
         else:
-            _label("screen_latest.png written", "FAIL", "not found")
+            _label("screen_latest.jpg written", "FAIL", "not found")
 
         # Tray icon process is alive (tray runs on main thread)
         if proc.poll() is None:

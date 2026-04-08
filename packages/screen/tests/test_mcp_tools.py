@@ -540,3 +540,69 @@ class TestStorageModeLogic:
     def test_always_both_apps_config(self):
         from contextpulse_sight.config import ALWAYS_BOTH_APPS
         assert "thinkorswim.exe" in ALWAYS_BOTH_APPS
+
+
+class TestBufferReadRetrieval:
+    """Test that get_screenshot reads from buffer before re-capturing."""
+
+    def test_serves_fresh_buffer_frame(self, tmp_path):
+        """When buffer has a fresh frame for a specific monitor, reads it instead of capturing."""
+        import contextpulse_sight.mcp_server as mcp_server
+
+        buf_dir = tmp_path / "buffer"
+        buf_dir.mkdir()
+
+        # Create a fresh buffer frame (timestamp = now)
+        ts = int(time.time() * 1000)
+        frame_path = buf_dir / f"{ts}_m0.jpg"
+        _make_image(1280, 720, (255, 0, 0)).save(frame_path, format="JPEG", quality=75)
+
+        original_buffer = mcp_server._buffer
+        try:
+            with patch("contextpulse_sight.buffer.BUFFER_DIR", buf_dir):
+                from contextpulse_sight.buffer import RollingBuffer
+                mcp_server._buffer = RollingBuffer()
+
+                # Clear any in-memory cache
+                with mcp_server._jpeg_cache_lock:
+                    mcp_server._jpeg_cache.clear()
+
+                # Use explicit monitor_index=0 to avoid needing capture_active_monitor
+                with patch("contextpulse_sight.capture.capture_single_monitor") as mock_cap:
+                    mock_cap.return_value = _make_image()
+                    idx, jpeg_bytes = mcp_server._get_cached_or_capture(monitor_index=0)
+                    # Should NOT have called capture since buffer has a fresh frame
+                    mock_cap.assert_not_called()
+                    assert idx == 0
+                    assert len(jpeg_bytes) > 0
+        finally:
+            mcp_server._buffer = original_buffer
+
+    def test_falls_back_to_capture_when_buffer_stale(self, tmp_path):
+        """When buffer frame is too old, falls back to live capture."""
+        import contextpulse_sight.mcp_server as mcp_server
+
+        buf_dir = tmp_path / "buffer"
+        buf_dir.mkdir()
+
+        # Create a stale buffer frame (10 seconds ago)
+        ts = int((time.time() - 10) * 1000)
+        frame_path = buf_dir / f"{ts}_m0.jpg"
+        _make_image(1280, 720).save(frame_path, format="JPEG", quality=75)
+
+        original_buffer = mcp_server._buffer
+        try:
+            with patch("contextpulse_sight.buffer.BUFFER_DIR", buf_dir):
+                from contextpulse_sight.buffer import RollingBuffer
+                mcp_server._buffer = RollingBuffer()
+
+                with mcp_server._jpeg_cache_lock:
+                    mcp_server._jpeg_cache.clear()
+
+                with patch("contextpulse_sight.capture.capture_active_monitor") as mock_cap:
+                    mock_cap.return_value = (0, _make_image())
+                    idx, jpeg_bytes = mcp_server._get_cached_or_capture()
+                    # SHOULD have called capture since buffer is stale
+                    mock_cap.assert_called_once()
+        finally:
+            mcp_server._buffer = original_buffer

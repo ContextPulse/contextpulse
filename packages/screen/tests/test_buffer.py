@@ -350,3 +350,45 @@ class TestDiffScore:
             assert result2
             _, diff2 = result2
             assert diff2 == 100.0  # black to white = 100%
+
+
+class TestGetLatestForMonitor:
+    """Test per-monitor latest frame retrieval."""
+
+    def test_returns_none_when_empty(self, tmp_buffer_dir):
+        with patch("contextpulse_sight.buffer.BUFFER_DIR", tmp_buffer_dir):
+            from contextpulse_sight.buffer import RollingBuffer
+            buf = RollingBuffer()
+            assert buf.get_latest_for_monitor(0) is None
+
+    def test_returns_latest_jpg_for_monitor(self, tmp_buffer_dir):
+        with patch("contextpulse_sight.buffer.BUFFER_DIR", tmp_buffer_dir):
+            from contextpulse_sight.buffer import RollingBuffer
+            buf = RollingBuffer()
+            # Create two frames for monitor 0 with different timestamps
+            old = tmp_buffer_dir / "1000000000000_m0.jpg"
+            new = tmp_buffer_dir / "1000000005000_m0.jpg"
+            _make_image().save(old, format="JPEG")
+            _make_image().save(new, format="JPEG")
+            result = buf.get_latest_for_monitor(0)
+            assert result is not None
+            assert result.name == "1000000005000_m0.jpg"
+
+    def test_filters_by_monitor_index(self, tmp_buffer_dir):
+        with patch("contextpulse_sight.buffer.BUFFER_DIR", tmp_buffer_dir):
+            from contextpulse_sight.buffer import RollingBuffer
+            buf = RollingBuffer()
+            # Frame for monitor 0 only
+            f = tmp_buffer_dir / "1000000000000_m0.jpg"
+            _make_image().save(f, format="JPEG")
+            assert buf.get_latest_for_monitor(0) is not None
+            assert buf.get_latest_for_monitor(1) is None
+
+    def test_ignores_txt_only_frames(self, tmp_buffer_dir):
+        with patch("contextpulse_sight.buffer.BUFFER_DIR", tmp_buffer_dir):
+            from contextpulse_sight.buffer import RollingBuffer
+            buf = RollingBuffer()
+            # Text-only frame (no .jpg)
+            txt = tmp_buffer_dir / "1000000000000_m0.txt"
+            txt.write_text('{"text": "hello", "confidence": 0.9}')
+            assert buf.get_latest_for_monitor(0) is None  # only returns .jpg

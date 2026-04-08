@@ -172,6 +172,20 @@ class RollingBuffer:
         frames = self.list_frames()
         return frames[-1] if frames else None
 
+    def get_latest_for_monitor(self, monitor_index: int) -> Path | None:
+        """Return path to the newest .jpg frame for a specific monitor, or None.
+
+        Only returns image frames (.jpg), not text-only (.txt) frames.
+        """
+        best: Path | None = None
+        best_ts = 0
+        for f in BUFFER_DIR.glob(f"*_m{monitor_index}.jpg"):
+            parsed = parse_frame_path(f)
+            if parsed and parsed[0] > best_ts:
+                best_ts = parsed[0]
+                best = f
+        return best
+
     def get_latest_context(self) -> dict:
         """Return the best representation of the latest frame."""
         latest = self.get_latest()

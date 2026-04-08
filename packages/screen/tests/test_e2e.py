@@ -38,7 +38,7 @@ class TestDaemonToMCPFlow:
             patch("contextpulse_sight.buffer.BUFFER_DIR", buf_dir),
             patch("contextpulse_sight.config.BUFFER_DIR", buf_dir),
             patch("contextpulse_sight.config.OUTPUT_DIR", output_dir),
-            patch("contextpulse_sight.app.FILE_LATEST", output_dir / "screen_latest.png"),
+            patch("contextpulse_sight.app.FILE_LATEST", output_dir / "screen_latest.jpg"),
             patch("contextpulse_sight.capture.capture_active_monitor", return_value=(0, _make_image())),
         ):
             from contextpulse_sight.app import ContextPulseSightApp
@@ -56,7 +56,7 @@ class TestDaemonToMCPFlow:
             assert frames[0].suffix == ".jpg"
 
             # Verify the latest file was also written
-            latest = output_dir / "screen_latest.png"
+            latest = output_dir / "screen_latest.jpg"
             assert latest.exists()
 
     def test_mcp_reads_daemon_buffer(self, tmp_path):
@@ -69,7 +69,7 @@ class TestDaemonToMCPFlow:
             patch("contextpulse_sight.buffer.BUFFER_DIR", buf_dir),
             patch("contextpulse_sight.config.BUFFER_DIR", buf_dir),
             patch("contextpulse_sight.config.OUTPUT_DIR", output_dir),
-            patch("contextpulse_sight.config.FILE_LATEST", output_dir / "screen_latest.png"),
+            patch("contextpulse_sight.config.FILE_LATEST", output_dir / "screen_latest.jpg"),
             patch("contextpulse_sight.capture.capture_active_monitor", return_value=(0, _make_image())),
         ):
             # Simulate daemon writing frames
@@ -157,7 +157,7 @@ class TestDaemonToMCPFlow:
             patch("contextpulse_sight.buffer.BUFFER_DIR", buf_dir),
             patch("contextpulse_sight.config.BUFFER_DIR", buf_dir),
             patch("contextpulse_sight.config.OUTPUT_DIR", output_dir),
-            patch("contextpulse_sight.app.FILE_LATEST", output_dir / "screen_latest.png"),
+            patch("contextpulse_sight.app.FILE_LATEST", output_dir / "screen_latest.jpg"),
             patch("contextpulse_sight.app.FILE_REGION", output_dir / "screen_region.png"),
             patch("contextpulse_sight.app.OUTPUT_DIR", output_dir),
             patch("contextpulse_sight.capture.capture_active_monitor", return_value=(0, _make_image(color=(255, 0, 0)))),
@@ -174,7 +174,7 @@ class TestDaemonToMCPFlow:
             app.do_region_capture()
 
             # Quick capture and region files exist
-            assert (output_dir / "screen_latest.png").exists()
+            assert (output_dir / "screen_latest.jpg").exists()
             assert (output_dir / "screen_region.png").exists()
             # Per-monitor files from all-capture
             assert (output_dir / "screen_monitor_0.png").exists()
@@ -192,7 +192,7 @@ class TestDaemonToMCPFlow:
         with (
             patch("contextpulse_sight.buffer.BUFFER_DIR", buf_dir),
             patch("contextpulse_sight.config.OUTPUT_DIR", output_dir),
-            patch("contextpulse_sight.app.FILE_LATEST", output_dir / "screen_latest.png"),
+            patch("contextpulse_sight.app.FILE_LATEST", output_dir / "screen_latest.jpg"),
             patch("contextpulse_sight.capture.capture_active_monitor", return_value=(0, _make_image())),
         ):
             from contextpulse_sight.app import ContextPulseSightApp

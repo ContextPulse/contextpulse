@@ -96,7 +96,7 @@ class ContextPulseSightApp:
             return
         try:
             idx, img = capture.capture_active_monitor()
-            capture.save_image(img, FILE_LATEST)
+            capture.save_image(img, FILE_LATEST, fmt="JPEG")
             self.buffer.add(img, monitor_index=idx)
         except Exception:
             logger.exception("Quick capture failed")
@@ -189,7 +189,7 @@ class ContextPulseSightApp:
                     self._ocr_worker.enqueue(frame_path, row_id, app_name)
 
                 if idx == cursor_idx:
-                    capture.save_image(img, FILE_LATEST)
+                    capture.save_image(img, FILE_LATEST, fmt="JPEG")
                     logger.debug(
                         "Frame stored m%d (%d in buffer)",
                         idx, self.buffer.frame_count(),

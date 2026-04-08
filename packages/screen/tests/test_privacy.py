@@ -111,7 +111,7 @@ class TestAppPrivacyIntegration:
         with (
             patch("contextpulse_sight.buffer.BUFFER_DIR", buf_dir),
             patch("contextpulse_sight.app.is_blocked", return_value=False),
-            patch("contextpulse_sight.app.FILE_LATEST", output_dir / "screen_latest.png"),
+            patch("contextpulse_sight.app.FILE_LATEST", output_dir / "screen_latest.jpg"),
             patch("contextpulse_sight.capture.capture_active_monitor", return_value=(0, test_img)),
         ):
             from contextpulse_sight.app import ContextPulseSightApp

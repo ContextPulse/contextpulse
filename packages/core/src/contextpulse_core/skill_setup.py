@@ -62,7 +62,7 @@ p = Path.home() / "screenshots" / "screen_all.png"
 age = time.time() - p.stat().st_mtime
 print(f"Age: {age:.0f}s - {'FRESH' if age < 30 else 'STALE'}")
 ```
-Default screenshot location: `~/screenshots/screen_all.png` (both monitors), `screen_latest.png` (active).
+Default screenshot location: `~/screenshots/screen_all.png` (both monitors), `screen_latest.jpg` (active).
 
 **Daemon restart** (if `get_buffer_status()` returns empty):
 ```bash

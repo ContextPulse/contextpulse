@@ -195,7 +195,8 @@ def get_monitor_summary() -> str:
 # --- Pre-compressed frame cache for fast retrieval ---
 _jpeg_cache: dict[int, tuple[bytes, float]] = {}  # monitor_index -> (jpeg_bytes, timestamp)
 _jpeg_cache_lock = threading.Lock()
-_CACHE_MAX_AGE = 2.0  # seconds — serve from cache if fresher than this
+_CACHE_MAX_AGE = 2.0  # seconds — serve from in-memory cache if fresher than this
+_BUFFER_MAX_AGE = 5.0  # seconds — serve from buffer file if fresher than this
 
 
 def _cache_get(monitor_index: int) -> bytes | None:
@@ -213,30 +214,71 @@ def _cache_put(monitor_index: int, jpeg_bytes: bytes) -> None:
         _jpeg_cache[monitor_index] = (jpeg_bytes, time.time())
 
 
-def _get_cached_or_capture(monitor_index: int | None = None) -> tuple[int, bytes]:
-    """Return JPEG bytes from cache if fresh, otherwise capture and cache.
+def _read_buffer_frame(monitor_index: int) -> bytes | None:
+    """Read the latest buffer frame for a monitor if it's fresh enough.
 
+    Returns JPEG bytes if a buffer frame exists and is < _BUFFER_MAX_AGE old,
+    otherwise None. This avoids re-capturing when the daemon has already
+    written a recent frame to disk.
+    """
+    latest = _buffer.get_latest_for_monitor(monitor_index)
+    if latest is None:
+        return None
+    parsed = parse_frame_path(latest)
+    if parsed is None:
+        return None
+    frame_age = time.time() - (parsed[0] / 1000.0)
+    if frame_age > _BUFFER_MAX_AGE:
+        return None
+    try:
+        return latest.read_bytes()
+    except OSError:
+        return None
+
+
+def _get_cached_or_capture(monitor_index: int | None = None) -> tuple[int, bytes]:
+    """Return JPEG bytes using the fastest available source.
+
+    Priority: in-memory cache (0ms) > buffer file (~1ms) > live capture (~170ms).
     If monitor_index is None, captures the active monitor.
     Returns (monitor_index, jpeg_bytes).
     """
     if monitor_index is not None:
+        # 1. In-memory cache
         cached = _cache_get(monitor_index)
         if cached is not None:
-            logger.info("get_screenshot: serving monitor %d from cache", monitor_index)
+            logger.info("get_screenshot: serving monitor %d from memory cache", monitor_index)
             return monitor_index, cached
+        # 2. Buffer file
+        buf_bytes = _read_buffer_frame(monitor_index)
+        if buf_bytes is not None:
+            logger.info("get_screenshot: serving monitor %d from buffer file", monitor_index)
+            _cache_put(monitor_index, buf_bytes)
+            return monitor_index, buf_bytes
+        # 3. Live capture
         img = capture.capture_single_monitor(monitor_index)
         jpeg_bytes = capture.capture_to_bytes(img, "JPEG")
         _cache_put(monitor_index, jpeg_bytes)
         return monitor_index, jpeg_bytes
 
-    # Active monitor
+    # Active monitor — need to determine which monitor first
+    # Check buffer for all monitors and find the freshest
     idx, img = capture.capture_active_monitor()
+
+    # 1. In-memory cache
     cached = _cache_get(idx)
     if cached is not None:
-        logger.info("get_screenshot: serving monitor %d from cache", idx)
+        logger.info("get_screenshot: serving monitor %d from memory cache", idx)
         return idx, cached
+    # 2. Buffer file
+    buf_bytes = _read_buffer_frame(idx)
+    if buf_bytes is not None:
+        logger.info("get_screenshot: serving monitor %d from buffer file", idx)
+        _cache_put(idx, buf_bytes)
+        return idx, buf_bytes
+    # 3. Already captured above, encode it
     jpeg_bytes = capture.capture_to_bytes(img, "JPEG")
-    capture.save_image(img, FILE_LATEST)
+    capture.save_image(img, FILE_LATEST, fmt="JPEG")
     _cache_put(idx, jpeg_bytes)
     return idx, jpeg_bytes
 

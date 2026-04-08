@@ -61,6 +61,10 @@ class OCRWorker:
         self._thread.start()
         logger.info("OCR worker started (mode=%s, queue=%d)", STORAGE_MODE, self._queue.maxsize)
 
+    def is_alive(self) -> bool:
+        """Return True if the OCR processing thread is running."""
+        return self._thread.is_alive()
+
     def stop(self):
         """Stop the OCR processing thread."""
         self._stop.set()

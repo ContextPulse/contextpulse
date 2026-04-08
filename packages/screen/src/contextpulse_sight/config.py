@@ -44,7 +44,7 @@ if STORAGE_MODE not in ("smart", "visual", "both", "text"):
     STORAGE_MODE = "smart"
 
 # File paths (stable, overwritten each capture)
-FILE_LATEST = OUTPUT_DIR / "screen_latest.png"
+FILE_LATEST = OUTPUT_DIR / "screen_latest.jpg"
 FILE_ALL = OUTPUT_DIR / "screen_all.png"
 FILE_REGION = OUTPUT_DIR / "screen_region.png"
 

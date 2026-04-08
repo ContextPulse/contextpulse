@@ -53,6 +53,10 @@ class ClipboardMonitor:
         self._thread.start()
         logger.info("Clipboard monitor started")
 
+    def is_alive(self) -> bool:
+        """Return True if the clipboard polling thread is running."""
+        return self._thread.is_alive()
+
     def stop(self):
         """Stop the clipboard monitoring thread."""
         self._stop.set()
