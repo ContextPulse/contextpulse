@@ -1,7 +1,7 @@
-"""Verify that mcp_server.py registers exactly 12 tools with correct names.
+"""Verify that mcp_server.py registers exactly 13 tools with correct names.
 
 Imports contextpulse_sight.mcp_server and inspects the FastMCP app to confirm
-all 10 free tools + 2 Pro-gated tools are present and correctly named.
+all 11 free tools + 2 Pro-gated tools are present and correctly named.
 """
 
 import asyncio
@@ -14,6 +14,7 @@ from contextpulse_sight import mcp_server as _mcp_server_mod
 
 EXPECTED_FREE_TOOLS = {
     "get_screenshot",
+    "get_monitor_summary",
     "get_recent",
     "get_screen_text",
     "get_buffer_status",
@@ -69,10 +70,10 @@ def _get_tool_names() -> set[str]:
 # ---------------------------------------------------------------------------
 
 class TestMcpServerToolRegistration:
-    def test_exactly_12_tools_registered(self):
+    def test_exactly_13_tools_registered(self):
         names = _get_tool_names()
-        assert len(names) == 12, (
-            f"Expected 12 tools, got {len(names)}: {sorted(names)}"
+        assert len(names) == 13, (
+            f"Expected 13 tools, got {len(names)}: {sorted(names)}"
         )
 
     def test_all_free_tools_present(self):

@@ -37,12 +37,12 @@ _FRAME_RE = re.compile(r"^(\d+)_m(\d+)\.(jpg|txt)$")
 def estimate_image_tokens(width: int, height: int) -> int:
     """Estimate Claude API token cost for sending an image.
 
-    Uses Claude's public formula: ceil(width/768) * ceil(height/768) * 258.
+    Uses Claude's current formula: (width * height) / 750.
+    Images exceeding 1568px on the long edge or ~1.15 megapixels are
+    downscaled by the API first; this function assumes the caller has
+    already applied any downscaling.
     """
-    import math
-    tiles_w = math.ceil(width / 768)
-    tiles_h = math.ceil(height / 768)
-    return tiles_w * tiles_h * 258
+    return max(1, round(width * height / 750))
 
 
 def estimate_text_tokens(text: str) -> int:

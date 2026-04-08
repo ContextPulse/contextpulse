@@ -342,5 +342,25 @@ class ActivityDB:
             "time_range": (min_ts, max_ts),
         }
 
+    def get_monitor_states(self) -> list[dict]:
+        """Get the latest activity record per monitor.
+
+        Returns list of dicts with: monitor_index, window_title, app_name,
+        timestamp, diff_score.  Ordered by monitor_index.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT a.monitor_index, a.window_title, a.app_name, "
+                "a.timestamp, a.diff_score "
+                "FROM activity a "
+                "INNER JOIN ("
+                "  SELECT monitor_index, MAX(timestamp) AS max_ts "
+                "  FROM activity GROUP BY monitor_index"
+                ") latest ON a.monitor_index = latest.monitor_index "
+                "AND a.timestamp = latest.max_ts "
+                "ORDER BY a.monitor_index",
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def close(self):
         self._conn.close()

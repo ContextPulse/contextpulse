@@ -284,18 +284,18 @@ class TestTokenEstimation:
 
     def test_estimate_image_tokens_standard(self):
         from contextpulse_sight.buffer import estimate_image_tokens
-        # 1280x720 → ceil(1280/768)=2, ceil(720/768)=1 → 2*1*258 = 516
-        assert estimate_image_tokens(1280, 720) == 516
+        # 1280x720 = 921,600 / 750 = 1229 (rounded)
+        assert estimate_image_tokens(1280, 720) == 1229
 
     def test_estimate_image_tokens_4k(self):
         from contextpulse_sight.buffer import estimate_image_tokens
-        # 3840x2160 → ceil(3840/768)=5, ceil(2160/768)=3 → 5*3*258 = 3870
-        assert estimate_image_tokens(3840, 2160) == 3870
+        # 3840x2160 = 8,294,400 / 750 = 11059
+        assert estimate_image_tokens(3840, 2160) == 11059
 
     def test_estimate_image_tokens_small(self):
         from contextpulse_sight.buffer import estimate_image_tokens
-        # 100x100 → ceil(100/768)=1, ceil(100/768)=1 → 1*1*258 = 258
-        assert estimate_image_tokens(100, 100) == 258
+        # 100x100 = 10,000 / 750 = 13 (rounded)
+        assert estimate_image_tokens(100, 100) == 13
 
     def test_estimate_text_tokens(self):
         from contextpulse_sight.buffer import estimate_text_tokens

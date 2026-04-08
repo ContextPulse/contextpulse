@@ -129,6 +129,208 @@ class TestCaptureToBytes:
         assert loaded.mode == "RGB"
 
 
+class TestCaptureBackend:
+    """Test DXcam/mss backend abstraction."""
+
+    def test_get_backend_returns_dxcam_when_available(self):
+        from unittest.mock import MagicMock, patch
+
+        mock_dxcam = MagicMock()
+        mock_dxcam.create.return_value = MagicMock()
+
+        with patch.dict("sys.modules", {"dxcam": mock_dxcam}):
+            from contextpulse_sight.capture import _get_backend
+            # Clear cached backend to force re-detection
+            import contextpulse_sight.capture as cap
+            cap._backend = None
+            cap._dxcam_cameras = {}
+            backend = _get_backend()
+            assert backend == "dxcam"
+
+    def test_get_backend_falls_back_to_mss(self):
+        from unittest.mock import patch
+
+        with patch.dict("sys.modules", {"dxcam": None}):
+            from contextpulse_sight.capture import _get_backend
+            import contextpulse_sight.capture as cap
+            cap._backend = None
+            cap._dxcam_cameras = {}
+            backend = _get_backend()
+            assert backend == "mss"
+
+    def test_dxcam_grab_returns_pil_image(self):
+        """DXcam grab returns numpy BGR array — must be converted to PIL RGB."""
+        import numpy as np
+        from contextpulse_sight.capture import _dxcam_to_pil
+
+        # Simulate a DXcam BGR frame (100x100, blue channel=255)
+        bgr_frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        bgr_frame[:, :, 0] = 255  # Blue channel in BGR
+
+        img = _dxcam_to_pil(bgr_frame)
+        assert img.mode == "RGB"
+        assert img.size == (100, 100)
+        # After BGR→RGB conversion, the red channel should be 255
+        r, g, b = img.getpixel((50, 50))
+        assert b == 255  # was blue in BGR, still blue in RGB
+        assert r == 0
+
+    def test_dxcam_to_pil_handles_rgba(self):
+        """DXcam can return BGRA with output_color='BGRA'."""
+        import numpy as np
+        from contextpulse_sight.capture import _dxcam_to_pil
+
+        bgra_frame = np.zeros((50, 50, 4), dtype=np.uint8)
+        bgra_frame[:, :, 1] = 128  # Green channel
+
+        img = _dxcam_to_pil(bgra_frame)
+        assert img.mode == "RGB"
+        _, g, _ = img.getpixel((25, 25))
+        assert g == 128
+
+
+class TestActiveWindowRect:
+    """Test active window detection for adaptive region capture."""
+
+    def test_returns_none_on_non_windows(self):
+        from unittest.mock import patch
+        from contextpulse_sight.capture import get_active_window_rect
+
+        with patch("contextpulse_sight.capture.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            result = get_active_window_rect()
+            assert result is None
+
+    def test_returns_none_when_no_foreground_window(self):
+        from unittest.mock import MagicMock, patch
+        from contextpulse_sight.capture import get_active_window_rect
+
+        with patch("contextpulse_sight.capture.sys") as mock_sys:
+            mock_sys.platform = "win32"
+            import ctypes
+            mock_user32 = MagicMock()
+            mock_user32.GetForegroundWindow.return_value = 0  # NULL
+            with patch.object(ctypes.windll, "user32", mock_user32):
+                result = get_active_window_rect()
+                assert result is None
+
+    def test_returns_rect_on_success(self):
+        from unittest.mock import MagicMock, patch
+        from contextpulse_sight.capture import get_active_window_rect
+
+        with patch("contextpulse_sight.capture.sys") as mock_sys:
+            mock_sys.platform = "win32"
+            import ctypes
+
+            mock_user32 = MagicMock()
+            mock_user32.GetForegroundWindow.return_value = 12345
+            mock_user32.IsWindow.return_value = True
+
+            mock_dwmapi = MagicMock()
+            # DwmGetWindowAttribute sets rect fields via side_effect
+            def fake_dwm(hwnd, attr, rect_ptr, size):
+                import ctypes as ct
+                rect = ct.cast(rect_ptr, ct.POINTER(ct.c_long * 4)).contents
+                rect[0] = 100   # left
+                rect[1] = 200   # top
+                rect[2] = 900   # right
+                rect[3] = 700   # bottom
+                return 0  # S_OK
+            mock_dwmapi.DwmGetWindowAttribute.side_effect = fake_dwm
+
+            with patch.object(ctypes.windll, "user32", mock_user32), \
+                 patch.object(ctypes.windll, "dwmapi", mock_dwmapi):
+                result = get_active_window_rect()
+                assert result == (100, 200, 800, 500)  # (left, top, width, height)
+
+    def test_handles_exception_gracefully(self):
+        from unittest.mock import patch
+        from contextpulse_sight.capture import get_active_window_rect
+
+        with patch("contextpulse_sight.capture.sys") as mock_sys:
+            mock_sys.platform = "win32"
+            import ctypes
+            # Make windll.user32 raise
+            with patch.object(ctypes, "windll", side_effect=AttributeError("no windll")):
+                result = get_active_window_rect()
+                assert result is None
+
+
+class TestAdaptiveRegion:
+    """Test adaptive region capture sizing."""
+
+    def test_auto_size_uses_active_window(self):
+        from unittest.mock import MagicMock, patch
+        from contextpulse_sight.capture import capture_region
+
+        # Mock get_active_window_rect to return a window at (100, 200, 800, 600)
+        with patch("contextpulse_sight.capture.get_active_window_rect", return_value=(100, 200, 800, 600)):
+            mock_sct = MagicMock()
+            mock_sct.monitors = [
+                {"left": 0, "top": 0, "width": 1920, "height": 1080},
+            ]
+            mock_sct_img = MagicMock()
+            mock_sct_img.width = 900
+            mock_sct_img.height = 700
+            mock_sct_img.rgb = b"\x80" * (900 * 700 * 3)
+            mock_sct.grab.return_value = mock_sct_img
+
+            with patch("contextpulse_sight.capture.mss.mss", return_value=mock_sct):
+                mock_sct.__enter__ = MagicMock(return_value=mock_sct)
+                mock_sct.__exit__ = MagicMock(return_value=False)
+                img = capture_region()  # width=0, height=0 → auto-detect
+                # Should have captured a region (the grab was called)
+                mock_sct.grab.assert_called_once()
+                assert img.width <= 1280
+                assert img.height <= 720
+
+    def test_fallback_to_cursor_centered(self):
+        from unittest.mock import MagicMock, patch
+        from contextpulse_sight.capture import capture_region
+
+        # No active window
+        with patch("contextpulse_sight.capture.get_active_window_rect", return_value=None), \
+             patch("contextpulse_sight.capture._get_cursor_pos", return_value=(500, 500)):
+            mock_sct = MagicMock()
+            mock_sct.monitors = [
+                {"left": 0, "top": 0, "width": 1920, "height": 1080},
+            ]
+            mock_sct_img = MagicMock()
+            mock_sct_img.width = 800
+            mock_sct_img.height = 600
+            mock_sct_img.rgb = b"\x80" * (800 * 600 * 3)
+            mock_sct.grab.return_value = mock_sct_img
+
+            with patch("contextpulse_sight.capture.mss.mss", return_value=mock_sct):
+                mock_sct.__enter__ = MagicMock(return_value=mock_sct)
+                mock_sct.__exit__ = MagicMock(return_value=False)
+                img = capture_region()
+                mock_sct.grab.assert_called_once()
+
+    def test_explicit_size_bypasses_auto_detect(self):
+        from unittest.mock import MagicMock, patch
+        from contextpulse_sight.capture import capture_region
+
+        with patch("contextpulse_sight.capture.get_active_window_rect") as mock_rect, \
+             patch("contextpulse_sight.capture._get_cursor_pos", return_value=(500, 500)):
+            mock_sct = MagicMock()
+            mock_sct.monitors = [
+                {"left": 0, "top": 0, "width": 1920, "height": 1080},
+            ]
+            mock_sct_img = MagicMock()
+            mock_sct_img.width = 400
+            mock_sct_img.height = 300
+            mock_sct_img.rgb = b"\x80" * (400 * 300 * 3)
+            mock_sct.grab.return_value = mock_sct_img
+
+            with patch("contextpulse_sight.capture.mss.mss", return_value=mock_sct):
+                mock_sct.__enter__ = MagicMock(return_value=mock_sct)
+                mock_sct.__exit__ = MagicMock(return_value=False)
+                img = capture_region(width=400, height=300)
+                # Should NOT have called get_active_window_rect
+                mock_rect.assert_not_called()
+
+
 class TestMonitorDetection:
     """Test monitor selection logic with mocked mss."""
 

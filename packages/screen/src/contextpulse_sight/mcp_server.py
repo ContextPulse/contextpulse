@@ -16,6 +16,7 @@ Tools:
 
 import functools
 import logging
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -38,7 +39,12 @@ from contextpulse_sight.buffer import (
 )
 from contextpulse_sight.classifier import classify_and_extract
 from contextpulse_sight.config import FILE_LATEST, OUTPUT_DIR
-from contextpulse_sight.privacy import is_blocked, is_title_blocked
+from contextpulse_sight.privacy import (
+    get_foreground_process_name,
+    get_foreground_window_title,
+    is_blocked,
+    is_title_blocked,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -94,54 +100,242 @@ def _require_pro(func):
 
 @mcp_app.tool()
 @_track_call
+def get_monitor_summary() -> str:
+    """Get a lightweight text summary of what's on each monitor RIGHT NOW.
+
+    Returns per-monitor metadata: app name, window title, and how recently
+    the content changed. Costs ~50-100 tokens (vs ~1,200+ for an image).
+
+    Call this FIRST to decide which monitor to screenshot, or whether you
+    need a screenshot at all. Then call get_screenshot(monitor_index=N)
+    for the specific monitor you need.
+    """
+    # Get live info from each physical monitor
+    with mss_lib.mss() as sct:
+        physical = sct.monitors[1:]
+
+    # Get cursor position to mark active monitor
+    try:
+        cx, cy = capture._get_cursor_pos()
+    except Exception:
+        cx, cy = 0, 0
+
+    # Get latest activity per monitor from DB
+    monitor_states = _activity_db.get_monitor_states()
+    state_map = {s["monitor_index"]: s for s in monitor_states}
+
+    # Get current foreground window info
+    fg_title = get_foreground_window_title()
+    fg_app = get_foreground_process_name()
+
+    lines = [f"=== Monitor Summary ({len(physical)} monitors) ===\n"]
+
+    for i, mon in enumerate(physical):
+        w, h = mon["width"], mon["height"]
+        # Check if cursor is on this monitor
+        is_active = (
+            mon["left"] <= cx < mon["left"] + mon["width"]
+            and mon["top"] <= cy < mon["top"] + mon["height"]
+        )
+        marker = " [ACTIVE]" if is_active else ""
+
+        state = state_map.get(i, {})
+        app = state.get("app_name", "unknown")
+        title = state.get("window_title", "unknown")
+        diff = state.get("diff_score", 0.0)
+        ts = state.get("timestamp", 0)
+
+        # Override with live foreground info for the active monitor
+        if is_active:
+            app = fg_app or app
+            title = fg_title or title
+
+        # Privacy check AFTER override so blocked foreground windows are caught
+        if is_title_blocked(title):
+            title = "[BLOCKED]"
+            app = "[BLOCKED]"
+
+        # Calculate staleness
+        if ts:
+            age = time.time() - ts
+            if age < 10:
+                freshness = "just now"
+            elif age < 60:
+                freshness = f"{age:.0f}s ago"
+            elif age < 3600:
+                freshness = f"{age / 60:.0f}m ago"
+            else:
+                freshness = f"{age / 3600:.1f}h ago"
+        else:
+            freshness = "no data"
+
+        # Estimate change level
+        if diff >= 50:
+            change = "major change"
+        elif diff >= 10:
+            change = "some change"
+        elif diff >= 1:
+            change = "minor change"
+        else:
+            change = "static"
+
+        lines.append(f"Monitor {i}{marker}: {w}x{h}")
+        lines.append(f"  App: {app}")
+        lines.append(f"  Title: {title[:80]}")
+        lines.append(f"  Last change: {freshness} ({change}, diff={diff:.1f}%)")
+        lines.append("")
+
+    lines.append(
+        "Tip: Use get_screenshot(mode='monitor', monitor_index=N) to capture a specific monitor, "
+        "or get_screenshot(mode='smart') to only get monitors with recent changes."
+    )
+    return "\n".join(lines)
+
+
+# --- Pre-compressed frame cache for fast retrieval ---
+_jpeg_cache: dict[int, tuple[bytes, float]] = {}  # monitor_index -> (jpeg_bytes, timestamp)
+_jpeg_cache_lock = threading.Lock()
+_CACHE_MAX_AGE = 2.0  # seconds — serve from cache if fresher than this
+
+
+def _cache_get(monitor_index: int) -> bytes | None:
+    """Return cached JPEG bytes if fresh, else None. Thread-safe."""
+    with _jpeg_cache_lock:
+        cached = _jpeg_cache.get(monitor_index)
+        if cached and (time.time() - cached[1]) < _CACHE_MAX_AGE:
+            return cached[0]
+    return None
+
+
+def _cache_put(monitor_index: int, jpeg_bytes: bytes) -> None:
+    """Store JPEG bytes in cache. Thread-safe."""
+    with _jpeg_cache_lock:
+        _jpeg_cache[monitor_index] = (jpeg_bytes, time.time())
+
+
+def _get_cached_or_capture(monitor_index: int | None = None) -> tuple[int, bytes]:
+    """Return JPEG bytes from cache if fresh, otherwise capture and cache.
+
+    If monitor_index is None, captures the active monitor.
+    Returns (monitor_index, jpeg_bytes).
+    """
+    if monitor_index is not None:
+        cached = _cache_get(monitor_index)
+        if cached is not None:
+            logger.info("get_screenshot: serving monitor %d from cache", monitor_index)
+            return monitor_index, cached
+        img = capture.capture_single_monitor(monitor_index)
+        jpeg_bytes = capture.capture_to_bytes(img, "JPEG")
+        _cache_put(monitor_index, jpeg_bytes)
+        return monitor_index, jpeg_bytes
+
+    # Active monitor
+    idx, img = capture.capture_active_monitor()
+    cached = _cache_get(idx)
+    if cached is not None:
+        logger.info("get_screenshot: serving monitor %d from cache", idx)
+        return idx, cached
+    jpeg_bytes = capture.capture_to_bytes(img, "JPEG")
+    capture.save_image(img, FILE_LATEST)
+    _cache_put(idx, jpeg_bytes)
+    return idx, jpeg_bytes
+
+
+@mcp_app.tool()
+@_track_call
 def get_screenshot(mode: str = "active", monitor_index: int | None = None) -> Any:
     """Capture the current screen and return as an image.
 
     Args:
-        mode: "active" (monitor with cursor), "all" (all monitors as separate images),
-              "monitor" (specific monitor by index), or "region" (800x600 around cursor).
+        mode: "active" (monitor with cursor — default),
+              "all" (all monitors as separate images),
+              "smart" (only monitors that changed recently — saves tokens),
+              "monitor" (specific monitor by index),
+              "region" (800x600 around cursor).
         monitor_index: Which monitor to capture (0-based). Only used with mode="monitor".
 
     Returns the screenshot as an inline image that Claude can see directly.
-    When mode="all", returns a list of images (one per monitor).
+    When mode="all" or "smart", returns a list of images (one per monitor).
+
+    Tip: Call get_monitor_summary() first to see what's on each monitor
+    before deciding which to capture. This avoids wasting tokens on
+    unchanged or uninteresting monitors.
     """
     if is_blocked():
         return "Capture blocked: active window matches privacy blocklist."
 
-    valid_modes = {"active", "all", "monitor", "region"}
+    valid_modes = {"active", "all", "monitor", "region", "smart"}
     if mode not in valid_modes:
         return f"Invalid mode '{mode}'. Must be one of: {', '.join(sorted(valid_modes))}"
+
+    if mode == "smart":
+        # Only return monitors with meaningful recent changes
+        monitors = capture.capture_all_monitors()
+        monitor_states = _activity_db.get_monitor_states()
+        state_map = {s["monitor_index"]: s for s in monitor_states}
+
+        results = []
+        skipped = []
+        for idx, img in monitors:
+            state = state_map.get(idx, {})
+            diff = state.get("diff_score", 100.0)  # unknown = include
+            title = state.get("window_title", "")
+            app = state.get("app_name", "")
+
+            if diff < 1.0 and state.get("timestamp", 0):
+                # Static monitor — return text summary only
+                skipped.append(f"Monitor {idx}: {app} — {title[:60]} (unchanged, diff={diff:.1f}%)")
+                continue
+
+            # Changed monitor — return image
+            jpeg_bytes = capture.capture_to_bytes(img, "JPEG")
+            _cache_put(idx, jpeg_bytes)
+            logger.info("get_screenshot(smart): monitor %d %dx%d (diff=%.1f%%)", idx, img.width, img.height, diff)
+            results.append(f"--- Monitor {idx}: {app} — {title[:60]} (diff={diff:.1f}%) ---")
+            results.append(MCPImage(data=jpeg_bytes, format="jpeg"))
+
+        if not results:
+            # No monitors had meaningful changes
+            if skipped:
+                return (
+                    "All monitors are static (no recent changes):\n"
+                    + "\n".join(skipped)
+                    + "\n\nUse mode='all' to force capture."
+                )
+            return "All monitors are static (no recent changes). Use mode='all' to force capture."
+
+        if skipped:
+            results.insert(0, "Unchanged monitors (text only):\n" + "\n".join(skipped) + "\n")
+
+        return results
 
     if mode == "all":
         monitors = capture.capture_all_monitors()
         results = []
         for idx, img in monitors:
+            jpeg_bytes = capture.capture_to_bytes(img, "JPEG")
+            _cache_put(idx, jpeg_bytes)
             capture.save_image(img, OUTPUT_DIR / f"screen_monitor_{idx}.png")
             logger.info("get_screenshot(all): monitor %d %dx%d", idx, img.width, img.height)
-            results.append(
-                f"--- Monitor {idx} ---"
-            )
-            results.append(
-                MCPImage(data=capture.capture_to_bytes(img, "JPEG"), format="jpeg")
-            )
+            results.append(f"--- Monitor {idx} ---")
+            results.append(MCPImage(data=jpeg_bytes, format="jpeg"))
         return results
 
     if mode == "monitor":
         idx = monitor_index if monitor_index is not None else 0
-        img = capture.capture_single_monitor(idx)
-        logger.info("get_screenshot(monitor=%d): %dx%d", idx, img.width, img.height)
-        return MCPImage(data=capture.capture_to_bytes(img, "JPEG"), format="jpeg")
+        idx, jpeg_bytes = _get_cached_or_capture(idx)
+        logger.info("get_screenshot(monitor=%d)", idx)
+        return MCPImage(data=jpeg_bytes, format="jpeg")
 
     if mode == "region":
         img = capture.capture_region()
         logger.info("get_screenshot(region): %dx%d", img.width, img.height)
         return MCPImage(data=capture.capture_to_bytes(img, "JPEG"), format="jpeg")
 
-    # Default: active monitor
-    idx, img = capture.capture_active_monitor()
-    capture.save_image(img, FILE_LATEST)
-    logger.info("get_screenshot(active): monitor %d %dx%d", idx, img.width, img.height)
-    return MCPImage(data=capture.capture_to_bytes(img, "JPEG"), format="jpeg")
+    # Default: active monitor (with cache)
+    idx, jpeg_bytes = _get_cached_or_capture(None)
+    logger.info("get_screenshot(active): monitor %d", idx)
+    return MCPImage(data=jpeg_bytes, format="jpeg")
 
 
 @mcp_app.tool()

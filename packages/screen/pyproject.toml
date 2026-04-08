@@ -34,6 +34,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+windows = [
+    "dxcam>=0.3.0",
+]
 macos = [
     "pyobjc-framework-Vision>=10.0",
     "pyobjc-framework-Quartz>=10.0",
