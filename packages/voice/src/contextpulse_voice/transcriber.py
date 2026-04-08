@@ -62,7 +62,9 @@ class LocalTranscriber(Transcriber):
             self.model = WhisperModel(model_path, device=device, compute_type="int8")
             logger.info("Whisper model loaded")
 
-    def transcribe(self, wav_bytes: bytes, beam_size: int = 1) -> str:
+    def transcribe(
+        self, wav_bytes: bytes, beam_size: int = 1, initial_prompt: str = "",
+    ) -> str:
         if not wav_bytes:
             return ""
 
@@ -78,6 +80,7 @@ class LocalTranscriber(Transcriber):
                     tmp_path,
                     path_or_hf_repo=self._mlx_model,
                     language="en",
+                    initial_prompt=initial_prompt or None,
                 )
                 return result.get("text", "").strip()
             finally:
@@ -91,6 +94,7 @@ class LocalTranscriber(Transcriber):
                 condition_on_previous_text=False,
                 repetition_penalty=1.2,
                 no_repeat_ngram_size=3,
+                initial_prompt=initial_prompt or None,
             )
             # Collect segments, skip duplicates
             parts = []

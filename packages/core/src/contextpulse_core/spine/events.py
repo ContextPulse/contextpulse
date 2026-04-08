@@ -57,6 +57,10 @@ class EventType(Enum):
     PASTE_DETECTED = "paste_detected"
     CORRECTION_DETECTED = "correction_detected"
 
+    # Learning
+    VOCABULARY_LEARNED = "vocabulary_learned"
+    LEARNING_CONSOLIDATION = "learning_consolidation"
+
     # Flow
     CLICK = "click"
     SCROLL = "scroll"

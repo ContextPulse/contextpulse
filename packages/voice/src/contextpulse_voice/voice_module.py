@@ -319,7 +319,24 @@ class VoiceModule(ModalityModule):
                 return
             self._last_audio_hash = audio_hash
 
-            raw_text = self._transcriber.transcribe(wav_bytes)
+            # Build Whisper initial_prompt from screen OCR hot-words
+            whisper_prompt = ""
+            try:
+                from contextpulse_voice.hot_words import (
+                    build_whisper_prompt,
+                    extract_hot_words,
+                )
+                from contextpulse_voice.context_vocab import get_known_proper_nouns
+                hot_words = extract_hot_words()
+                whisper_prompt = build_whisper_prompt(
+                    hot_words, get_known_proper_nouns(),
+                )
+            except Exception:
+                logger.debug("Hot-word extraction failed (non-fatal)", exc_info=True)
+
+            raw_text = self._transcriber.transcribe(
+                wav_bytes, initial_prompt=whisper_prompt,
+            )
             if not raw_text or len(raw_text.strip()) < 2:
                 logger.warning("Empty or too-short transcription — skipping")
                 if self._overlay:
@@ -388,7 +405,24 @@ class VoiceModule(ModalityModule):
             logger.info("Fix-last: re-transcribing with beam_size=10 + LLM cleanup")
             import pyautogui as pag
 
-            raw_text = self._transcriber.transcribe(self._last_wav_bytes, beam_size=10)
+            # Build Whisper initial_prompt from screen OCR hot-words
+            whisper_prompt = ""
+            try:
+                from contextpulse_voice.hot_words import (
+                    build_whisper_prompt,
+                    extract_hot_words,
+                )
+                from contextpulse_voice.context_vocab import get_known_proper_nouns
+                hot_words = extract_hot_words()
+                whisper_prompt = build_whisper_prompt(
+                    hot_words, get_known_proper_nouns(),
+                )
+            except Exception:
+                logger.debug("Hot-word extraction failed in fix-last (non-fatal)", exc_info=True)
+
+            raw_text = self._transcriber.transcribe(
+                self._last_wav_bytes, beam_size=10, initial_prompt=whisper_prompt,
+            )
             raw_text = apply_punctuation(raw_text)
             app_name_fl, window_title_fl = self._get_foreground_info()
             profile_context = self._build_profile_context(app_name_fl, window_title_fl)
