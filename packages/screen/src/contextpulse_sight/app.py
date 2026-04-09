@@ -146,7 +146,7 @@ class ContextPulseSightApp:
 
     def _do_auto_capture(self):
         """Capture all monitors, store in buffer, record activity. Returns True on success."""
-        monitors = capture.capture_all_monitors()
+        monitors = capture.capture_all_monitors(keep_native=True)
         cursor_idx = monitors[0][0] if monitors else 0
         try:
             import mss as _mss
@@ -162,7 +162,7 @@ class ContextPulseSightApp:
             window_title = "[BLOCKED]"
 
         now = time.time()
-        for idx, img in monitors:
+        for idx, img, native_img in monitors:
             result = self.buffer.add(img, monitor_index=idx)
             if result:
                 frame_path, diff_pct = result  # buffer.add returns (Path, diff_pct)
@@ -184,9 +184,14 @@ class ContextPulseSightApp:
                     frame_path=str(frame_path) if frame_path else "",
                     diff_score=diff_pct,
                 )
-                # Queue for background OCR
+                # Queue for background OCR — pass native-res image for
+                # higher OCR accuracy (buffer stores downscaled JPEG)
                 if frame_path and isinstance(frame_path, Path):
-                    self._ocr_worker.enqueue(frame_path, row_id, app_name)
+                    self._ocr_worker.enqueue(
+                        frame_path, row_id, app_name,
+                        window_title=window_title,
+                        native_img=img,
+                    )
 
                 if idx == cursor_idx:
                     capture.save_image(img, FILE_LATEST, fmt="JPEG")

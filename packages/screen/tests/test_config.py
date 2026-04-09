@@ -18,7 +18,7 @@ class TestConfigDefaults:
         )
         assert MAX_WIDTH == 1280
         assert MAX_HEIGHT == 720
-        assert JPEG_QUALITY == 75
+        assert JPEG_QUALITY == 90
         assert AUTO_INTERVAL == 5
         assert BUFFER_MAX_AGE == 1800
         assert CHANGE_THRESHOLD == 0.5

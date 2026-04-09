@@ -94,7 +94,7 @@ _DEFAULTS: dict = {
     # Voice — dictation settings
     "voice_hotkey": "ctrl+space",
     "voice_fix_hotkey": "ctrl+shift+space",
-    "voice_whisper_model": "base",     # base | small | medium | large
+    "voice_whisper_model": "small",    # base | small | medium | large
     "voice_always_use_llm": False,
     "voice_anthropic_api_key": "",
 }

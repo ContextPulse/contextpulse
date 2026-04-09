@@ -164,10 +164,15 @@ def capture_single_monitor(index: int) -> Image.Image:
     return _downscale(img)
 
 
-def capture_all_monitors() -> list[tuple[int, Image.Image]]:
+def capture_all_monitors(
+    keep_native: bool = False,
+) -> list[tuple[int, Image.Image]] | list[tuple[int, Image.Image, Image.Image]]:
     """Capture each monitor individually, downscaled.
 
-    Returns list of (monitor_index, image) pairs.
+    Returns list of (monitor_index, downscaled_image) pairs.
+    If keep_native=True, returns (monitor_index, downscaled_image, native_image)
+    so the caller can pass the native-res image to OCR for better accuracy.
+
     Uses DXcam per-monitor when available, falls back to mss per-monitor.
     Handles errors per-monitor so a single failure doesn't prevent capturing others.
     """
@@ -180,12 +185,18 @@ def capture_all_monitors() -> list[tuple[int, Image.Image]]:
 
     for i in range(monitor_count):
         try:
+            native = None
             if use_dxcam:
                 try:
                     camera = _get_dxcam_camera(i)
                     frame = camera.grab()
                     if frame is not None:
-                        results.append((i, _downscale(_dxcam_to_pil(frame))))
+                        native = _dxcam_to_pil(frame)
+                        scaled = _downscale(native.copy())
+                        if keep_native:
+                            results.append((i, scaled, native))
+                        else:
+                            results.append((i, scaled))
                         continue
                     logger.debug("DXcam returned None for monitor %d, trying mss", i)
                 except Exception as exc:
@@ -195,7 +206,12 @@ def capture_all_monitors() -> list[tuple[int, Image.Image]]:
             with mss.mss() as sct:
                 mon = sct.monitors[1:][i]
                 sct_img = sct.grab(mon)
-                results.append((i, _downscale(mss_to_pil(sct_img))))
+                native = mss_to_pil(sct_img)
+                scaled = _downscale(native.copy())
+                if keep_native:
+                    results.append((i, scaled, native))
+                else:
+                    results.append((i, scaled))
         except MemoryError:
             logger.error("MemoryError capturing monitor %d — skipping", i)
             import gc

@@ -33,7 +33,7 @@ def get_voice_config() -> dict:
     return {
         "hotkey": cfg.get("voice_hotkey", _env("CONTEXTPULSE_VOICE_HOTKEY", "ctrl+space")),
         "fix_hotkey": cfg.get("voice_fix_hotkey", _env("CONTEXTPULSE_VOICE_FIX_HOTKEY", "ctrl+shift+space")),
-        "whisper_model": cfg.get("voice_whisper_model", _env("CONTEXTPULSE_VOICE_MODEL", "base")),
+        "whisper_model": cfg.get("voice_whisper_model", _env("CONTEXTPULSE_VOICE_MODEL", "small")),
         "always_use_llm": cfg.get("voice_always_use_llm", False),
         "anthropic_api_key": cfg.get("voice_anthropic_api_key", ""),
     }

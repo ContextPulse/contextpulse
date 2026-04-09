@@ -232,6 +232,79 @@ def rebuild_context_vocabulary() -> str:
         return f"Error rebuilding context vocabulary: {e}"
 
 
+@mcp_app.tool()
+def consolidate_learning(dry_run: bool = True) -> str:
+    """Run the full cross-modal vocabulary consolidation pipeline.
+
+    Orchestrates all learning modules: session learning (transcript patterns),
+    cross-modal correction mining (sight+voice+touch temporal correlations),
+    OCR term harvesting, clipboard term harvesting, correction escalation,
+    context vocabulary rebuild, and deduplication.
+
+    This is the core learning loop that makes ContextPulse smarter over time.
+
+    Args:
+        dry_run: If True (default), analyze and report without writing changes.
+                 Set to False to apply all learned corrections.
+    """
+    try:
+        from contextpulse_voice.consolidator import consolidate_vocabulary
+
+        summary = consolidate_vocabulary(dry_run=dry_run)
+        mode = "DRY RUN" if dry_run else "APPLIED"
+        lines = [f"=== Vocabulary Consolidation ({mode}) ===\n"]
+        lines.append(f"  Session patterns learned:  {summary.get('session_learned', 0)}")
+        lines.append(f"  Cross-modal corrections:   {summary.get('cross_modal', 0)}")
+        lines.append(f"  OCR terms harvested:       {summary.get('ocr_harvested', 0)}")
+        lines.append(f"  Clipboard terms harvested: {summary.get('clipboard_harvested', 0)}")
+        lines.append(f"  Corrections escalated:     {summary.get('escalated', 0)}")
+        lines.append(f"  Context vocab rebuilt:      {summary.get('context_rebuilt', 0)}")
+        lines.append(f"  Duplicates removed:        {summary.get('deduped', 0)}")
+
+        if dry_run:
+            lines.append("\nRun with dry_run=False to apply all changes.")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error running consolidation: {e}"
+
+
+@mcp_app.tool()
+def check_corrections(hours: int = 72, threshold: int = 3, dry_run: bool = True) -> str:
+    """Check for repeated voice corrections that should become permanent vocabulary.
+
+    Monitors touch-module correction events (paste-then-edit patterns) and
+    promotes corrections that occur frequently to the learned vocabulary.
+
+    Args:
+        hours: How many hours of history to scan. Default 72 (3 days).
+        threshold: Minimum correction count to trigger promotion. Default 3.
+        dry_run: If True (default), report without writing. False to apply.
+    """
+    try:
+        from contextpulse_voice.escalation import check_repeated_corrections
+
+        results = check_repeated_corrections(
+            hours=hours, threshold=threshold, dry_run=dry_run,
+        )
+
+        if not results:
+            return f"No repeated corrections found (threshold: {threshold}x in {hours}h)."
+
+        mode = "DRY RUN" if dry_run else "APPLIED"
+        lines = [f"=== Correction Escalation ({mode}) — {len(results)} patterns ===\n"]
+        for r in sorted(results, key=lambda x: -x.get("count", 0)):
+            lines.append(
+                f"  {r['original']!r:30s} -> {r['corrected']!r:20s} "
+                f"(seen {r.get('count', '?')}x, action: {r.get('action', '?')})"
+            )
+
+        if dry_run:
+            lines.append("\nRun with dry_run=False to promote these to vocabulary.")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error checking corrections: {e}"
+
+
 def main():
     """Entry point for MCP stdio server."""
     mcp_app.run(transport="stdio")

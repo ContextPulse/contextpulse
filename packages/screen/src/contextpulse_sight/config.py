@@ -25,7 +25,7 @@ OUTPUT_DIR = Path(_env("CONTEXTPULSE_OUTPUT_DIR", str(Path.home() / "screenshots
 # Image settings
 MAX_WIDTH = int(_env("CONTEXTPULSE_MAX_WIDTH", "1280"))
 MAX_HEIGHT = int(_env("CONTEXTPULSE_MAX_HEIGHT", "720"))
-JPEG_QUALITY = max(1, min(100, int(_env("CONTEXTPULSE_JPEG_QUALITY", "75"))))
+JPEG_QUALITY = max(1, min(100, int(_env("CONTEXTPULSE_JPEG_QUALITY", "90"))))
 
 # Auto-capture interval in seconds (default 5s, 0 = disabled)
 AUTO_INTERVAL = max(0, int(_env("CONTEXTPULSE_AUTO_INTERVAL", "5")))

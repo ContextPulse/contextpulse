@@ -47,12 +47,25 @@ class OCRWorker:
         """Attach a SightModule for dual-write EventBus emission."""
         self._sight_module = module
 
-    def enqueue(self, frame_path: Path, row_id: int, app_name: str = ""):
-        """Queue a frame for OCR. Non-blocking; drops if queue full."""
+    def enqueue(
+        self,
+        frame_path: Path,
+        row_id: int,
+        app_name: str = "",
+        window_title: str = "",
+        native_img: "Image.Image | None" = None,
+    ):
+        """Queue a frame for OCR. Non-blocking; drops if queue full.
+
+        Args:
+            native_img: Optional native-resolution PIL Image for higher-quality
+                OCR. If provided, OCR runs on this instead of the downscaled
+                JPEG on disk. The image is NOT saved — only used for OCR.
+        """
         if STORAGE_MODE == "visual":
             return  # No OCR needed in visual-only mode
         try:
-            self._queue.put_nowait((frame_path, row_id, app_name))
+            self._queue.put_nowait((frame_path, row_id, app_name, window_title, native_img))
         except queue.Full:
             logger.debug("OCR queue full, skipping frame %s", frame_path)
 
@@ -72,27 +85,41 @@ class OCRWorker:
     def _run(self):
         while not self._stop.is_set():
             try:
-                frame_path, row_id, app_name = self._queue.get(timeout=1.0)
+                frame_path, row_id, app_name, window_title, native_img = self._queue.get(timeout=1.0)
             except queue.Empty:
                 continue
             try:
-                self._process(frame_path, row_id, app_name)
+                self._process(frame_path, row_id, app_name, window_title, native_img)
             except Exception:
                 logger.debug("OCR processing failed for %s", frame_path, exc_info=True)
 
-    def _process(self, frame_path: Path, row_id: int, app_name: str = ""):
+    def _process(
+        self,
+        frame_path: Path,
+        row_id: int,
+        app_name: str = "",
+        window_title: str = "",
+        native_img: "Image.Image | None" = None,
+    ):
         """Run OCR on a frame, apply storage mode logic.
 
         Text is ALWAYS stored when found (DB + .txt sidecar) — it's the
         searchable index. The image is kept or deleted based on storage mode
         and app-level overrides.
+
+        If native_img is provided, OCR runs on the full-resolution image
+        for better accuracy (instead of the downscaled JPEG on disk).
         """
         if not frame_path.exists():
             return
 
-        img = Image.open(frame_path)
+        if native_img is not None:
+            img = native_img
+        else:
+            img = Image.open(frame_path)
         result = classify_and_extract(img)
-        img.close()  # Release file handle before potential deletion
+        if native_img is None:
+            img.close()  # Release file handle before potential deletion
 
         has_text = result.get("text") and result.get("chars", 0) > 0
         is_text_heavy = result["type"] == "text" and result["text"]
@@ -122,6 +149,7 @@ class OCRWorker:
                     ocr_text=result["text"],
                     confidence=result["confidence"],
                     app_name=app_name,
+                    window_title=window_title,
                 )
 
         # Decide whether to keep the image

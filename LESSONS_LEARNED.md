@@ -9,6 +9,12 @@
 
 ---
 
+<!-- Archived 2026-04-09: "Wire up the last mile" → incorporated into implementing-features skill (Phase 5 Validate gate: "Last-mile wiring" + "Daemon/service changes" checklist items). -->
+
+### [2026-04-09] Whisper base model is insufficient for daily dictation — use small
+**Context:** ContextPulse Voice shipped with faster-whisper `base` model as default. Transcription quality was noticeably poor for technical dictation (project names, CamelCase terms, domain jargon). The `small` model is ~2x slower but significantly more accurate. On the Corsair workstation (AMD Ryzen AI 9 HX 370) the latency increase is acceptable.
+**Lesson:** Default to `small` model for desktop dictation. Reserve `base` only for resource-constrained environments. The config hierarchy (config.json > env var > default) allows per-machine override if needed.
+
 <!-- Archived 2026-03-26: Duplicate of GLOBAL_LESSONS_LEARNED.md "[2026-03-25] AI-generated marketing numbers need human verification" (same lesson, same incident) -->
 
 <!-- Archived 2026-03-30: gitleaks false-positives on SHA-256 → open-source-readiness check #25 + developing-python/ML Model Pinning section -->

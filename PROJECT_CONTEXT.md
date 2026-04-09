@@ -87,6 +87,8 @@ ContextPulse Daemon (single process)
 | get_vocabulary | Current word corrections |
 | learn_from_session | Batch-analyze transcription history, auto-write corrections |
 | rebuild_context_vocabulary | Regenerate context vocab from projects + skills dirs |
+| consolidate_learning | Full cross-modal consolidation pipeline (session+OCR+clipboard+escalation) |
+| check_corrections | Find repeated touch corrections for vocabulary promotion |
 
 ### Touch
 | Tool | Description |
