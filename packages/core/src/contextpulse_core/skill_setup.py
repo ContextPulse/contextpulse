@@ -37,50 +37,65 @@ ContextPulse is a background daemon that captures screen, voice, and input activ
 ### Sight (Screen Capture + OCR)
 | Tool | Use When |
 |------|----------|
-| `get_screenshot(mode)` | Need to see the screen (mode: "active", "all", "region") |
+| `get_monitor_summary()` | **Call FIRST** — shows what's on each monitor without images (~50 tokens) |
+| `get_screenshot(mode, monitor_index)` | Need to see the screen visually |
 | `get_screen_text()` | Need text from screen (cheaper than screenshot) |
-| `get_recent(count, seconds)` | Need recent screen history |
+| `get_recent(count, seconds, min_diff)` | Recent screen history (min_diff=50 filters to significant changes like app switches) |
 | `search_history(query)` | Looking for when something was on screen |
 | `get_activity_summary(hours)` | Understanding user's app usage patterns |
 | `get_buffer_status()` | Check if daemon is alive and capturing |
 
+**Screenshot modes:**
+| Mode | What it captures | When to use |
+|------|-----------------|-------------|
+| `"active"` (default) | Monitor with cursor | Quick look at what user is focused on |
+| `"all"` | Every monitor as separate images | Need full workspace view |
+| `"smart"` | Only monitors that changed recently | Save tokens — skip unchanged screens |
+| `"monitor"` + `monitor_index=N` | Specific monitor (0-based) | Already know which monitor to check |
+| `"region"` | 800x600 around cursor or active window | Focused detail on one area |
+
+**Multi-monitor workflow:**
+1. Call `get_monitor_summary()` first — it shows app name, window title, and last-change time per monitor (~50 tokens)
+2. Decide which monitor(s) you actually need to see
+3. Call `get_screenshot(mode="monitor", monitor_index=N)` for the specific one, or `mode="all"` if you need all
+
 **Choosing the right Sight tool:**
 | Need | Tool | Cost |
 |------|------|------|
+| What's on each screen (text only) | `get_monitor_summary()` | ~50 tokens |
 | Read text (code, terminal, docs) | `get_screen_text()` | ~200-700 tokens |
-| See screen visually | `get_screenshot(mode="all")` | ~1,200 tokens |
-| Higher-detail single monitor | `get_screenshot(mode="active")` | ~800 tokens |
+| See all monitors visually | `get_screenshot(mode="all")` | ~1,200 tokens per monitor |
+| See one specific monitor | `get_screenshot(mode="monitor", monitor_index=N)` | ~1,200 tokens |
+| Only changed monitors | `get_screenshot(mode="smart")` | ~1,200 per changed monitor |
 | Daemon health check | `get_buffer_status()` | ~50 tokens |
 
-One monitor shows this Claude terminal — focus on the OTHER monitor(s) for useful context.
+One monitor often shows this Claude terminal — use `get_monitor_summary()` to identify which, then focus on the OTHER monitor for useful context.
 
 **Fallback when MCP is unavailable:**
-```python
-import os, time
-from pathlib import Path
-p = Path.home() / "screenshots" / "screen_all.png"
-age = time.time() - p.stat().st_mtime
-print(f"Age: {age:.0f}s - {'FRESH' if age < 30 else 'STALE'}")
-```
-Default screenshot location: `~/screenshots/screen_all.png` (both monitors), `screen_latest.jpg` (active).
-
-**Daemon restart** (if `get_buffer_status()` returns empty):
 ```bash
-wmic process where "commandline like '%contextpulse_sight%'" call terminate 2>/dev/null
-contextpulse-sight &
+# Check freshness first
+python -c "import os,time; age=time.time()-os.path.getmtime(os.path.expanduser('~/screenshots/screen_all.png')); print(f'Age: {age:.0f}s - {chr(34)}FRESH{chr(34) if age<30 else chr(34)}STALE{chr(34)}')"
 ```
-**NEVER** `taskkill /IM pythonw.exe /F` — kills Voice and other Python services too.
+Files: `~/screenshots/screen_all.png` (all monitors), `screen_latest.png` (active monitor).
+
+**Daemon restart** (if `get_buffer_status()` returns empty or voice not working):
+```powershell
+# Stop daemon processes only (NOT MCP servers)
+Get-CimInstance Win32_Process -Filter "name='python.exe'" | Where-Object { $_.CommandLine -like '*contextpulse*daemon*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+# Restart
+contextpulse
+```
+**NEVER** `taskkill /IM python.exe /F` or `taskkill /IM pythonw.exe /F` — kills MCP servers and other services.
+**NEVER** kill processes matching `mcp_unified` — those are the MCP servers agents connect to.
 
 **Hotkeys:** Ctrl+Shift+S (capture), Ctrl+Shift+A (all monitors), Ctrl+Shift+Z (region), Ctrl+Shift+P (pause).
 
 ### Voice (Dictation + Vocabulary)
 | Tool | Use When |
 |------|----------|
-| `get_recent_transcriptions(minutes)` | See what user dictated recently |
+| `get_recent_transcriptions(minutes, limit)` | See what user dictated recently (raw + cleaned text) |
 | `get_voice_stats(hours)` | Check dictation usage and quality metrics |
-| `get_vocabulary()` | View current vocabulary corrections |
-| `learn_from_session(hours, dry_run)` | Analyze transcription patterns and learn corrections |
-| `rebuild_context_vocabulary()` | Refresh vocabulary from project names |
+| `get_vocabulary(learned_only)` | View current vocabulary corrections |
 
 ### Touch (Keyboard + Mouse + Corrections)
 | Tool | Use When |
@@ -89,12 +104,40 @@ contextpulse-sight &
 | `get_touch_stats(hours)` | Typing speed, click counts, correction rate |
 | `get_correction_history(limit)` | See Voice corrections the user made |
 
-### Cross-Modal
+### Cross-Modal Search & History
 | Tool | Use When |
 |------|----------|
-| `search_all_events(query)` | Search across ALL modalities at once |
-| `get_event_timeline(minutes_ago)` | See everything happening at a point in time |
-| `get_clipboard_history(count)` | Recent clipboard contents |
+| `search_all_events(query, minutes_ago, modality)` | Search across ALL modalities at once (filter by "sight", "voice", "clipboard", "keys", "flow", "system") |
+| `get_event_timeline(minutes_ago, modality)` | Timeline of everything happening at a point in time (optional modality filter) |
+| `get_context_at(minutes_ago)` | Get the screen frame + OCR + window title from N minutes ago |
+| `get_clipboard_history(count)` | Recent clipboard contents (last N entries) |
+| `search_clipboard(query, minutes_ago)` | Search clipboard history by text |
+
+### Learning & Vocabulary
+| Tool | Use When |
+|------|----------|
+| `consolidate_learning(dry_run)` | Run full cross-modal vocabulary consolidation pipeline |
+| `check_corrections(hours, threshold, dry_run)` | Check for repeated voice corrections to promote to vocabulary |
+| `learn_from_session(hours, dry_run)` | Analyze transcription patterns and learn corrections |
+| `rebuild_context_vocabulary()` | Refresh vocabulary from project names |
+
+### Project & Journal
+| Tool | Use When |
+|------|----------|
+| `get_active_project(cwd)` | Detect which project is in focus from CWD |
+| `identify_project(text)` | Score arbitrary text against all projects (top 3 matches) |
+| `list_projects()` | List all indexed projects with overview and keyword count |
+| `get_project_context(project)` | Get full PROJECT_CONTEXT.md for a specific project |
+| `route_to_journal(text, entry_type, project)` | Log insight to journal (types: action-discovered, action-completed, observation, decision, context-learned, error-encountered) |
+
+### Memory (Persistent Key-Value Store)
+| Tool | Use When |
+|------|----------|
+| `memory_store(key, value, tags, ttl_hours)` | Store a memory (default 24h TTL, 0 = permanent) |
+| `memory_recall(key)` | Retrieve by exact key |
+| `memory_search(query, mode)` | Search by keyword, semantic, or hybrid (default) |
+| `memory_list(tag, limit)` | List memories, optionally filtered by tag |
+| `memory_forget(key)` | Delete a memory |
 
 ## Self-Improving Voice
 
@@ -114,6 +157,7 @@ After creating new projects, run `rebuild_context_vocabulary()` to update projec
 - Don't say "I can't see your screen" — use MCP tools or file fallback
 - Don't ask the user to take a screenshot — one already exists
 - Don't kill all pythonw.exe — targeted kill only
+- Don't kill processes matching `mcp_unified` — those are shared MCP servers
 """
 
 _ANALYZING_DICTATION_SKILL = """\
