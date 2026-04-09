@@ -259,7 +259,7 @@ sam local invoke LicenseWebhookFunction --event tests/test_event.json
 ### Deploy Lambda + DynamoDB + API Gateway
 
 ```bash
-cd C:/Users/david/Projects/ContextPulse/lambda/
+cd lambda/
 chmod +x deploy.sh
 ./deploy.sh         # prod
 ./deploy.sh staging # staging

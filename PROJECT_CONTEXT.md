@@ -21,7 +21,7 @@ ContextPulse Daemon (single process)
 │   └── Hotkeys: Ctrl+Shift+S/A/Z/P
 ├── VoiceModule ── hold-to-dictate + transcribe + paste
 │   ├── Recorder (sounddevice, 16kHz mono)
-│   ├── LocalTranscriber (faster-whisper, base model)
+│   ├── LocalTranscriber (faster-whisper, small model, relaxed quality filters)
 │   ├── Cleanup (rule-based + optional LLM)
 │   ├── Vocabulary (user + auto-learned corrections)
 │   └── Hotkeys: Ctrl+Space (dictate), Ctrl+Shift+Space (fix-last)

@@ -11,6 +11,14 @@
 
 <!-- Archived 2026-04-09: "Wire up the last mile" → incorporated into implementing-features skill (Phase 5 Validate gate: "Last-mile wiring" + "Daemon/service changes" checklist items). -->
 
+### [2026-04-09] faster-whisper default quality filters silently truncate long transcriptions
+**Context:** Users reported voice transcriptions getting cut off mid-sentence on recordings >15s. Root cause: faster-whisper's default `log_prob_threshold=-1.0`, `no_speech_threshold=0.6`, and `compression_ratio_threshold=2.4` silently drop segments that don't meet quality thresholds. Combined with `no_repeat_ngram_size=3`, natural speech pauses and repeated patterns triggered segment drops.
+**Lesson:** When using faster-whisper for dictation (not batch transcription), relax quality filters: `log_prob_threshold=-1.5`, `no_speech_threshold=0.8`, `compression_ratio_threshold=3.0`. The defaults are tuned for subtitle extraction where precision matters more than recall. For dictation, recall matters more — better to transcribe noise than lose speech.
+
+### [2026-04-09] Skills must document ALL MCP tool parameters to prevent agent misuse
+**Context:** Agents were only capturing one monitor because the `using-contextpulse` skill listed only 3 of 5 screenshot modes, omitted `get_monitor_summary()` entirely, and didn't document `monitor_index`. Agents defaulted to `mode="active"` (cursor monitor only).
+**Lesson:** When a skill wraps MCP tools, document every tool, every parameter, and the recommended workflow. Missing parameters = agents can't use them. Run a periodic audit comparing skill docs against actual MCP tool signatures.
+
 ### [2026-04-09] Whisper base model is insufficient for daily dictation — use small
 **Context:** ContextPulse Voice shipped with faster-whisper `base` model as default. Transcription quality was noticeably poor for technical dictation (project names, CamelCase terms, domain jargon). The `small` model is ~2x slower but significantly more accurate. On the Corsair workstation (AMD Ryzen AI 9 HX 370) the latency increase is acceptable.
 **Lesson:** Default to `small` model for desktop dictation. Reserve `base` only for resource-constrained environments. The config hierarchy (config.json > env var > default) allows per-machine override if needed.

@@ -40,7 +40,7 @@ Name: "autostart"; Description: "Start ContextPulse when Windows starts"; GroupD
 
 [Files]
 ; Bundle everything from the PyInstaller dist folder
-Source: "dist3\ContextPulse\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\ContextPulse\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

@@ -4,7 +4,7 @@ This is the entry point for the contextpulse-license-webhook Lambda function.
 It is a thin re-export of the top-level lambda/license_webhook.py handler.
 
 The canonical implementation lives at:
-    C:/Users/david/Projects/ContextPulse/lambda/license_webhook.py
+    lambda/license_webhook.py
 
 This file exists to satisfy the lambda/license_webhook/ package layout expected
 by some deployment tooling. For SAM-based deployments, use lambda/template.yaml

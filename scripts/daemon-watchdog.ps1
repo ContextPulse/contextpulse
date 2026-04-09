@@ -11,13 +11,13 @@ param(
 $ErrorActionPreference = "Stop"
 
 # --- Config ---
-$VenvPythonw = "C:\Users\david\Projects\ContextPulse\.venv\Scripts\pythonw.exe"
-$VenvPython  = "C:\Users\david\Projects\ContextPulse\.venv\Scripts\python.exe"
+$WorkDir     = Split-Path $PSScriptRoot -Parent
+$VenvPythonw = Join-Path $WorkDir ".venv\Scripts\pythonw.exe"
+$VenvPython  = Join-Path $WorkDir ".venv\Scripts\python.exe"
 $Module      = "contextpulse_core.daemon"
 $McpModule   = "contextpulse_core.mcp_unified"
 $McpPort     = 8420
-$WorkDir     = "C:\Users\david\Projects\ContextPulse"
-$LogFile     = "C:\Users\david\screenshots\daemon_watchdog.log"
+$LogFile     = Join-Path $WorkDir "logs\daemon_watchdog.log"
 
 # --- State ---
 $restartTimestamps = [System.Collections.Generic.List[datetime]]::new()
