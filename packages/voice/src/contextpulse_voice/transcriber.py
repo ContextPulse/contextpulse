@@ -95,6 +95,13 @@ class LocalTranscriber(Transcriber):
                 repetition_penalty=1.2,
                 no_repeat_ngram_size=3,
                 initial_prompt=initial_prompt or None,
+                # Relax quality filters to prevent premature cutoff on
+                # longer recordings.  Defaults silently drop segments
+                # whose log-prob, no-speech prob, or compression ratio
+                # exceed thresholds — causing mid-sentence truncation.
+                log_prob_threshold=-1.5,
+                no_speech_threshold=0.8,
+                compression_ratio_threshold=3.0,
             )
             # Collect segments, skip duplicates
             parts = []
