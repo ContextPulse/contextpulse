@@ -31,9 +31,15 @@ _root: tk.Tk | None = None
 
 
 def _get_root() -> tk.Tk:
-    """Return the singleton hidden Tk root, creating it on first call."""
+    """Return the singleton hidden Tk root, creating it on first call.
+
+    IMPORTANT: Never call winfo_exists() to check the root — after a
+    Toplevel dialog is destroyed in a daemon thread, winfo_exists() can
+    return False even though the root's Tcl interpreter is still alive.
+    Creating a second tk.Tk() in that state crashes the process.
+    """
     global _root
-    if _root is None or not _root.winfo_exists():
+    if _root is None:
         _root = tk.Tk()
         _root.withdraw()  # hidden — never shown
     return _root

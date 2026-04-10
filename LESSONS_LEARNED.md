@@ -11,6 +11,18 @@
 
 <!-- Archived 2026-04-09: "Wire up the last mile" → incorporated into implementing-features skill (Phase 5 Validate gate: "Last-mile wiring" + "Daemon/service changes" checklist items). -->
 
+### [2026-04-10] Never sleep() in pynput/pystray callback threads
+**Context:** Added a 300ms `time.sleep()` inside `recorder.stop()` to capture trailing speech. Since `stop()` was called from the pynput `_on_release` callback, the sleep blocked the listener thread. Key events queued up and replayed in a burst when it unblocked, causing a runaway recording loop that spewed content nonstop.
+**Lesson:** Blocking operations (sleep, I/O, model loading) must NEVER happen in event listener callbacks (pynput, pystray, tkinter). Spawn a daemon thread for any work that takes >0ms. The tail buffer now lives in `_stop_and_transcribe()` which runs in its own thread. Added source-inspection test (`test_no_sleep_in_pynput_callbacks`) and `test_recorder_stop_does_not_sleep` to catch this pattern automatically.
+
+### [2026-04-10] Tkinter dialogs from daemon threads can kill pystray's message pump
+**Context:** `show_settings()` runs in a daemon thread (pystray menu callback). It creates a Tk root via `_get_root()` which checked `winfo_exists()`. After a dialog close, `winfo_exists()` returns False even though the Tcl interpreter is alive. Creating a second `tk.Tk()` crashes the process, killing the daemon with exit code 0.
+**Lesson:** (1) Never check `winfo_exists()` to guard Tk root creation — use `_root is None` only. (2) Wrap all dialog code in try/except to protect the daemon. (3) `dlg.wait_window()` and `dlg.destroy()` must both be wrapped. Added GUI survival tests to catch this class of bug.
+
+### [2026-04-10] Model parameter coupling — changing model size requires co-updating all dependent parameters
+**Context:** Whisper model upgraded from "base" to "small" but quality filter thresholds weren't updated. The "small" model produces more variable acoustic scores, causing the unchanged thresholds to silently drop segments (manifesting as sentence cutoff). User experienced degraded dictation for days before diagnosis.
+**Lesson:** Create model-specific parameter profiles (lookup tables) with automated monotonicity tests: larger model must always have more relaxed thresholds. Implemented as `_MODEL_THRESHOLDS` dict with `test_larger_models_have_wider_thresholds`. This pattern applies to any ML system where model size affects downstream parameters.
+
 ### [2026-04-09] faster-whisper default quality filters silently truncate long transcriptions
 **Context:** Users reported voice transcriptions getting cut off mid-sentence on recordings >15s. Root cause: faster-whisper's default `log_prob_threshold=-1.0`, `no_speech_threshold=0.6`, and `compression_ratio_threshold=2.4` silently drop segments that don't meet quality thresholds. Combined with `no_repeat_ngram_size=3`, natural speech pauses and repeated patterns triggered segment drops.
 **Lesson:** When using faster-whisper for dictation (not batch transcription), relax quality filters: `log_prob_threshold=-1.5`, `no_speech_threshold=0.8`, `compression_ratio_threshold=3.0`. The defaults are tuned for subtitle extraction where precision matters more than recall. For dictation, recall matters more — better to transcribe noise than lose speech.

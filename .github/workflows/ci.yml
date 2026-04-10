@@ -79,6 +79,33 @@ jobs:
         run: |
           pytest packages/ -v --tb=short --ignore=packages/agent
 
+  test-integration:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install all packages + test deps
+        run: |
+          pip install -e ".[dev]"
+          pip install -e packages/core -e packages/screen -e packages/voice -e packages/touch -e packages/memory -e packages/project
+
+      - name: Run integration tests
+        run: |
+          pytest tests/integration/ -v --tb=short -m "integration or not integration" --timeout=60
+
+      - name: Run property tests
+        run: |
+          pytest packages/ -v --tb=short -m property --timeout=120
+
   test-macos:
     runs-on: macos-latest
     strategy:

@@ -41,13 +41,21 @@ ContextPulse Daemon (single process)
 |---------|---------|-------|-----------|--------|
 | **contextpulse-core** | 0.1.0 | 151 | — | Spine, config, licensing, settings, GUI theme |
 | **contextpulse-sight** | 0.1.0 | 283 | 12 (10 free + 2 Pro) | Screen capture, OCR, clipboard, activity DB |
-| **contextpulse-voice** | 0.1.0 | 195 | 3 | Hold-to-dictate, Whisper transcription, vocabulary |
+| **contextpulse-voice** | 0.1.0 | 244 | 3 | Hold-to-dictate, Whisper transcription, vocabulary |
 | **contextpulse-touch** | 0.1.0 | 56 | 3 | Typing bursts, mouse events, correction detection |
 | **contextpulse-project** | 0.1.0 | 38 | 5 | Project detection, journal routing |
 | **contextpulse-memory** | 0.1.0 | 80 | 7 (5 free + 2 Pro) | Three-tier memory (hot/warm/cold), FTS5+semantic search, quota cap |
 | **contextpulse-agent** | 0.1.0 | — | — | Coming soon (v0.2 — agent coordination) |
 
-**Total: 408 tests (voice+core), 30 MCP tools (25 free + 5 Pro) + 4 voice tools = 34 total**
+**Total: 1,052 tests across all packages, 30 MCP tools (25 free + 5 Pro) + 4 voice tools = 34 total**
+
+### Test Infrastructure (added 2026-04-10)
+- **Integration tests:** `tests/integration/` — thread safety, GUI survival, daemon lifecycle (63 new tests)
+- **Dev deps:** pytest-timeout (30s default), pytest-threadleak, hypothesis
+- **Markers:** unit, integration, property, slow, windows_only
+- **CI:** Separate integration test job on Windows, property test job
+- **Model coupling:** `_MODEL_THRESHOLDS` with monotonicity invariant tests
+- **Skill:** `robust-testing` — patterns for thread/GUI/daemon/hotkey/audio/parameter testing
 
 ## Memory Module (contextpulse-memory) — Production Hardened 2026-03-30
 - Free CRUD tools: memory_store, memory_recall, memory_list, memory_forget, memory_stats

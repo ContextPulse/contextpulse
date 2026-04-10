@@ -63,6 +63,9 @@ openai = ["openai>=1.0"]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
+    "pytest-timeout>=2.3",
+    "pytest-threadleak>=0.1",
+    "hypothesis>=6.100",
     "ruff>=0.4",
 ]
 
@@ -89,5 +92,12 @@ select = ["E", "F", "W", "I"]
 ignore = ["E501"]
 
 [tool.pytest.ini_options]
-testpaths = ["packages/*/tests"]
-addopts = "--import-mode=importlib"
+testpaths = ["packages/*/tests", "tests"]
+addopts = "--import-mode=importlib --timeout=30"
+markers = [
+    "unit: fast, mocked, CI-safe on all platforms (default)",
+    "integration: real threads and OS hooks, requires Windows desktop",
+    "property: hypothesis stateful/property tests, CPU-intensive",
+    "slow: soak tests and full pipeline, >30s each",
+    "windows_only: requires Windows OS features",
+]

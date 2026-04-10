@@ -279,7 +279,6 @@ class VoiceModule(ModalityModule):
             self._last_stop_time = now
 
             self._recording = False
-            wav_bytes = self._recorder.stop()
             if self._overlay:
                 self._overlay.show_transcribing()
             app_name, window_title = self._get_foreground_info()
@@ -290,19 +289,46 @@ class VoiceModule(ModalityModule):
                 window_title=window_title,
             ))
 
+            # Stop recording and transcribe in a background thread.
+            # The thread adds a brief tail delay before stopping the
+            # stream so trailing speech is captured — this MUST NOT
+            # happen on the pynput listener thread or it blocks key
+            # event processing and causes runaway recording loops.
+            threading.Thread(
+                target=self._stop_and_transcribe,
+                args=(app_name, window_title),
+                daemon=True,
+            ).start()
+
+    # ── Transcription Pipeline ───────────────────────────────────────
+
+    _TAIL_BUFFER_MS = 300  # capture trailing speech after key release
+
+    def _stop_and_transcribe(
+        self, app_name: str, window_title: str
+    ) -> None:
+        """Stop recorder with tail buffer and run transcription pipeline.
+
+        Called in a background thread so the tail delay doesn't block
+        the pynput listener.
+        """
+        try:
+            # Brief delay to capture trailing speech still in the mic buffer
+            if self._TAIL_BUFFER_MS > 0:
+                time.sleep(self._TAIL_BUFFER_MS / 1000)
+            wav_bytes = self._recorder.stop()
+
             if not wav_bytes:
                 logger.warning("No audio captured")
                 if self._overlay:
                     self._overlay.hide()
                 return
 
-            threading.Thread(
-                target=self._transcribe_and_paste,
-                args=(wav_bytes, app_name, window_title),
-                daemon=True,
-            ).start()
-
-    # ── Transcription Pipeline ───────────────────────────────────────
+            self._transcribe_and_paste(wav_bytes, app_name, window_title)
+        except Exception:
+            logger.exception("stop_and_transcribe failed")
+            if self._overlay:
+                self._overlay.hide()
 
     def _transcribe_and_paste(
         self, wav_bytes: bytes, app_name: str, window_title: str

@@ -227,6 +227,9 @@ class ContextPulseDaemon:
 
             self._voice_module.start()
             logger.info("Voice module started (hotkey listener active)")
+            # Refresh tray tooltip now that voice is alive — without this,
+            # the tooltip shows "voice=OFF" until the watchdog cycle (15s).
+            self._update_tray()
         except Exception as exc:
             self._module_errors["voice"] = str(exc)
             self._log_crash("voice", exc)

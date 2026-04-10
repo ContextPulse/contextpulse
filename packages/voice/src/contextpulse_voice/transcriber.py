@@ -25,6 +25,24 @@ class Transcriber(ABC):
         ...
 
 
+
+# Model-specific quality filter profiles.  Larger models produce more
+# variable acoustic scores, so they need wider thresholds to avoid
+# silently dropping segments (which manifests as mid-sentence or
+# end-of-sentence truncation).
+#
+# Each profile is: (log_prob_threshold, no_speech_threshold, compression_ratio_threshold)
+# Defaults come from faster-whisper: (-1.0, 0.6, 2.4) — too strict for all models.
+_MODEL_THRESHOLDS: dict[str, tuple[float, float, float]] = {
+    "tiny":      (-1.5, 0.8, 3.0),
+    "base":      (-1.5, 0.8, 3.0),
+    "small":     (-2.0, 0.9, 4.0),
+    "medium":    (-2.5, 0.9, 4.5),
+    "large-v3":  (-3.0, 0.95, 5.0),
+}
+_DEFAULT_THRESHOLDS = (-2.0, 0.9, 4.0)
+
+
 class LocalTranscriber(Transcriber):
     """Transcribes audio using a local Whisper model (no API cost).
 
@@ -36,6 +54,12 @@ class LocalTranscriber(Transcriber):
     """
 
     def __init__(self, model_size: str = "base", device: str = "cpu") -> None:
+        self._model_size = model_size
+        self._thresholds = _MODEL_THRESHOLDS.get(model_size, _DEFAULT_THRESHOLDS)
+        logger.info(
+            "Whisper '%s' thresholds: log_prob=%.1f, no_speech=%.2f, compression=%.1f",
+            model_size, *self._thresholds,
+        )
         import platform
 
         if sys.platform == "darwin" and platform.machine() == "arm64":
@@ -95,13 +119,12 @@ class LocalTranscriber(Transcriber):
                 repetition_penalty=1.2,
                 no_repeat_ngram_size=3,
                 initial_prompt=initial_prompt or None,
-                # Relax quality filters to prevent premature cutoff on
-                # longer recordings.  Defaults silently drop segments
-                # whose log-prob, no-speech prob, or compression ratio
-                # exceed thresholds — causing mid-sentence truncation.
-                log_prob_threshold=-1.5,
-                no_speech_threshold=0.8,
-                compression_ratio_threshold=3.0,
+                # Use model-specific quality filter thresholds.
+                # Larger models produce more variable acoustic scores
+                # and need wider margins to avoid silent segment drops.
+                log_prob_threshold=self._thresholds[0],
+                no_speech_threshold=self._thresholds[1],
+                compression_ratio_threshold=self._thresholds[2],
             )
             # Collect segments, skip duplicates
             parts = []

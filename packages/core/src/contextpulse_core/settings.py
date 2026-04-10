@@ -30,13 +30,20 @@ _settings_open = False
 
 
 def show_settings() -> None:
-    """Show the settings dialog. Prevents duplicate windows."""
+    """Show the settings dialog. Prevents duplicate windows.
+
+    This may be called from a daemon thread (pystray menu callback).
+    Tk is not thread-safe, so we catch all exceptions to prevent the
+    dialog from taking down the daemon process when it closes.
+    """
     global _settings_open
     if _settings_open:
         return
     _settings_open = True
     try:
         _build_and_run()
+    except Exception:
+        logger.exception("Settings dialog error (swallowed to protect daemon)")
     finally:
         _settings_open = False
 
@@ -375,10 +382,22 @@ def _build_and_run() -> None:
 
     dlg.protocol("WM_DELETE_WINDOW", dlg.destroy)
 
-    # Unbind mousewheel on close to prevent errors
+    # Unbind mousewheel on close to prevent errors.
+    # CRITICAL: do NOT destroy the hidden Tk root — only destroy the
+    # Toplevel dialog.  Destroying root kills pystray's message pump
+    # and takes down the entire daemon process (exit code 0).
     def _on_close():
-        canvas.unbind_all("<MouseWheel>")
-        dlg.destroy()
+        try:
+            canvas.unbind_all("<MouseWheel>")
+        except Exception:
+            pass
+        try:
+            dlg.destroy()
+        except Exception:
+            pass
 
     dlg.protocol("WM_DELETE_WINDOW", _on_close)
-    dlg.wait_window()
+    try:
+        dlg.wait_window()
+    except Exception:
+        logger.debug("Settings wait_window interrupted", exc_info=True)
