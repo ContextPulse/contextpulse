@@ -100,4 +100,5 @@ markers = [
     "property: hypothesis stateful/property tests, CPU-intensive",
     "slow: soak tests and full pipeline, >30s each",
     "windows_only: requires Windows OS features",
+    "skip_ci: skip in CI environments (platform-specific or hardware-dependent)",
 ]

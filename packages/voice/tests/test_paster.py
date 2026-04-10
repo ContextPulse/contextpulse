@@ -1,5 +1,6 @@
 """Tests for the paster module — clipboard paste and hash tracking."""
 
+import threading
 from unittest.mock import MagicMock
 
 import contextpulse_voice.paster as paster_module
@@ -13,6 +14,7 @@ class TestPasteText:
         """Reset module-level state between tests."""
         paster_module._last_paste_time = 0.0
         paster_module._last_paste_hash = ""
+        paster_module._paste_lock = threading.Lock()
         yield
 
     def test_paste_returns_hash(self):
