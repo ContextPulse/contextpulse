@@ -243,7 +243,7 @@ All modules emit events to a shared **EventBus** (the "spine"), which writes to 
 ## Development
 
 ```bash
-git clone https://github.com/junkyard-rules/contextpulse
+git clone https://github.com/ContextPulse/contextpulse
 cd contextpulse
 uv venv
 .venv\Scripts\activate

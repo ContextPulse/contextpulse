@@ -23,9 +23,9 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://contextpulse.ai"
-Repository = "https://github.com/junkyard-rules/contextpulse"
-Issues = "https://github.com/junkyard-rules/contextpulse/issues"
-Documentation = "https://github.com/junkyard-rules/contextpulse#readme"
+Repository = "https://github.com/ContextPulse/contextpulse"
+Issues = "https://github.com/ContextPulse/contextpulse/issues"
+Documentation = "https://github.com/ContextPulse/contextpulse#readme"
 dependencies = [
     "contextpulse-core>=0.1.0",
     "contextpulse-sight>=0.1.0",

@@ -9,7 +9,7 @@ Thanks for your interest in contributing! ContextPulse is open-source under AGPL
 We recommend [uv](https://docs.astral.sh/uv/) for fast installs, but pip works too.
 
 ```bash
-git clone https://github.com/junkyard-rules/contextpulse
+git clone https://github.com/ContextPulse/contextpulse
 cd contextpulse
 
 # Option A: uv (recommended)
