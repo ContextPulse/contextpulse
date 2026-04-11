@@ -61,7 +61,7 @@ macos = [
 ]
 openai = ["openai>=1.0"]
 dev = [
-    "pytest>=8.0",
+    "pytest>=9.0.3",
     "pytest-cov>=5.0",
     "pytest-timeout>=2.3",
     "pytest-threadleak>=0.1",
