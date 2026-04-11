@@ -66,6 +66,7 @@ class ContextPulseDaemon:
 
     def __init__(self) -> None:
         self.stop_event = threading.Event()
+        self._running = True  # set False in _quit() so tray restart loop stops
 
         # EventBus — shared by all modules
         self._event_bus = EventBus(ACTIVITY_DB_PATH)
@@ -480,6 +481,7 @@ class ContextPulseDaemon:
 
     def _quit(self) -> None:
         logger.info("ContextPulse shutting down")
+        self._running = False
         self._stop_modules()
 
         # Clean up tkinter root
@@ -573,7 +575,33 @@ class ContextPulseDaemon:
                 menu=self._create_tray_menu(),
             )
             logger.info("ContextPulse running — Sight + Voice + Touch")
-            self.tray.run()  # blocks until quit
+
+            # Keep-alive sentinel: pystray.Icon.run() can exit silently when
+            # Windows rebuilds the notification area (explorer.exe restart,
+            # WM_ENDSESSION, clipboard interaction).  We retry automatically
+            # so the daemon doesn't die.
+            _MAX_TRAY_RESTARTS = 5
+            for _tray_attempt in range(_MAX_TRAY_RESTARTS):
+                self.tray.run()  # blocks until quit or unexpected exit
+                if not self._running:
+                    break  # intentional quit via menu
+                logger.warning(
+                    "Tray exited unexpectedly (attempt %d/%d) — restarting",
+                    _tray_attempt + 1, _MAX_TRAY_RESTARTS,
+                )
+                try:
+                    from contextpulse_sight.icon import create_icon
+                    self.tray = pystray.Icon(
+                        name="ContextPulse",
+                        icon=create_icon(),
+                        title=self._get_status_text(),
+                        menu=self._create_tray_menu(),
+                    )
+                except Exception:
+                    logger.exception("Failed to recreate tray icon")
+                    break
+            else:
+                logger.error("Tray restart limit reached — daemon exiting")
 
 
 def main() -> None:

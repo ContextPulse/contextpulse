@@ -1,6 +1,7 @@
 # ContextPulse Daemon Watchdog
 # Launches the daemon and auto-restarts on crash with exponential backoff.
 # Max 5 restarts per rolling hour window. Logs all events.
+# Single-instance guard: uses a named mutex to prevent zombie watchdog chains.
 
 param(
     [int]$MaxRestartsPerHour = 5,
@@ -9,6 +10,22 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# --- Single-Instance Guard (named mutex) ---
+$mutexName = "Global\ContextPulse_DaemonWatchdog_SingleInstance"
+$createdNew = $false
+try {
+    $script:watchdogMutex = [System.Threading.Mutex]::new($true, $mutexName, [ref]$createdNew)
+} catch {
+    # Mutex already exists and is abandoned or inaccessible — exit
+    exit 0
+}
+
+if (-not $createdNew) {
+    # Another watchdog instance already holds the mutex — exit silently
+    $script:watchdogMutex.Dispose()
+    exit 0
+}
 
 # --- Config ---
 $WorkDir     = Split-Path $PSScriptRoot -Parent
@@ -100,76 +117,84 @@ function Start-McpServer {
 }
 
 # --- Main Loop ---
-Write-Log "Watchdog starting (max $MaxRestartsPerHour restarts/hour, max backoff ${MaxBackoffSeconds}s)"
+try {
+    Write-Log "Watchdog starting (max $MaxRestartsPerHour restarts/hour, max backoff ${MaxBackoffSeconds}s)"
 
-# Kill any zombies from previous crash before first launch
-Kill-ZombieDaemons
+    # Kill any zombies from previous crash before first launch
+    Kill-ZombieDaemons
 
-# Start the unified MCP server (shared across all Claude sessions)
-Start-McpServer
+    # Start the unified MCP server (shared across all Claude sessions)
+    Start-McpServer
 
-while ($true) {
-    # Check restart budget
-    $recentRestarts = Get-RestartsInLastHour
-    if ($recentRestarts -ge $MaxRestartsPerHour) {
-        Write-Log "Restart budget exhausted ($recentRestarts/$($MaxRestartsPerHour) in last hour). Sleeping 10 min before retry." "WARN"
-        Start-Sleep -Seconds 600
-        continue
+    while ($true) {
+        # Check restart budget
+        $recentRestarts = Get-RestartsInLastHour
+        if ($recentRestarts -ge $MaxRestartsPerHour) {
+            Write-Log "Restart budget exhausted ($recentRestarts/$($MaxRestartsPerHour) in last hour). Sleeping 10 min before retry." "WARN"
+            Start-Sleep -Seconds 600
+            continue
+        }
+
+        # Kill zombies before each restart (crashed process may have left orphan threads)
+        if ($restartTimestamps.Count -gt 0) {
+            Kill-ZombieDaemons
+        }
+
+        # Launch daemon
+        Write-Log "Launching ContextPulse daemon (python.exe -m $Module)"
+        $startTime = Get-Date
+
+        if ($DryRun) {
+            Write-Log "[DRY RUN] Would launch daemon. Exiting."
+            return
+        }
+
+        # Use python.exe (not pythonw.exe) so stderr is capturable for crash diagnostics.
+        # The -WindowStyle Hidden on Start-Process keeps the console window invisible.
+        # Redirect stderr to crash log for post-mortem analysis.
+        $proc = Start-Process -FilePath $VenvPython `
+            -ArgumentList "-m", $Module `
+            -WorkingDirectory $WorkDir `
+            -PassThru -WindowStyle Hidden `
+            -RedirectStandardError "$WorkDir\daemon_stderr.log"
+
+        Write-Log "Daemon started (pid=$($proc.Id))"
+
+        # Wait for process to exit
+        $proc.WaitForExit()
+        $exitCode = $proc.ExitCode
+        $runtime = ((Get-Date) - $startTime).TotalSeconds
+
+        # Determine if this was a crash or graceful exit
+        if ($exitCode -in $gracefulExitCodes) {
+            Write-Log "Daemon exited gracefully (code=$exitCode, runtime=$([math]::Round($runtime))s). Watchdog stopping."
+            break
+        }
+
+        # It crashed
+        $exitHex = "0x{0:X8}" -f [uint32]$exitCode
+        Write-Log "DAEMON CRASHED (code=$exitCode [$exitHex], runtime=$([math]::Round($runtime))s)" "ERROR"
+
+        # Record restart timestamp
+        $restartTimestamps.Add((Get-Date))
+
+        # Reset backoff if daemon ran >5 min (it was stable, not a boot-loop)
+        if ($runtime -gt 300) {
+            $backoffSeconds = 5
+        }
+
+        Write-Log "Restarting in ${backoffSeconds}s (restart $($restartTimestamps.Count)/$MaxRestartsPerHour in last hour)"
+        Start-Sleep -Seconds $backoffSeconds
+
+        # Exponential backoff (2, 4, 8, 16... capped)
+        $backoffSeconds = [math]::Min($backoffSeconds * 2, $MaxBackoffSeconds)
     }
 
-    # Kill zombies before each restart (crashed process may have left orphan threads)
-    if ($restartTimestamps.Count -gt 0) {
-        Kill-ZombieDaemons
+    Write-Log "Watchdog exiting."
+} finally {
+    # Release the mutex so a new watchdog can start if needed
+    if ($script:watchdogMutex) {
+        try { $script:watchdogMutex.ReleaseMutex() } catch {}
+        $script:watchdogMutex.Dispose()
     }
-
-    # Launch daemon
-    Write-Log "Launching ContextPulse daemon (python.exe -m $Module)"
-    $startTime = Get-Date
-
-    if ($DryRun) {
-        Write-Log "[DRY RUN] Would launch daemon. Exiting."
-        return
-    }
-
-    # Use python.exe (not pythonw.exe) so stderr is capturable for crash diagnostics.
-    # The -WindowStyle Hidden on Start-Process keeps the console window invisible.
-    # Redirect stderr to crash log for post-mortem analysis.
-    $proc = Start-Process -FilePath $VenvPython `
-        -ArgumentList "-m", $Module `
-        -WorkingDirectory $WorkDir `
-        -PassThru -WindowStyle Hidden `
-        -RedirectStandardError "$WorkDir\daemon_stderr.log"
-
-    Write-Log "Daemon started (pid=$($proc.Id))"
-
-    # Wait for process to exit
-    $proc.WaitForExit()
-    $exitCode = $proc.ExitCode
-    $runtime = ((Get-Date) - $startTime).TotalSeconds
-
-    # Determine if this was a crash or graceful exit
-    if ($exitCode -in $gracefulExitCodes) {
-        Write-Log "Daemon exited gracefully (code=$exitCode, runtime=$([math]::Round($runtime))s). Watchdog stopping."
-        break
-    }
-
-    # It crashed
-    $exitHex = "0x{0:X8}" -f [uint32]$exitCode
-    Write-Log "DAEMON CRASHED (code=$exitCode [$exitHex], runtime=$([math]::Round($runtime))s)" "ERROR"
-
-    # Record restart timestamp
-    $restartTimestamps.Add((Get-Date))
-
-    # Reset backoff if daemon ran >5 min (it was stable, not a boot-loop)
-    if ($runtime -gt 300) {
-        $backoffSeconds = 5
-    }
-
-    Write-Log "Restarting in ${backoffSeconds}s (restart $($restartTimestamps.Count)/$MaxRestartsPerHour in last hour)"
-    Start-Sleep -Seconds $backoffSeconds
-
-    # Exponential backoff (2, 4, 8, 16... capped)
-    $backoffSeconds = [math]::Min($backoffSeconds * 2, $MaxBackoffSeconds)
 }
-
-Write-Log "Watchdog exiting."

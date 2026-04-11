@@ -302,21 +302,22 @@ class VoiceModule(ModalityModule):
 
     # ── Transcription Pipeline ───────────────────────────────────────
 
-    _TAIL_BUFFER_MS = 300  # capture trailing speech after key release
+    _TAIL_BUFFER_MS = 700  # minimum tail before silence detection kicks in
 
     def _stop_and_transcribe(
         self, app_name: str, window_title: str
     ) -> None:
-        """Stop recorder with tail buffer and run transcription pipeline.
+        """Stop recorder with energy-based tail extension.
 
         Called in a background thread so the tail delay doesn't block
-        the pynput listener.
+        the pynput listener.  Records until silence is detected (up to
+        2s) so trailing words are never cut off.
         """
         try:
-            # Brief delay to capture trailing speech still in the mic buffer
+            # Brief minimum delay, then let silence detection decide when to stop
             if self._TAIL_BUFFER_MS > 0:
                 time.sleep(self._TAIL_BUFFER_MS / 1000)
-            wav_bytes = self._recorder.stop()
+            wav_bytes = self._recorder.stop_after_silence()
 
             if not wav_bytes:
                 logger.warning("No audio captured")

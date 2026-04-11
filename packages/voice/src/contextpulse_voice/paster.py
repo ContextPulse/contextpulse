@@ -13,6 +13,10 @@ import time
 import pyautogui
 import pyperclip
 
+# Disable pyautogui's failsafe — it raises FailSafeException if mouse is at
+# (0,0) during hotkey(), which can crash the dictation pipeline.
+pyautogui.FAILSAFE = False
+
 logger = logging.getLogger(__name__)
 
 _paste_lock = threading.Lock()

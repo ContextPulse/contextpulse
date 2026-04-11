@@ -147,16 +147,17 @@ class TestTranscribeUsesThresholds:
 
         t.transcribe(wav_bytes)
 
-        # Verify the thresholds were passed to the Whisper model
+        # Quality filters are disabled for dictation — log_prob and
+        # compression_ratio should be None, only no_speech kept.
         call_kwargs = mock_instance.transcribe.call_args
-        assert call_kwargs.kwargs["log_prob_threshold"] == expected[0], (
-            f"log_prob_threshold mismatch: expected {expected[0]}"
+        assert call_kwargs.kwargs["log_prob_threshold"] is None, (
+            "log_prob_threshold should be None (disabled) for dictation"
         )
-        assert call_kwargs.kwargs["no_speech_threshold"] == expected[1], (
-            f"no_speech_threshold mismatch: expected {expected[1]}"
+        assert call_kwargs.kwargs["no_speech_threshold"] == 0.95, (
+            "no_speech_threshold should be 0.95 (only filter pure silence)"
         )
-        assert call_kwargs.kwargs["compression_ratio_threshold"] == expected[2], (
-            f"compression_ratio_threshold mismatch: expected {expected[2]}"
+        assert call_kwargs.kwargs["compression_ratio_threshold"] is None, (
+            "compression_ratio_threshold should be None (disabled) for dictation"
         )
 
 
@@ -169,8 +170,8 @@ class TestTailBuffer:
         assert VoiceModule._TAIL_BUFFER_MS >= 200, (
             "Tail buffer should be >= 200ms to capture trailing speech"
         )
-        assert VoiceModule._TAIL_BUFFER_MS <= 500, (
-            "Tail buffer should be <= 500ms to avoid noticeable latency"
+        assert VoiceModule._TAIL_BUFFER_MS <= 1000, (
+            "Tail buffer should be <= 1000ms to avoid noticeable latency"
         )
 
     def test_recorder_stop_does_not_sleep(self):
@@ -181,4 +182,63 @@ class TestTailBuffer:
         assert "sleep" not in source, (
             "Recorder.stop() must not sleep — sleeping in pynput callback "
             "blocks key events and causes runaway recording loops"
+        )
+
+    def test_stop_after_silence_exists(self):
+        """Recorder must have stop_after_silence for energy-based tail."""
+        from contextpulse_voice.recorder import Recorder
+        assert hasattr(Recorder, "stop_after_silence"), (
+            "Recorder must have stop_after_silence method"
+        )
+
+    def test_stop_after_silence_no_stream(self):
+        """stop_after_silence with no active stream returns empty WAV."""
+        from contextpulse_voice.recorder import Recorder
+        r = Recorder()
+        result = r.stop_after_silence()
+        assert result == b"", "Should return empty bytes when no stream"
+
+    def test_stop_after_silence_constants_reasonable(self):
+        """Silence detection constants must be in sane ranges."""
+        from contextpulse_voice.recorder import (
+            _MAX_TAIL_S,
+            _SILENCE_DURATION_S,
+            _SILENCE_THRESHOLD_RMS,
+        )
+        assert 0.3 <= _SILENCE_DURATION_S <= 2.0, (
+            f"Silence duration {_SILENCE_DURATION_S}s out of range"
+        )
+        assert 1.0 <= _MAX_TAIL_S <= 5.0, (
+            f"Max tail {_MAX_TAIL_S}s out of range"
+        )
+        assert 50 <= _SILENCE_THRESHOLD_RMS <= 1000, (
+            f"Silence RMS threshold {_SILENCE_THRESHOLD_RMS} out of range"
+        )
+
+    def test_stop_after_silence_with_silent_frames(self):
+        """stop_after_silence should exit quickly when frames are silent."""
+        import time
+
+        import numpy as np
+        from contextpulse_voice.recorder import Recorder
+
+        r = Recorder()
+        # Simulate: stream is "active" but frames are silent
+        r._stream = True  # truthy stub — stop_after_silence checks `is None`
+        # Add silent frames (all zeros = RMS 0)
+        for _ in range(10):
+            r._frames.append(np.zeros(480, dtype=np.int16))
+
+        start = time.monotonic()
+        # Monkey-patch stream stop/close to no-op
+        class FakeStream:
+            def stop(self): pass
+            def close(self): pass
+        r._stream = FakeStream()
+        result = r.stop_after_silence()
+        elapsed = time.monotonic() - start
+
+        assert len(result) > 0, "Should return WAV bytes from silent frames"
+        assert elapsed < 2.0, (
+            f"Should detect silence quickly, took {elapsed:.1f}s"
         )

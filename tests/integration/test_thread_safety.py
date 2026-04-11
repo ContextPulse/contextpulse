@@ -98,9 +98,9 @@ class TestTailBufferLocation:
         from contextpulse_voice.voice_module import VoiceModule
 
         ms = VoiceModule._TAIL_BUFFER_MS
-        assert 200 <= ms <= 500, (
+        assert 200 <= ms <= 1000, (
             f"Tail buffer {ms}ms out of range — "
-            f"<200ms misses trailing speech, >500ms adds noticeable latency"
+            f"<200ms misses trailing speech, >1000ms adds noticeable latency"
         )
 
     def test_stop_and_transcribe_exists(self):
