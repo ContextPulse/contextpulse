@@ -199,13 +199,10 @@ All platform methods fully implemented in `packages/core/src/contextpulse_core/p
 
 Key discovery: significant monetization infrastructure already existed before this build session. New additions layer on top cleanly.
 
-### New Files
+### Key Files
 - `packages/core/src/contextpulse_core/licensing.py` — Public API wrapper: `LicenseTier` enum, `LicenseInfo` dataclass, `verify_license(key, pem)`, `verify_license_embedded()`, `is_pro_feature_enabled()` (reads pro_features.yaml), 1-hour in-memory cache
 - `config/pro_features.yaml` — Config-driven Pro gate list (cloud_memory, advanced_screen_capture, voice_transcription_pro + stubs)
-- `lambda/license_webhook/handler.py` — Full Lambda: Gumroad HMAC validation, idempotency via sale_id, refund handling, Ed25519 key gen, DynamoDB storage, SES delivery, Stripe stub
-- `lambda/license_webhook/requirements.txt` + `deploy.sh`
-- `infra/dynamodb_schema.md` — Both DynamoDB tables (contextpulse-licenses, contextpulse-usage) with access patterns + CLI create commands
-- `MONETIZATION_README.md` — Architecture diagram, "add a Pro feature" walkthrough, key rotation, deployment checklist, Gumroad setup
+- Backend infra (Lambda, DynamoDB, deploy scripts) kept in a private repo
 
 ## Licensing Model
 
