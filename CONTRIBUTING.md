@@ -4,14 +4,25 @@ Thanks for your interest in contributing! ContextPulse is open-source under AGPL
 
 ## Development Setup
 
-**Requirements:** Python 3.12+, Windows 10/11 or macOS 13+, Git, [uv](https://docs.astral.sh/uv/)
+**Requirements:** Python 3.12+, Windows 10/11 or macOS 13+, Git
+
+We recommend [uv](https://docs.astral.sh/uv/) for fast installs, but pip works too.
 
 ```bash
 git clone https://github.com/junkyard-rules/contextpulse
 cd contextpulse
+
+# Option A: uv (recommended)
 uv venv
-.venv\Scripts\activate
+.venv\Scripts\activate       # Windows
+source .venv/bin/activate    # macOS / Linux
 uv pip install -e "packages/core[dev]" -e packages/screen -e packages/voice -e packages/touch -e packages/project
+
+# Option B: pip
+python -m venv .venv
+.venv\Scripts\activate       # Windows
+source .venv/bin/activate    # macOS / Linux
+pip install -e "packages/core[dev]" -e packages/screen -e packages/voice -e packages/touch -e packages/project
 ```
 
 This installs all packages in editable mode along with dev dependencies (pytest, ruff).
