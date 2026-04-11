@@ -53,7 +53,7 @@ dependencies = [
 [project.optional-dependencies]
 macos = [
     "pyobjc-framework-Cocoa>=10.0",
-    "pyobjc-framework-Quartz>=10.0",
+    "pyobjc-framework-Quartz>=12.1",
     "pyobjc-framework-ApplicationServices>=10.0",
     "pyobjc-framework-Vision>=10.0",
     "rumps>=0.4",
