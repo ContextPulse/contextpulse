@@ -31,6 +31,7 @@ if sys.platform == "darwin":
 else:
     import pystray
 
+from contextpulse_core.config import OUTPUT_DIR as _cfg_output_dir
 from contextpulse_core.first_run import is_first_run, show_welcome_dialog
 from contextpulse_core.license_dialog import show_nag_dialog
 from contextpulse_core.platform import get_platform_provider
@@ -38,9 +39,6 @@ from contextpulse_core.settings import show_settings
 from contextpulse_core.spine import EventBus
 
 logger = logging.getLogger("contextpulse.daemon")
-
-# Resolve output dir — use platform-aware default from config.py
-from contextpulse_core.config import OUTPUT_DIR as _cfg_output_dir
 
 OUTPUT_DIR = _cfg_output_dir
 LOG_FILE = OUTPUT_DIR / "contextpulse.log"

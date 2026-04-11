@@ -42,14 +42,12 @@ jobs:
 
       - name: Install cross-platform packages
         run: |
-          pip install -e packages/core
-          pip install -e packages/memory
-          pip install -e packages/project
+          pip install -e packages/core -e packages/memory -e packages/project
           pip install pytest
 
       - name: Run cross-platform tests
         run: |
-          pytest packages/core/tests packages/memory/tests packages/project/tests -v --tb=short
+          python -m pytest packages/core/tests packages/memory/tests packages/project/tests -v --tb=short
 
   test-windows:
     runs-on: windows-latest
@@ -67,17 +65,12 @@ jobs:
 
       - name: Install all packages
         run: |
-          pip install -e packages/core
-          pip install -e packages/screen
-          pip install -e packages/voice
-          pip install -e packages/touch
-          pip install -e packages/memory
-          pip install -e packages/project
+          pip install -e packages/core -e packages/screen -e packages/voice -e packages/touch -e packages/memory -e packages/project
           pip install pytest
 
       - name: Run all tests
         run: |
-          pytest packages/ -v --tb=short --ignore=packages/agent
+          python -m pytest packages/ -v --tb=short --ignore=packages/agent
 
   test-integration:
     runs-on: windows-latest
@@ -95,16 +88,16 @@ jobs:
 
       - name: Install all packages + test deps
         run: |
-          pip install -e ".[dev]"
           pip install -e packages/core -e packages/screen -e packages/voice -e packages/touch -e packages/memory -e packages/project
+          pip install pytest pytest-cov pytest-timeout pytest-threadleak hypothesis
 
       - name: Run integration tests
         run: |
-          pytest tests/integration/ -v --tb=short -m "integration or not integration" --timeout=60
+          python -m pytest tests/integration/ -v --tb=short -m "integration or not integration" --timeout=60
 
       - name: Run property tests
         run: |
-          pytest packages/ -v --tb=short -m property --timeout=120
+          python -m pytest packages/ -v --tb=short -m property --timeout=120
 
   test-macos:
     runs-on: macos-latest
@@ -127,4 +120,4 @@ jobs:
 
       - name: Run tests (skip Windows-only)
         run: |
-          pytest packages/ -v --tb=short --ignore=packages/agent -k "not windows"
+          python -m pytest packages/ -v --tb=short --ignore=packages/agent -k "not windows"

@@ -349,11 +349,11 @@ class VoiceModule(ModalityModule):
             # Build Whisper initial_prompt from screen OCR hot-words
             whisper_prompt = ""
             try:
+                from contextpulse_voice.context_vocab import get_known_proper_nouns
                 from contextpulse_voice.hot_words import (
                     build_whisper_prompt,
                     extract_hot_words,
                 )
-                from contextpulse_voice.context_vocab import get_known_proper_nouns
                 hot_words = extract_hot_words()
                 whisper_prompt = build_whisper_prompt(
                     hot_words, get_known_proper_nouns(),
@@ -435,11 +435,11 @@ class VoiceModule(ModalityModule):
             # Build Whisper initial_prompt from screen OCR hot-words
             whisper_prompt = ""
             try:
+                from contextpulse_voice.context_vocab import get_known_proper_nouns
                 from contextpulse_voice.hot_words import (
                     build_whisper_prompt,
                     extract_hot_words,
                 )
-                from contextpulse_voice.context_vocab import get_known_proper_nouns
                 hot_words = extract_hot_words()
                 whisper_prompt = build_whisper_prompt(
                     hot_words, get_known_proper_nouns(),
