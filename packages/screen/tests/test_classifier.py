@@ -96,8 +96,11 @@ class TestOCRLazyInit:
 
     def test_get_ocr_returns_instance(self):
         mock_rapid = MagicMock()
+        # Force the non-darwin code path regardless of host platform
         with patch("contextpulse_sight.classifier._ocr", None), \
+             patch("contextpulse_sight.classifier.sys") as mock_sys, \
              patch.dict("sys.modules", {"rapidocr_onnxruntime": MagicMock(RapidOCR=mock_rapid)}):
+            mock_sys.platform = "win32"
             from contextpulse_sight.classifier import _get_ocr
             result = _get_ocr()
             mock_rapid.assert_called_once()

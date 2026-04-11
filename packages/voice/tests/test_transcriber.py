@@ -84,31 +84,39 @@ class TestModelThresholdProfiles:
 
     def test_unknown_model_uses_default(self):
         """A model not in the profile table should get safe defaults."""
-        with patch("faster_whisper.WhisperModel"):
-            with patch("contextpulse_voice.model_manager.get_model_path", return_value="fake"):
-                t = LocalTranscriber(model_size="unknown-v99")
-                assert t._thresholds == _DEFAULT_THRESHOLDS
+        with patch("faster_whisper.WhisperModel"), \
+             patch("contextpulse_voice.model_manager.get_model_path", return_value="fake"), \
+             patch("contextpulse_voice.transcriber.sys") as mock_sys:
+            mock_sys.platform = "linux"  # avoid mlx_whisper import on macOS CI
+            t = LocalTranscriber(model_size="unknown-v99")
+            assert t._thresholds == _DEFAULT_THRESHOLDS
 
 
 class TestLocalTranscriberInit:
     """Transcriber must load the correct threshold profile on init."""
 
+    @patch("contextpulse_voice.transcriber.sys")
     @patch("contextpulse_voice.model_manager.get_model_path", return_value="fake")
     @patch("faster_whisper.WhisperModel")
-    def test_base_model_thresholds(self, mock_model, mock_path):
+    def test_base_model_thresholds(self, mock_model, mock_path, mock_sys):
+        mock_sys.platform = "linux"  # avoid mlx_whisper import on macOS CI
         t = LocalTranscriber(model_size="base")
         assert t._thresholds == _MODEL_THRESHOLDS["base"]
         assert t._model_size == "base"
 
+    @patch("contextpulse_voice.transcriber.sys")
     @patch("contextpulse_voice.model_manager.get_model_path", return_value="fake")
     @patch("faster_whisper.WhisperModel")
-    def test_small_model_thresholds(self, mock_model, mock_path):
+    def test_small_model_thresholds(self, mock_model, mock_path, mock_sys):
+        mock_sys.platform = "linux"  # avoid mlx_whisper import on macOS CI
         t = LocalTranscriber(model_size="small")
         assert t._thresholds == _MODEL_THRESHOLDS["small"]
 
+    @patch("contextpulse_voice.transcriber.sys")
     @patch("contextpulse_voice.model_manager.get_model_path", return_value="fake")
     @patch("faster_whisper.WhisperModel")
-    def test_medium_model_thresholds(self, mock_model, mock_path):
+    def test_medium_model_thresholds(self, mock_model, mock_path, mock_sys):
+        mock_sys.platform = "linux"  # avoid mlx_whisper import on macOS CI
         t = LocalTranscriber(model_size="medium")
         assert t._thresholds == _MODEL_THRESHOLDS["medium"]
 
@@ -116,9 +124,11 @@ class TestLocalTranscriberInit:
 class TestTranscribeUsesThresholds:
     """The transcribe() call must pass model-specific thresholds to Whisper."""
 
+    @patch("contextpulse_voice.transcriber.sys")
     @patch("contextpulse_voice.model_manager.get_model_path", return_value="fake")
     @patch("faster_whisper.WhisperModel")
-    def test_thresholds_passed_to_whisper(self, MockModel, mock_path):
+    def test_thresholds_passed_to_whisper(self, MockModel, mock_path, mock_sys):
+        mock_sys.platform = "linux"  # avoid mlx_whisper import on macOS CI
         mock_instance = MagicMock()
         # Simulate Whisper returning one segment
         mock_seg = MagicMock()

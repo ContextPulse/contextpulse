@@ -34,7 +34,7 @@ class TestBurstFormation:
         bt = BurstTracker(burst_timeout=0.1, min_chars=3, on_burst=on_burst)
         for c in "testing":
             bt.on_key_press(c)
-        time.sleep(0.2)
+        time.sleep(0.3)  # 3x the timeout for CI runner headroom on slow macOS runners
         data = on_burst.call_args[0][0]
         assert "char_count" in data
         assert "word_count" in data

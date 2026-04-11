@@ -425,7 +425,12 @@ class ColdTier:
         self._init_schema()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self._db_path), check_same_thread=False, timeout=10)
+        # isolation_level=None gives explicit-transaction mode (no implicit BEGIN).
+        # This avoids the Python 3.12/3.13 implicit-transaction differences that
+        # caused INSERT OR REPLACE to see stale snapshots in WAL mode.
+        conn = sqlite3.connect(
+            str(self._db_path), check_same_thread=False, timeout=10, isolation_level=None
+        )
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
@@ -434,7 +439,6 @@ class ColdTier:
     def _init_schema(self) -> None:
         with self._lock:
             self._conn.executescript(_COLD_SCHEMA)
-            self._conn.commit()
 
     def ingest(self, entries: list[dict[str, Any]]) -> int:
         """Summarize a batch of warm entries into 15-minute cold windows."""
@@ -448,35 +452,40 @@ class ColdTier:
 
         written = 0
         with self._lock:
-            for wk, batch in windows.items():
-                window_start = wk * _COLD_WINDOW
-                window_end = window_start + _COLD_WINDOW
+            self._conn.execute("BEGIN")
+            try:
+                for wk, batch in windows.items():
+                    window_start = wk * _COLD_WINDOW
+                    window_end = window_start + _COLD_WINDOW
 
-                text_parts: list[str] = []
-                modalities: set[str] = set()
-                for e in batch:
-                    text_parts.append(e.get("key", ""))
-                    text_parts.append(e.get("value", ""))
-                    if e.get("modality"):
-                        modalities.add(e["modality"])
+                    text_parts: list[str] = []
+                    modalities: set[str] = set()
+                    for e in batch:
+                        text_parts.append(e.get("key", ""))
+                        text_parts.append(e.get("value", ""))
+                        if e.get("modality"):
+                            modalities.add(e["modality"])
 
-                summary = {"entry_count": len(batch), "keys": [e["key"] for e in batch]}
-                self._conn.execute(
-                    """INSERT OR REPLACE INTO cold_summaries
-                       (window_start, window_end, summary_json, text_content,
-                        entry_count, modalities)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
-                    (
-                        window_start,
-                        window_end,
-                        json.dumps(summary),
-                        "\n".join(filter(None, text_parts)),
-                        len(batch),
-                        json.dumps(sorted(modalities)),
-                    ),
-                )
-                written += 1
-            self._conn.commit()
+                    summary = {"entry_count": len(batch), "keys": [e["key"] for e in batch]}
+                    self._conn.execute(
+                        """INSERT OR REPLACE INTO cold_summaries
+                           (window_start, window_end, summary_json, text_content,
+                            entry_count, modalities)
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        (
+                            window_start,
+                            window_end,
+                            json.dumps(summary),
+                            "\n".join(filter(None, text_parts)),
+                            len(batch),
+                            json.dumps(sorted(modalities)),
+                        ),
+                    )
+                    written += 1
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
         return written
 
     def search(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
@@ -502,7 +511,6 @@ class ColdTier:
         """Run PRAGMA optimize to refresh FTS5 index statistics."""
         with self._lock:
             self._conn.execute("PRAGMA optimize")
-            self._conn.commit()
 
     def count(self) -> int:
         with self._lock:

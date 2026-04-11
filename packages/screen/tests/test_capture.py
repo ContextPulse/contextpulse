@@ -1,7 +1,9 @@
 """Tests for capture.py — downscale, save, bytes conversion."""
 
+import sys
 from io import BytesIO
 
+import pytest
 from PIL import Image
 
 
@@ -132,6 +134,7 @@ class TestCaptureToBytes:
 class TestCaptureBackend:
     """Test DXcam/mss backend abstraction."""
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="dxcam is Windows-only")
     def test_get_backend_returns_dxcam_when_available(self):
         from unittest.mock import MagicMock, patch
 
