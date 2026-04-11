@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "contextpulse-meeting"
+version = "0.1.0"
+description = "AI meeting copilot for ContextPulse — real-time capture, transcription, and summarization"
+authors = [
+    { name = "David Jerard", email = "david@jerardventures.com" },
+]
+license = "AGPL-3.0-or-later"
+readme = "README.md"
+keywords = ["mcp", "ai-agents", "context", "meeting", "copilot", "transcription", "summarization"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business",
+]
+requires-python = ">=3.12"
+dependencies = [
+    "contextpulse-core>=0.1.0",
+    "contextpulse-sight>=0.1.0",
+    "contextpulse-voice>=0.1.0",
+    "mcp>=1.0",
+    "anthropic>=0.39",
+    "python-dotenv>=1.0",
+]
+
+[project.urls]
+Homepage = "https://contextpulse.ai"
+Repository = "https://github.com/junkyard-rules/contextpulse"
+Issues = "https://github.com/junkyard-rules/contextpulse/issues"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-timeout>=2.3",
+]
+
+[project.scripts]
+contextpulse-meeting-mcp = "contextpulse_meeting.mcp_server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
