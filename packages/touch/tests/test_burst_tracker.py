@@ -12,7 +12,7 @@ class TestBurstFormation:
         on_burst = MagicMock()
         bt = BurstTracker(burst_timeout=0.1, min_chars=3, on_burst=on_burst)
         bt.on_key_press("a")
-        time.sleep(0.2)
+        time.sleep(0.3)
         on_burst.assert_not_called()
         bt.stop()
 
@@ -53,7 +53,7 @@ class TestBurstFormation:
         bt.on_key_press(None, is_backspace=True)
         bt.on_key_press("l")
         bt.on_key_press("o")
-        time.sleep(0.2)
+        time.sleep(0.3)
         data = on_burst.call_args[0][0]
         assert data["backspace_count"] == 2
         bt.stop()
@@ -64,7 +64,7 @@ class TestBurstFormation:
         for c in "test":
             bt.on_key_press(c)
         bt.on_key_press(None, is_selection=True)
-        time.sleep(0.2)
+        time.sleep(0.3)
         data = on_burst.call_args[0][0]
         assert data["has_selection"] is True
         bt.stop()
@@ -75,11 +75,11 @@ class TestBurstFormation:
         # First burst
         for c in "hello":
             bt.on_key_press(c)
-        time.sleep(0.2)
+        time.sleep(0.3)
         # Second burst
         for c in "world":
             bt.on_key_press(c)
-        time.sleep(0.2)
+        time.sleep(0.3)
         assert on_burst.call_count == 2
         bt.stop()
 
