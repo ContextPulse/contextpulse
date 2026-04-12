@@ -1,0 +1,28 @@
+# ContextPulse systemd user service
+# Install: cp contextpulse.service ~/.config/systemd/user/
+# Enable:  systemctl --user enable contextpulse
+# Start:   systemctl --user start contextpulse
+# Logs:    journalctl --user -u contextpulse -f
+
+[Unit]
+Description=ContextPulse — always-on context for AI agents
+After=graphical-session.target
+Wants=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/python -m contextpulse_core.daemon
+Restart=on-failure
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=3600
+Environment=DISPLAY=:0
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=contextpulse
+
+[Install]
+WantedBy=default.target

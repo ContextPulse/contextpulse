@@ -1,0 +1,25 @@
+# ContextPulse Pro Feature Gates
+#
+# Features listed here require an active Pro license (or active 30-day trial).
+# All other features are free for Community edition users.
+#
+# To add a new Pro feature:
+#   1. Add its name here
+#   2. Wrap the feature implementation with is_pro_feature_enabled() in your code
+#   3. See MONETIZATION_README.md for the full workflow
+#
+# Source of truth for feature names: PROJECT_CONTEXT.md -> MCP Tools section
+
+pro_features:
+  # Memory: semantic + hybrid search (compute-intensive)
+  - memory_search
+  - memory_semantic_search
+
+  # Sight: cross-modal analytics (requires joining multiple event streams)
+  - search_all_events
+  - get_event_timeline
+
+  # Future Pro features (not yet shipped — add to enforcement when ready)
+  # - cloud_memory          # Cloud-backed memory sync (v0.3)
+  # - advanced_screen_capture  # Higher-frequency capture + diff detection (v0.2)
+  # - voice_transcription_pro  # Large Whisper model + speaker diarization (v0.3)

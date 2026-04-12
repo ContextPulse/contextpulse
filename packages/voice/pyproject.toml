@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "contextpulse-voice"
+version = "0.1.0"
+description = "Voice capture and transcription for AI agents — ContextPulse platform"
+authors = [
+    { name = "David Jerard", email = "david@jerardventures.com" },
+]
+license = "AGPL-3.0-or-later"
+readme = "README.md"
+keywords = ["mcp", "ai-agents", "context", "claude", "voice", "whisper", "transcription"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+]
+requires-python = ">=3.12"
+dependencies = [
+    "contextpulse-core>=0.1.0",
+    "mcp>=1.0",
+    "faster-whisper>=1.0",
+    "sounddevice>=0.4",
+    "numpy>=1.24",
+    "pyperclip>=1.8",
+    "pyautogui>=0.9",
+    "anthropic>=0.39",
+    "python-dotenv>=1.0",
+]
+
+[project.urls]
+Homepage = "https://contextpulse.ai"
+Repository = "https://github.com/ContextPulse/contextpulse"
+Issues = "https://github.com/ContextPulse/contextpulse/issues"
+Documentation = "https://github.com/ContextPulse/contextpulse#readme"
+
+[project.optional-dependencies]
+openai = ["openai>=1.0"]
+macos = [
+    "mlx-whisper>=0.4",
+]
+
+[project.scripts]
+contextpulse-voice-mcp = "contextpulse_voice.mcp_server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

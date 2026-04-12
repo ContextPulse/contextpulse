@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "contextpulse-core"
+version = "0.1.0"
+description = "Shared utilities for the ContextPulse platform"
+authors = [
+    { name = "David Jerard", email = "david@jerardventures.com" },
+]
+license = "AGPL-3.0-or-later"
+readme = "README.md"
+keywords = ["mcp", "ai-agents", "context", "claude"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+]
+requires-python = ">=3.12"
+dependencies = [
+    "python-dotenv>=1.0",
+    "cryptography>=43.0",
+]
+
+[project.optional-dependencies]
+macos = [
+    "pyobjc-framework-Cocoa>=10.0",
+    "pyobjc-framework-Quartz>=10.0",
+    "pyobjc-framework-ApplicationServices>=10.0",
+    "rumps>=0.4",
+]
+
+[project.scripts]
+contextpulse = "contextpulse_core.daemon:main"
+contextpulse-mcp = "contextpulse_core.mcp_unified:main"
+
+[project.urls]
+Homepage = "https://contextpulse.ai"
+Repository = "https://github.com/ContextPulse/contextpulse"
+Issues = "https://github.com/ContextPulse/contextpulse/issues"
+Documentation = "https://github.com/ContextPulse/contextpulse#readme"
+
+[tool.setuptools.packages.find]
+where = ["src"]

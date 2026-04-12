@@ -1,0 +1,83 @@
+name: Security
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_call:  # allow release.yml to call this
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  bandit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install bandit
+        run: pip install bandit
+
+      - name: Bandit (SAST)
+        run: |
+          # B108: hardcoded /tmp paths (macOS platform code + test fixtures)
+          # B310: urllib.urlopen (internal model download URLs, not user input)
+          # B608: SQL string construction (internal query building, not user input)
+          # B615: HuggingFace download without revision pin (known model repos)
+          bandit -r packages/ -ll -q --skip B108,B310,B608,B615
+
+  pip-audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install packages + pip-audit
+        run: |
+          pip install pip-audit
+          pip install -e packages/core -e packages/screen -e packages/voice -e packages/touch -e packages/memory -e packages/project
+
+      - name: pip-audit
+        run: pip-audit
+
+  reuse:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: REUSE compliance
+        run: |
+          pip install reuse
+          reuse lint

@@ -1,0 +1,59 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: ContextPulse
+Upstream-Contact: David Jerard <david@jerardventures.com>
+Source: https://github.com/ContextPulse/contextpulse
+
+# Configuration and metadata files
+Files: .github/* .gitignore .gitleaks.toml .pre-commit-config.yaml .editorconfig *.toml *.cfg *.ini *.json
+Copyright: 2025-2026 Jerard Ventures LLC
+License: AGPL-3.0-or-later
+
+# Documentation and text files
+Files: *.md *.txt *.rst docs/*
+Copyright: 2025-2026 Jerard Ventures LLC
+License: AGPL-3.0-or-later
+
+# Brand assets and images
+Files: brand/* assets/* *.png *.ico *.svg *.jpg *.jpeg *.gif logo.png
+Copyright: 2025-2026 Jerard Ventures LLC
+License: AGPL-3.0-or-later
+
+# Build and packaging scripts
+Files: build.cmd *.spec *.iss *.cmd *.bat *.sh
+Copyright: 2025-2026 Jerard Ventures LLC
+License: AGPL-3.0-or-later
+
+# Test fixtures and data
+Files: */tests/* tests/*
+Copyright: 2025-2026 Jerard Ventures LLC
+License: AGPL-3.0-or-later
+
+# Configuration files
+Files: config/*
+Copyright: 2025-2026 Jerard Ventures LLC
+License: AGPL-3.0-or-later
+
+# Site/landing page
+Files: site/*
+Copyright: 2025-2026 Jerard Ventures LLC
+License: AGPL-3.0-or-later
+
+# IP documents
+Files: ip/*
+Copyright: 2025-2026 Jerard Ventures LLC
+License: AGPL-3.0-or-later
+
+# Skills
+Files: skills/*
+Copyright: 2025-2026 Jerard Ventures LLC
+License: AGPL-3.0-or-later
+
+# PyInstaller/packaging
+Files: packaging/*
+Copyright: 2025-2026 Jerard Ventures LLC
+License: AGPL-3.0-or-later
+
+# Utility scripts
+Files: scripts/* */scripts/*
+Copyright: 2025-2026 Jerard Ventures LLC
+License: AGPL-3.0-or-later

@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Lint all packages
+        run: |
+          ruff check packages/core/src packages/memory/src packages/project/src packages/screen/src packages/voice/src packages/touch/src
+
+  test-cross-platform:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install cross-platform packages
+        run: |
+          pip install -e packages/core -e packages/memory -e packages/project
+          pip install pytest pytest-timeout
+
+      - name: Run cross-platform tests
+        run: |
+          python -m pytest packages/core/tests packages/memory/tests packages/project/tests -v --tb=short
+
+  test-windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install all packages
+        run: |
+          pip install -e packages/core -e packages/screen -e packages/voice -e packages/touch -e packages/memory -e packages/project
+          pip install pytest pytest-timeout
+
+      - name: Run all tests
+        run: |
+          python -m pytest packages/ -v --tb=short --ignore=packages/agent
+
+  test-integration:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install all packages + test deps
+        run: |
+          pip install -e packages/core -e packages/screen -e packages/voice -e packages/touch -e packages/memory -e packages/project
+          pip install pytest pytest-cov pytest-timeout pytest-threadleak hypothesis
+
+      - name: Run integration tests
+        run: |
+          python -m pytest tests/integration/ -v --tb=short -m "integration or not integration" --timeout=60
+
+      - name: Run property tests
+        shell: bash
+        run: |
+          set +e
+          python -m pytest packages/ -v --tb=short -m property --timeout=120
+          exit_code=$?
+          set -e
+          if [ $exit_code -eq 5 ]; then
+            echo "No property tests collected — OK"
+            exit 0
+          fi
+          exit $exit_code
+
+  test-macos:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install packages with macOS extras
+        run: |
+          pip install -e "packages/core[macos]" -e packages/screen -e packages/voice -e packages/touch -e packages/memory -e packages/project
+          pip install pytest pytest-timeout
+
+      - name: Run tests (skip Windows-only)
+        run: |
+          python -m pytest packages/ -v --tb=short --ignore=packages/agent -k "not windows"

@@ -1,0 +1,32 @@
+{
+  "light": {
+    "primary": "#0A6E8A",
+    "secondary": "#1B4965",
+    "accent": "#00CC66",
+    "background": "#FAFBFC",
+    "surface": "#FFFFFF",
+    "text": "#1A1D21",
+    "textMuted": "#6B7280",
+    "success": "#00CC66",
+    "error": "#DC3545",
+    "warning": "#FFB800"
+  },
+  "dark": {
+    "primary": "#12B5E0",
+    "secondary": "#5EADD0",
+    "accent": "#00E676",
+    "background": "#0D1117",
+    "surface": "#161B22",
+    "text": "#E6EDF3",
+    "textMuted": "#8B949E",
+    "success": "#00E676",
+    "error": "#F85149",
+    "warning": "#F0B429"
+  },
+  "_meta": {
+    "primary_rationale": "Deep teal — signals intelligence, monitoring, trust. Evokes always-on awareness without being aggressive.",
+    "accent_rationale": "Pulse green — alive, active, heartbeat. Used for status indicators and CTAs. Matches the system tray active color.",
+    "warning_note": "Warning amber doubles as the paused state color in the system tray icon.",
+    "contrast": "All text/background combos meet WCAG AA (4.5:1 minimum). Dark theme tuned for OLED."
+  }
+}

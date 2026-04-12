@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "contextpulse-sight"
+version = "0.1.0"
+description = "Always-on screen capture for AI coding assistants — your AI can see what you see"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "AGPL-3.0-or-later"
+authors = [
+    { name = "David Jerard", email = "david@jerardventures.com" },
+]
+keywords = ["mcp", "ai-agents", "context", "claude", "screen-capture", "ocr"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+    "mss>=9.0",
+    "pynput>=1.7",
+    "pystray>=0.19",
+    "Pillow>=10.0",
+    "python-dotenv>=1.0",
+    "numpy>=1.26",
+    "rapidocr-onnxruntime>=1.2",
+    "mcp>=1.0",
+    "contextpulse-core>=0.1.0",
+]
+
+[project.optional-dependencies]
+windows = [
+    "dxcam>=0.3.0",
+]
+macos = [
+    "pyobjc-framework-Vision>=10.0",
+    "pyobjc-framework-Quartz>=10.0",
+]
+
+[project.urls]
+Homepage = "https://contextpulse.ai"
+Repository = "https://github.com/ContextPulse/contextpulse"
+Issues = "https://github.com/ContextPulse/contextpulse/issues"
+Documentation = "https://github.com/ContextPulse/contextpulse#readme"
+
+[project.scripts]
+contextpulse-sight = "contextpulse_sight.app:main"
+contextpulse-sight-mcp = "contextpulse_sight.mcp_server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "contextpulse-memory"
+version = "0.1.0"
+description = "Cross-session persistent memory for AI agents"
+authors = [
+    { name = "David Jerard", email = "david@jerardventures.com" },
+]
+license = "AGPL-3.0-or-later"
+readme = "README.md"
+keywords = ["mcp", "ai-agents", "context", "claude", "memory", "persistence"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+]
+requires-python = ">=3.12"
+dependencies = [
+    "contextpulse-core",
+    "mcp[cli]",
+    "numpy>=1.26",
+    "onnxruntime>=1.17",
+    "tokenizers>=0.19",
+]
+
+[project.urls]
+Homepage = "https://contextpulse.ai"
+Repository = "https://github.com/ContextPulse/contextpulse"
+Issues = "https://github.com/ContextPulse/contextpulse/issues"
+Documentation = "https://github.com/ContextPulse/contextpulse#readme"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+contextpulse-memory-mcp = "contextpulse_memory.mcp_server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
