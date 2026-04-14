@@ -18,8 +18,9 @@ class TestBurstTrackerEdgeCases:
         bt = BurstTracker(burst_timeout=0.2, min_chars=3, on_burst=on_burst)
         for i in range(100):
             bt.on_key_press(chr(97 + (i % 26)))  # a-z cycling
-        time.sleep(0.4)
+        time.sleep(0.5)
         # Should be exactly 1 burst with all 100 chars
+        assert on_burst.called, "Burst callback was not triggered"
         assert on_burst.call_count == 1
         data = on_burst.call_args[0][0]
         assert data["char_count"] == 100
@@ -32,7 +33,8 @@ class TestBurstTrackerEdgeCases:
         for _ in range(10):
             bt.on_key_press("a")
             bt.on_key_press(None, is_backspace=True)
-        time.sleep(0.2)
+        time.sleep(0.5)
+        assert on_burst.called, "Burst callback was not triggered"
         data = on_burst.call_args[0][0]
         assert data["char_count"] == 10
         assert data["backspace_count"] == 10
@@ -45,7 +47,7 @@ class TestBurstTrackerEdgeCases:
         bt.on_key_press(None)  # Ctrl, Alt, etc.
         bt.on_key_press(None)
         bt.on_key_press(None)
-        time.sleep(0.2)
+        time.sleep(0.5)
         on_burst.assert_not_called()  # 0 chars, below threshold
         bt.stop()
 
