@@ -209,20 +209,49 @@ class RecordingOverlay:
         except Exception:
             return None
 
+    @staticmethod
+    def _get_pointer_position() -> tuple[int, int] | None:
+        """Get the mouse pointer position via platform provider.
+
+        Uses Win32 GetCursorPos which returns true virtual-desktop
+        coordinates spanning all monitors.  Tk's winfo_pointerxy() can
+        return primary-monitor-relative coords on multi-monitor setups
+        with mixed DPI scaling, which causes the overlay to appear on
+        the wrong monitor (Bug: overlay on wrong monitor).
+        """
+        try:
+            from contextpulse_core.platform import get_platform_provider
+            return get_platform_provider().get_cursor_pos()
+        except Exception:
+            return None
+
     def _position_near_cursor(self) -> None:
-        """Move overlay above the text caret, falling back to mouse pointer."""
+        """Move overlay above the text caret, falling back to mouse pointer.
+
+        Caret coords of (0, 0) usually mean the focused window does not
+        expose a caret (e.g. browsers, Electron apps) — treat as missing
+        and fall through to the mouse pointer, which is the user's actual
+        focus on multi-monitor setups.
+        """
         try:
             caret = self._get_caret_position()
-            if caret:
+            if caret and caret != (0, 0):
                 cx, cy = caret
             else:
-                cx, cy = self._root.winfo_pointerxy()
+                pointer = self._get_pointer_position()
+                if pointer is None:
+                    # Last-resort fallback — winfo_pointerxy may be wrong
+                    # monitor but is better than leaving the overlay at
+                    # its initial primary-screen position.
+                    cx, cy = self._root.winfo_pointerxy()
+                else:
+                    cx, cy = pointer
             w = 160
             x = cx - w // 2
             y = cy - 80
             self._root.geometry(f"+{x}+{y}")
         except Exception:
-            pass
+            logger.debug("Overlay positioning failed", exc_info=True)
 
     def show_recording(self) -> None:
         if self._root is None:

@@ -67,3 +67,40 @@ class TestRecorder:
         r = Recorder()
         result = r.stop()
         assert result == b""
+
+    def test_warm_start_opens_and_closes_stream(self, monkeypatch):
+        """warm_start must open + close a stream so the FIRST start() is fast.
+
+        Regression for Bug: first-press hotkey delay (overlay didn't appear
+        until key release because PortAudio device init blocked the keyboard
+        hook thread on first use).
+        """
+        import contextpulse_voice.recorder as rec_mod
+
+        mock_stream = MagicMock()
+        mock_input_stream = MagicMock(return_value=mock_stream)
+        monkeypatch.setattr(rec_mod.sd, "InputStream", mock_input_stream)
+
+        r = Recorder()
+        r.warm_start()
+
+        # Stream was created, started, stopped, closed
+        assert mock_input_stream.called
+        mock_stream.start.assert_called_once()
+        mock_stream.stop.assert_called_once()
+        mock_stream.close.assert_called_once()
+        # Frames discarded so warm-up audio doesn't pollute first real recording
+        assert r._frames == []
+        # _stream attribute is NOT left set — start() will create a fresh one
+        assert r._stream is None
+
+    def test_warm_start_swallows_exceptions(self, monkeypatch):
+        """warm_start must never raise — failure is logged + ignored."""
+        import contextpulse_voice.recorder as rec_mod
+
+        def _boom(*args, **kwargs):
+            raise OSError("no audio device")
+        monkeypatch.setattr(rec_mod.sd, "InputStream", _boom)
+
+        r = Recorder()
+        r.warm_start()  # must not raise

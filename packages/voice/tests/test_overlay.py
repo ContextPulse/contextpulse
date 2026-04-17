@@ -280,3 +280,61 @@ class TestStateSequence:
 
         overlay._root.after_cancel.assert_called_once_with("timer_123")
         assert overlay._hide_after_id is None
+
+
+# ---------------------------------------------------------------------------
+# Multi-monitor positioning — regression for "overlay on wrong monitor" bug
+# ---------------------------------------------------------------------------
+
+class TestPositioning:
+    """The overlay must use Win32 GetCursorPos (via platform provider) rather
+    than Tk's winfo_pointerxy so it lands on the correct monitor in
+    multi-monitor / mixed-DPI setups.
+    """
+
+    def test_uses_caret_position_when_available(self, overlay):
+        with patch.object(overlay, "_get_caret_position", return_value=(2500, 600)), \
+             patch.object(overlay, "_get_pointer_position", return_value=(100, 100)):
+            overlay._position_near_cursor()
+        # Geometry should be set near the caret (2500, 600), not pointer
+        call_args = overlay._root.geometry.call_args[0][0]
+        # Format: "+x+y" — x = 2500 - 80 = 2420, y = 600 - 80 = 520
+        assert "+2420+520" == call_args
+
+    def test_falls_back_to_platform_pointer_not_tk(self, overlay):
+        """Critical: must NOT call winfo_pointerxy when platform pointer works.
+
+        Tk's winfo_pointerxy returns primary-monitor-relative coords on
+        multi-monitor with mixed DPI — using it puts the overlay on the
+        wrong screen.
+        """
+        with patch.object(overlay, "_get_caret_position", return_value=None), \
+             patch.object(overlay, "_get_pointer_position", return_value=(2500, 600)):
+            overlay._root.winfo_pointerxy = MagicMock(
+                return_value=(960, 540),  # primary-screen coords (wrong monitor)
+            )
+            overlay._position_near_cursor()
+            # winfo_pointerxy must NOT have been used
+            overlay._root.winfo_pointerxy.assert_not_called()
+        # Used the platform pointer (2500 on second monitor)
+        call_args = overlay._root.geometry.call_args[0][0]
+        assert "+2420+520" == call_args
+
+    def test_caret_zero_zero_treated_as_invalid(self, overlay):
+        """Many windows (browsers, Electron apps) report caret as (0,0)
+        when no caret exists.  Treat that as missing and fall through.
+        """
+        with patch.object(overlay, "_get_caret_position", return_value=(0, 0)), \
+             patch.object(overlay, "_get_pointer_position", return_value=(2500, 600)):
+            overlay._position_near_cursor()
+        call_args = overlay._root.geometry.call_args[0][0]
+        # Used pointer (2500), not caret (0,0) which would render at edge
+        assert "+2420+520" == call_args
+
+    def test_falls_back_to_winfo_pointerxy_only_if_platform_unavailable(self, overlay):
+        """Last-resort fallback when platform provider returns None."""
+        with patch.object(overlay, "_get_caret_position", return_value=None), \
+             patch.object(overlay, "_get_pointer_position", return_value=None):
+            overlay._root.winfo_pointerxy = MagicMock(return_value=(800, 400))
+            overlay._position_near_cursor()
+            overlay._root.winfo_pointerxy.assert_called_once()

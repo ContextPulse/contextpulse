@@ -49,6 +49,32 @@ class Recorder:
         self._stream.start()
         logger.info("Recording started")
 
+    def warm_start(self) -> None:
+        """Open + close a brief audio stream to prime PortAudio.
+
+        First-ever call to sd.InputStream() on Windows can block for
+        100-500ms while PortAudio enumerates devices and opens the WASAPI
+        endpoint.  When this happens on the keyboard hook thread inside
+        start(), the recording overlay does not appear until the user
+        releases the hotkey (Bug: first-press hotkey delay).  Calling this
+        once at daemon init pays the cost up-front so the first real
+        start() returns immediately.
+        """
+        try:
+            stream = sd.InputStream(
+                samplerate=self.sample_rate,
+                channels=self.channels,
+                dtype=DTYPE,
+                callback=self._callback,
+            )
+            stream.start()
+            stream.stop()
+            stream.close()
+            self._frames = []  # discard anything captured during warm-up
+            logger.info("Audio device warmed up")
+        except Exception:
+            logger.debug("Recorder warm_start failed (non-fatal)", exc_info=True)
+
     def stop(self) -> bytes:
         """Stop recording and return WAV bytes.
 

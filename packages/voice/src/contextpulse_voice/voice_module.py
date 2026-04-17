@@ -102,6 +102,11 @@ class VoiceModule(ModalityModule):
             return
 
         self._recorder = Recorder()
+        # Warm up PortAudio device so the first hotkey press isn't delayed
+        # by 100-500ms of WASAPI initialization (which would happen on the
+        # keyboard hook thread and prevent the recording overlay from
+        # appearing until the user releases the hotkey).
+        self._recorder.warm_start()
 
         # Lazy-load transcriber (downloads model on first use)
         from contextpulse_voice.transcriber import LocalTranscriber
