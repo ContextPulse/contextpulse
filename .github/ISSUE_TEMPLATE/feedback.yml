@@ -1,0 +1,42 @@
+name: Feedback or question
+description: Share how you're using ContextPulse, what's confusing, or what you'd want next.
+title: "[feedback]: "
+labels: ["feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking a minute to share feedback. Rough drafts are fine. You don't need to polish this.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of feedback?
+      options:
+        - First impression after install
+        - Something confusing
+        - Missing feature I'd want
+        - Performance or resource use
+        - Privacy or security question
+        - Use case I built that worked
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: detail
+    attributes:
+      label: Detail
+      description: What were you trying to do, and what happened?
+      placeholder: e.g. I installed on Windows 11, ran the daemon, connected Claude Desktop, and asked "what am I looking at" but got no screenshot back.
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform (optional)
+      placeholder: Windows 11 / macOS 14 / Python 3.12
+  - type: checkboxes
+    id: followup
+    attributes:
+      label: Follow-up
+      options:
+        - label: Okay to reply in this thread with questions.
