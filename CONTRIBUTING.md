@@ -27,6 +27,22 @@ pip install -e "packages/core[dev]" -e packages/screen -e packages/voice -e pack
 
 This installs all packages in editable mode along with dev dependencies (pytest, ruff).
 
+### Install Git Hooks (required for maintainers)
+
+ContextPulse is a public repo, so we run a pre-push publication gate that blocks pushes containing PII, secrets, internal project references, AWS IDs, or other OSS-unsafe content. Git doesn't track `.git/hooks/`, so enable them manually:
+
+```bash
+bash scripts/install-git-hooks.sh
+```
+
+This installs:
+- **pre-commit** (gitleaks) — blocks commits containing secrets
+- **pre-push** (pre-publish.py gate) — blocks pushes with BLOCKER-severity issues
+
+If `pre-publish.py` from the AgentConfig toolkit isn't available, the pre-push hook skips silently. Contributors without the internal toolkit can still push; GitHub Actions (`security.yml`) runs equivalent checks on every push.
+
+Emergency bypass (use sparingly, never on main): `git push --no-verify`
+
 ## Running Tests
 
 ```bash
