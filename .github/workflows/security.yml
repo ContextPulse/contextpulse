@@ -22,9 +22,25 @@ jobs:
 
       - name: Install gitleaks
         run: |
-          VERSION=$(curl -sSf https://api.github.com/repos/gitleaks/gitleaks/releases/latest | grep '"tag_name"' | sed 's/.*"v\(.*\)".*/\1/')
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" | tar xz
+          # Pinned to avoid /releases/latest API rate-limits/outages (hit a 504 on 2026-04-18).
+          # Bump periodically and verify against https://github.com/gitleaks/gitleaks/releases
+          VERSION="8.28.0"
+          URL="https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz"
+
+          # Retry with exponential backoff — GitHub release CDN occasionally 5xx's.
+          for attempt in 1 2 3 4 5; do
+            if curl -sSfL --retry 3 --retry-delay 2 --max-time 60 "$URL" | tar xz; then
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              echo "::error::Failed to download gitleaks after 5 attempts"
+              exit 1
+            fi
+            echo "Attempt $attempt failed; sleeping $((attempt * 5))s before retry"
+            sleep $((attempt * 5))
+          done
           sudo mv gitleaks /usr/local/bin/
+          gitleaks version
 
       - name: Gitleaks
         run: gitleaks detect --source . --log-opts="--all" -v
