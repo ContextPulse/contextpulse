@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Local-first ambient context for AI agents.</strong><br>
-  Screen capture, voice dictation, clipboard, keyboard/mouse activity — all local, all private.
+  Screen capture, voice dictation, clipboard, keyboard/mouse activity. All local, all private.
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
 
 ---
 
-> **Developer Preview (v0.1-alpha)** — ContextPulse is under active development. APIs and configuration may change between releases. [Report issues](https://github.com/ContextPulse/contextpulse/issues).
+> **Developer Preview (v0.1-alpha).** ContextPulse is under active development. APIs and configuration may change between releases. [Report issues](https://github.com/ContextPulse/contextpulse/issues).
 
 ContextPulse is a desktop daemon that captures your screen, voice, and keyboard/mouse activity in real time, then delivers it to AI agents through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). One process, one tray icon, 35 MCP tools, zero cloud dependency.
 
@@ -60,13 +60,13 @@ Everything stays local. No cloud. No telemetry. Your data never leaves your mach
 
 Claude calls get_screenshot → get_screen_text:
 
-  Active window: VS Code — src/auth/middleware.ts
+  Active window: VS Code, src/auth/middleware.ts
   OCR text: "export async function validateToken(req: Request)..."
   Clipboard: "Bearer eyJhbGciOiJIUzI1NiIs..."
 
 > Claude: "You're editing the auth middleware in VS Code.
 >          I can see the validateToken function, and you have
->          a Bearer token in your clipboard — want me to help
+>          a Bearer token in your clipboard. Want me to help
 >          debug the token validation?"
 ```
 
@@ -85,12 +85,12 @@ Claude calls get_recent_transcriptions → get_screen_text:
 
 Claude calls get_activity_summary(hours=4) → search_history("auth"):
 
-  10:15 AM  VS Code — auth/middleware.ts (45 min)
-  11:00 AM  Chrome — JWT.io (12 min)
-  11:15 AM  VS Code — auth/tests/test_middleware.py (30 min)
-  11:45 AM  Slack — #backend channel (15 min)
+  10:15 AM  VS Code, auth/middleware.ts (45 min)
+  11:00 AM  Chrome, JWT.io (12 min)
+  11:15 AM  VS Code, auth/tests/test_middleware.py (30 min)
+  11:45 AM  Slack, #backend channel (15 min)
 
-> Claude: "You spent the morning on auth middleware — writing
+> Claude: "You spent the morning on auth middleware: writing
 >          the implementation, checking JWT specs, then adding
 >          tests. You were in Slack #backend right before lunch."
 ```
@@ -100,7 +100,7 @@ Claude calls get_activity_summary(hours=4) → search_history("auth"):
 AI coding assistants are powerful but blind. They can't see your screen, hear your voice notes, or know what you were just doing. ContextPulse bridges this gap:
 
 - **Local-first, zero cloud dependency.** Your screen, voice, and input data never leave your machine. No accounts, no subscriptions, no third-party servers. Privacy by architecture, not by policy.
-- **MCP-native from day one.** ContextPulse exposes all context as MCP tools. Any MCP client — Claude Desktop, Cursor, Windsurf, VS Code — gets full context without custom integrations.
+- **MCP-native from day one.** ContextPulse exposes all context as MCP tools. Any MCP client (Claude Desktop, Cursor, Windsurf, VS Code) gets full context without custom integrations.
 - **True multi-modal in a single daemon.** Screen capture, voice dictation, keyboard/mouse input, and semantic memory run in one lightweight process (<1% CPU). No stitching multiple tools together.
 - **Open source (AGPL-3.0).** Fully auditable, self-hostable, and extensible. No vendor lock-in, no SaaS dependency, no risk of acquisition-driven shutdowns.
 
@@ -112,7 +112,7 @@ AI coding assistants are powerful but blind. They can't see your screen, hear yo
 | **Voice dictation** | Yes, local Whisper | Rare as integrated feature |
 | **Keyboard + mouse tracking** | Yes | Rare |
 | **Semantic memory** | Yes, three-tier with hybrid search | Rare |
-| **All modalities in one daemon** | Yes, single lightweight process | No — usually separate tools |
+| **All modalities in one daemon** | Yes, single lightweight process | No, usually separate tools |
 | **MCP-native** | Yes, 35 tools | Emerging |
 | **100% local, zero cloud** | Yes, privacy by architecture | Uncommon |
 | **Open source** | AGPL-3.0 | Varies |
@@ -176,7 +176,7 @@ Add to `~/.claude.json`:
 
 | Tool | What it does |
 |------|-------------|
-| `get_screenshot` | Capture screen — active monitor, all monitors, or a region |
+| `get_screenshot` | Capture screen (active monitor, all monitors, or a region) |
 | `get_recent` | Recent frames from the rolling buffer (with diff filtering) |
 | `get_screen_text` | OCR the current screen at native resolution |
 | `get_monitor_summary` | Lightweight text summary of all monitors (low token cost) |
@@ -216,7 +216,7 @@ Add to `~/.claude.json`:
 
 ### Memory (5 free + 2 Pro tools)
 
-Basic memory is **free forever** — no license required.
+Basic memory is **free forever**. No license required.
 
 | Tool | Tier | What it does |
 |------|------|-------------|
@@ -230,7 +230,7 @@ Basic memory is **free forever** — no license required.
 
 Memory uses a 3-tier hot/warm/cold architecture: in-memory LRU cache → SQLite WAL + FTS5 → compressed archive. The optional `pip install contextpulse-memory` package ships these tools.
 
-### Pro (4 tools — requires license or 30-day trial)
+### Pro (4 tools, requires license or 30-day trial)
 
 | Tool | What it does |
 |------|-------------|
@@ -240,7 +240,7 @@ Memory uses a 3-tier hot/warm/cold architecture: in-memory LRU cache → SQLite 
 | `get_event_timeline` | Temporal view of all events across all modalities |
 
 **Free forever:** 27 tools (Sight × 11, Voice × 3, Touch × 3, Project × 5, Memory × 5)
-**Pro:** adds 4 search tools — semantic memory search + cross-modal event queries
+**Pro:** adds 4 search tools: semantic memory search plus cross-modal event queries
 **Trial:** 30-day Pro trial on first use, no credit card required
 
 Additionally, ContextPulse includes several background learning tools (vocabulary consolidation, correction detection) that run automatically to improve transcription quality over time.
