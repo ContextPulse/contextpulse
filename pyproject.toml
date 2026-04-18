@@ -59,7 +59,7 @@ macos = [
     "rumps>=0.4",
     "mlx-whisper>=0.4.3",
 ]
-openai = ["openai>=1.0"]
+openai = ["openai>=2.32.0"]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
