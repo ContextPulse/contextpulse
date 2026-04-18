@@ -95,6 +95,13 @@ class ActivityDB:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        # WAL journaling reduces writer-vs-reader lock contention — critical on
+        # Windows where antivirus/search indexers can briefly hold the file.
+        # busy_timeout makes SQLite wait instead of raising SQLITE_BUSY, which
+        # was causing intermittent pytest-timeout hangs in test_activity.py on
+        # the Windows CI runners.
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=5000")
         self._lock = threading.Lock()
         self._init_schema()
 
