@@ -18,6 +18,8 @@ Production features:
 
 import logging
 import os
+import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -44,6 +46,26 @@ OUTPUT_DIR = _cfg_output_dir
 LOG_FILE = OUTPUT_DIR / "contextpulse.log"
 CRASH_LOG = OUTPUT_DIR / "contextpulse_crash.log"
 ACTIVITY_DB_PATH = OUTPUT_DIR / os.environ.get("CONTEXTPULSE_ACTIVITY_DB", "activity.db")
+
+MCP_PORT = int(os.environ.get("CONTEXTPULSE_MCP_PORT", "8420"))
+MCP_HOST = os.environ.get("CONTEXTPULSE_MCP_HOST", "127.0.0.1")
+MCP_STABLE_RUNTIME = 600.0  # seconds alive before resetting backoff
+MCP_BASE_BACKOFF = 5.0
+MCP_MAX_BACKOFF = 300.0
+
+
+def _is_port_bound(port: int, host: str = "127.0.0.1", timeout: float = 0.2) -> bool:
+    """Return True if something is already listening on host:port.
+
+    Uses connect_ex with a short timeout — avoids the SO_REUSEADDR false
+    positives you can get from bind-probing on Windows.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    try:
+        return sock.connect_ex((host, port)) == 0
+    finally:
+        sock.close()
 
 
 def _setup_logging() -> None:
@@ -80,6 +102,13 @@ class ContextPulseDaemon:
         self._voice_module = None
         self._touch_module = None
 
+        # MCP supervisor state — daemon keeps the unified MCP server alive
+        self._mcp_proc: subprocess.Popen | None = None
+        self._mcp_spawn_disabled: bool = os.environ.get("CONTEXTPULSE_NO_MCP", "0") == "1"
+        self._mcp_restart_backoff: float = MCP_BASE_BACKOFF
+        self._mcp_last_start: float = 0.0
+        self._mcp_logged_external: bool = False
+
         self._init_sight()
         self._init_voice()
         self._init_touch()
@@ -110,6 +139,7 @@ class ContextPulseDaemon:
         """Initialize Sight (screen capture + OCR + clipboard)."""
         try:
             from contextpulse_sight.app import ContextPulseSightApp
+
             self._sight_app = ContextPulseSightApp()
             # Override its EventBus to use ours
             self._sight_app._event_bus.close()
@@ -126,6 +156,7 @@ class ContextPulseDaemon:
         """Initialize Voice (hotkey → record → transcribe → paste)."""
         try:
             from contextpulse_voice.voice_module import VoiceModule
+
             self._voice_module = VoiceModule()
             self._voice_module.register(self._event_bus.emit)
             self._modules.append(("voice", self._voice_module))
@@ -139,6 +170,7 @@ class ContextPulseDaemon:
         """Initialize Touch (keyboard + mouse input capture)."""
         try:
             from contextpulse_touch.touch_module import TouchModule
+
             self._touch_module = TouchModule(db_path=ACTIVITY_DB_PATH)
             self._touch_module.register(self._event_bus.emit)
             self._modules.append(("touch", self._touch_module))
@@ -160,6 +192,7 @@ class ContextPulseDaemon:
             self._sight_app._sight_module.start()
 
             from contextpulse_sight.privacy import SessionMonitor
+
             self._sight_app._session_monitor = SessionMonitor(
                 on_lock=self._sight_app._on_session_lock,
                 on_unlock=self._sight_app._on_session_unlock,
@@ -167,6 +200,7 @@ class ContextPulseDaemon:
             self._sight_app._session_monitor.start()
 
             from contextpulse_sight.config import AUTO_INTERVAL
+
             if AUTO_INTERVAL > 0:
                 self._sight_app._capture_thread = threading.Thread(
                     target=self._sight_app._auto_capture_loop, daemon=True
@@ -180,6 +214,7 @@ class ContextPulseDaemon:
 
             # Sight hotkeys (Ctrl+Shift+S/A/Z/P)
             from pynput import keyboard
+
             self._sight_app.hotkey_listener = keyboard.Listener(
                 on_press=self._sight_app._on_press,
                 on_release=self._sight_app._on_release,
@@ -190,9 +225,7 @@ class ContextPulseDaemon:
 
         # Voice — start in background thread (model download can be slow)
         if self._voice_module:
-            threading.Thread(
-                target=self._start_voice_with_progress, daemon=True
-            ).start()
+            threading.Thread(target=self._start_voice_with_progress, daemon=True).start()
 
         # Touch — starts keyboard + mouse listeners
         if self._touch_module:
@@ -209,19 +242,22 @@ class ContextPulseDaemon:
             # Check if model needs downloading (frozen EXE only)
             if getattr(sys, "frozen", False):
                 from contextpulse_voice.config import get_voice_config
+
                 cfg = get_voice_config()
                 model_size = cfg["whisper_model"]
                 from contextpulse_voice.model_manager import MODEL_DIR
+
                 model_dir = MODEL_DIR / f"faster-whisper-{model_size}"
                 if not (model_dir / "model.bin").exists():
                     logger.info(
                         "First run: downloading Whisper '%s' model — "
-                        "this may take a few minutes...", model_size
+                        "this may take a few minutes...",
+                        model_size,
                     )
                     self._notify_tray(
                         "Downloading voice model",
                         f"Downloading Whisper {model_size} model for first-time setup. "
-                        "Voice dictation will be available shortly."
+                        "Voice dictation will be available shortly.",
                     )
 
             self._voice_module.start()
@@ -257,6 +293,104 @@ class ContextPulseDaemon:
         self._event_bus.close()
         logger.info("All modules stopped")
 
+    # ── MCP Supervisor ────────────────────────────────────────────
+
+    def _spawn_mcp_server(self) -> subprocess.Popen | None:
+        """Spawn the unified MCP server subprocess.
+
+        Returns None without spawning when the supervisor is disabled
+        or when port MCP_PORT is already bound by another process.
+        Prefers the installed contextpulse-mcp console script; falls
+        back to ``python -m contextpulse_core.mcp_unified``.
+        """
+        if self._mcp_spawn_disabled:
+            return None
+        if _is_port_bound(MCP_PORT, MCP_HOST):
+            if not self._mcp_logged_external:
+                logger.info(
+                    "MCP port %d already bound — external server running, skipping spawn", MCP_PORT
+                )
+                self._mcp_logged_external = True
+            return None
+
+        self._mcp_logged_external = False
+        mcp_exe = shutil.which("contextpulse-mcp")
+        if mcp_exe:
+            cmd = [mcp_exe]
+        else:
+            cmd = [sys.executable, "-m", "contextpulse_core.mcp_unified"]
+
+        log_path = OUTPUT_DIR / "mcp_unified_stderr.log"
+        try:
+            log_fh = open(log_path, "a", encoding="utf-8", buffering=1)
+        except OSError:
+            log_fh = subprocess.DEVNULL
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=log_fh,
+                stderr=log_fh,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            )
+        except OSError as exc:
+            logger.error("Failed to spawn MCP server (%s): %s", " ".join(cmd), exc)
+            return None
+
+        self._mcp_last_start = time.time()
+        logger.info("MCP server spawned: pid=%d cmd=%s", proc.pid, " ".join(cmd))
+        return proc
+
+    def _supervise_mcp(self) -> None:
+        """One tick of MCP supervision — spawn, restart, or reset backoff.
+
+        Safe to call on every watchdog cycle. Handles:
+        - first-time spawn when port is free and supervisor is enabled
+        - respawn with exponential backoff after a crash
+        - backoff reset after a stable run (> MCP_STABLE_RUNTIME)
+        - deferring to an external MCP server that already owns the port
+        """
+        if self._mcp_spawn_disabled:
+            return
+
+        if self._mcp_proc is not None:
+            if self._mcp_proc.poll() is not None:
+                exit_code = self._mcp_proc.returncode
+                logger.warning(
+                    "MCP server exited (pid=%d code=%s) — bumping backoff",
+                    self._mcp_proc.pid,
+                    exit_code,
+                )
+                self._mcp_proc = None
+                # Exponential backoff, capped
+                self._mcp_restart_backoff = min(self._mcp_restart_backoff * 3, MCP_MAX_BACKOFF)
+                return
+            # Still alive — if it's been up a long time, reset backoff.
+            if (
+                self._mcp_restart_backoff > MCP_BASE_BACKOFF
+                and (time.time() - self._mcp_last_start) > MCP_STABLE_RUNTIME
+            ):
+                logger.info(
+                    "MCP server stable for >%ds — resetting backoff", int(MCP_STABLE_RUNTIME)
+                )
+                self._mcp_restart_backoff = MCP_BASE_BACKOFF
+            return
+
+        # No proc — respect backoff before retrying after a crash
+        if (
+            self._mcp_last_start
+            and (time.time() - self._mcp_last_start) < self._mcp_restart_backoff
+        ):
+            return
+
+        if _is_port_bound(MCP_PORT, MCP_HOST):
+            if not self._mcp_logged_external:
+                logger.info("MCP port %d bound externally — deferring", MCP_PORT)
+                self._mcp_logged_external = True
+            return
+
+        self._mcp_proc = self._spawn_mcp_server()
+
     # ── Watchdog ──────────────────────────────────────────────────
 
     def _watchdog_loop(self) -> None:
@@ -289,6 +423,12 @@ class ContextPulseDaemon:
             except Exception:
                 logger.debug("Heartbeat write failed", exc_info=True)
 
+            # MCP server supervision — spawn / restart / backoff
+            try:
+                self._supervise_mcp()
+            except Exception:
+                logger.exception("MCP supervisor tick failed — continuing")
+
             # Stuck-pause detection: if Sight has been paused but the user
             # didn't manually pause, the session monitor may have died.
             # After STUCK_PAUSE_THRESHOLD seconds, force un-pause.
@@ -305,7 +445,7 @@ class ContextPulseDaemon:
                     self._pause_detected_at = None
                     self._notify_tray(
                         "Auto-resumed capture",
-                        "Screen capture was stuck paused. Resumed automatically."
+                        "Screen capture was stuck paused. Resumed automatically.",
                     )
             else:
                 self._pause_detected_at = None  # type: ignore[attr-defined]
@@ -314,10 +454,12 @@ class ContextPulseDaemon:
             if self._voice_module and not self._voice_module.is_alive():
                 count = self._restart_counts.get("voice", 0)
                 if count < MAX_RESTARTS:
-                    logger.warning("Voice module died — restarting (attempt %d/%d)",
-                                   count + 1, MAX_RESTARTS)
+                    logger.warning(
+                        "Voice module died — restarting (attempt %d/%d)", count + 1, MAX_RESTARTS
+                    )
                     try:
                         from contextpulse_voice.voice_module import VoiceModule
+
                         self._voice_module = VoiceModule()
                         self._voice_module.register(self._event_bus.emit)
                         self._voice_module.start()
@@ -332,21 +474,25 @@ class ContextPulseDaemon:
                         self._log_crash("voice", exc)
                         logger.exception("Voice module restart failed: %s", exc)
                 elif count == MAX_RESTARTS:
-                    logger.error("Voice module exceeded max restarts (%d) — giving up", MAX_RESTARTS)
+                    logger.error(
+                        "Voice module exceeded max restarts (%d) — giving up", MAX_RESTARTS
+                    )
                     self._restart_counts["voice"] = count + 1  # prevent repeated log
                     self._notify_tray(
                         "Voice module stopped",
-                        "Voice dictation is unavailable. Check the log for details."
+                        "Voice dictation is unavailable. Check the log for details.",
                     )
 
             # Touch watchdog
             if self._touch_module and not self._touch_module.is_alive():
                 count = self._restart_counts.get("touch", 0)
                 if count < MAX_RESTARTS:
-                    logger.warning("Touch module died — restarting (attempt %d/%d)",
-                                   count + 1, MAX_RESTARTS)
+                    logger.warning(
+                        "Touch module died — restarting (attempt %d/%d)", count + 1, MAX_RESTARTS
+                    )
                     try:
                         from contextpulse_touch.touch_module import TouchModule
+
                         self._touch_module = TouchModule(db_path=ACTIVITY_DB_PATH)
                         self._touch_module.register(self._event_bus.emit)
                         self._touch_module.start()
@@ -360,11 +506,13 @@ class ContextPulseDaemon:
                         self._log_crash("touch", exc)
                         logger.exception("Touch module restart failed: %s", exc)
                 elif count == MAX_RESTARTS:
-                    logger.error("Touch module exceeded max restarts (%d) — giving up", MAX_RESTARTS)
+                    logger.error(
+                        "Touch module exceeded max restarts (%d) — giving up", MAX_RESTARTS
+                    )
                     self._restart_counts["touch"] = count + 1
                     self._notify_tray(
                         "Touch module stopped",
-                        "Keyboard/mouse capture is unavailable. Check the log for details."
+                        "Keyboard/mouse capture is unavailable. Check the log for details.",
                     )
 
             # Refresh tray tooltip so it reflects current module state
@@ -378,12 +526,12 @@ class ContextPulseDaemon:
         """Write crash details to crash log file."""
         try:
             with open(CRASH_LOG, "a", encoding="utf-8") as f:
-                f.write(f"\n{'='*60}\n")
+                f.write(f"\n{'=' * 60}\n")
                 f.write(f"Module: {module_name}\n")
                 f.write(f"Time: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(f"Error: {exc}\n")
                 f.write(traceback.format_exc())
-                f.write(f"\n{'='*60}\n")
+                f.write(f"\n{'=' * 60}\n")
         except Exception:
             pass  # Don't crash the crash reporter
 
@@ -420,6 +568,7 @@ class ContextPulseDaemon:
 
     def _create_tray_menu(self):
         from contextpulse_sight.icon import _COLORS
+
         _WARNING_COLOR = _COLORS.get("dark", {}).get("warning", "#F0B429")
 
         def _toggle_sight():
@@ -435,22 +584,30 @@ class ContextPulseDaemon:
             ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
-                lambda _: "Resume Capture" if (self._sight_app and self._sight_app.paused) else "Pause Capture",
+                lambda _: (
+                    "Resume Capture"
+                    if (self._sight_app and self._sight_app.paused)
+                    else "Pause Capture"
+                ),
                 lambda: _toggle_sight(),
             ),
             pystray.MenuItem(
                 "Open Screenshots",
                 lambda: subprocess.Popen(
-                    ["open", str(OUTPUT_DIR)] if sys.platform == "darwin"
-                    else ["xdg-open", str(OUTPUT_DIR)] if sys.platform.startswith("linux")
+                    ["open", str(OUTPUT_DIR)]
+                    if sys.platform == "darwin"
+                    else ["xdg-open", str(OUTPUT_DIR)]
+                    if sys.platform.startswith("linux")
                     else ["explorer", str(OUTPUT_DIR)]
                 ),
             ),
             pystray.MenuItem(
                 "Open Log",
                 lambda: subprocess.Popen(
-                    ["open", str(LOG_FILE)] if sys.platform == "darwin"
-                    else ["xdg-open", str(LOG_FILE)] if sys.platform.startswith("linux")
+                    ["open", str(LOG_FILE)]
+                    if sys.platform == "darwin"
+                    else ["xdg-open", str(LOG_FILE)]
+                    if sys.platform.startswith("linux")
                     else ["notepad", str(LOG_FILE)]
                 ),
             ),
@@ -472,6 +629,7 @@ class ContextPulseDaemon:
         if not hasattr(self, "tray") or not self.tray:
             return
         from contextpulse_sight.icon import _COLORS, create_icon
+
         warning = _COLORS.get("dark", {}).get("warning", "#F0B429")
         paused = self._sight_app and self._sight_app.paused
         self.tray.icon = create_icon(warning if paused else None)
@@ -482,9 +640,22 @@ class ContextPulseDaemon:
         self._running = False
         self._stop_modules()
 
+        # Stop the supervised MCP server
+        if self._mcp_proc is not None:
+            try:
+                self._mcp_proc.terminate()
+                try:
+                    self._mcp_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self._mcp_proc.kill()
+            except Exception:
+                logger.exception("Error terminating MCP server")
+            self._mcp_proc = None
+
         # Clean up tkinter root
         try:
             from contextpulse_core.gui_theme import destroy_root
+
             destroy_root()
         except Exception:
             pass
@@ -512,13 +683,15 @@ class ContextPulseDaemon:
             if zombies:
                 logger.warning(
                     "Found %d zombie ContextPulse process(es): %s — killing",
-                    len(zombies), zombies,
+                    len(zombies),
+                    zombies,
                 )
                 for pid in zombies:
                     platform.kill_process(pid)
                     logger.info("Killed zombie pid=%d", pid)
                 # Brief pause to let the OS release the mutex
                 import time
+
                 time.sleep(0.5)
 
         self._mutex = platform.acquire_single_instance_lock("ContextPulse_SingleInstance")
@@ -547,25 +720,26 @@ class ContextPulseDaemon:
         # so Voice can correct "context pulse" → "ContextPulse" etc.
         try:
             from contextpulse_voice.context_vocab import rebuild_context_vocabulary
+
             count = rebuild_context_vocabulary()
             logger.info("Context vocabulary rebuilt: %d entries", count)
         except Exception:
             logger.debug("Context vocabulary rebuild skipped (voice not available)")
 
         # Start daemon watchdog for Voice + Touch
-        self._daemon_watchdog_thread = threading.Thread(
-            target=self._watchdog_loop, daemon=True
-        )
+        self._daemon_watchdog_thread = threading.Thread(target=self._watchdog_loop, daemon=True)
         self._daemon_watchdog_thread.start()
 
         # System tray — platform-branched
         if sys.platform == "darwin":
             from contextpulse_core.tray_macos import create_tray
+
             self.tray = create_tray(self)
             logger.info("ContextPulse running — Sight + Voice + Touch (macOS menu bar)")
             self.tray.run()  # blocks on main thread (AppKit requirement)
         else:
             from contextpulse_sight.icon import create_icon
+
             self.tray = pystray.Icon(
                 name="ContextPulse",
                 icon=create_icon(),
@@ -585,10 +759,12 @@ class ContextPulseDaemon:
                     break  # intentional quit via menu
                 logger.warning(
                     "Tray exited unexpectedly (attempt %d/%d) — restarting",
-                    _tray_attempt + 1, _MAX_TRAY_RESTARTS,
+                    _tray_attempt + 1,
+                    _MAX_TRAY_RESTARTS,
                 )
                 try:
                     from contextpulse_sight.icon import create_icon
+
                     self.tray = pystray.Icon(
                         name="ContextPulse",
                         icon=create_icon(),
@@ -609,6 +785,7 @@ def main() -> None:
     # Handle --setup flag for MCP config + companion skills
     if "--setup" in sys.argv:
         from contextpulse_sight.setup import print_config, setup_all
+
         idx = sys.argv.index("--setup")
         if idx + 1 < len(sys.argv) and sys.argv[idx + 1] == "print":
             print_config()
@@ -618,34 +795,41 @@ def main() -> None:
             # Install companion skills
             print("\n--- Companion Skills ---")
             from contextpulse_core.skill_setup import install_skills
+
             force = "--force" in sys.argv
             install_skills("claude-code", force=force)
             install_skills("gemini", force=force)
             # Show ecosystem status
             from contextpulse_core.skill_setup import print_ecosystem_status
+
             print_ecosystem_status()
         return
 
     # Handle --status flag
     if "--status" in sys.argv:
         from contextpulse_core.skill_setup import print_ecosystem_status
+
         print_ecosystem_status()
         return
 
     try:
         logger.info("ContextPulse daemon starting (pid=%d)", os.getpid())
         daemon = ContextPulseDaemon()
+        if "--no-mcp" in sys.argv:
+            daemon._mcp_spawn_disabled = True
+            logger.info("MCP supervisor disabled via --no-mcp flag")
         daemon.run()
     except MemoryError:
         logger.error("Fatal MemoryError — forcing GC and writing crash log")
         import gc
+
         gc.collect()
         try:
             with open(CRASH_LOG, "a", encoding="utf-8") as f:
-                f.write(f"\n{'='*60}\n")
+                f.write(f"\n{'=' * 60}\n")
                 f.write(f"FATAL MemoryError: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(traceback.format_exc())
-                f.write(f"\n{'='*60}\n")
+                f.write(f"\n{'=' * 60}\n")
         except Exception:
             pass
         raise
@@ -654,10 +838,10 @@ def main() -> None:
         # Write crash to separate file for easy discovery
         try:
             with open(CRASH_LOG, "a", encoding="utf-8") as f:
-                f.write(f"\n{'='*60}\n")
+                f.write(f"\n{'=' * 60}\n")
                 f.write(f"FATAL DAEMON CRASH: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(traceback.format_exc())
-                f.write(f"\n{'='*60}\n")
+                f.write(f"\n{'=' * 60}\n")
         except Exception:
             pass
         raise
