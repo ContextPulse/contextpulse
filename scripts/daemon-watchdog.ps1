@@ -2,6 +2,14 @@
 # Launches the daemon and auto-restarts on crash with exponential backoff.
 # Max 5 restarts per rolling hour window. Logs all events.
 # Single-instance guard: uses a named mutex to prevent zombie watchdog chains.
+#
+# Scope: this watchdog OWNS the daemon's lifecycle only.
+# The unified MCP server is supervised by the daemon itself (see
+# ContextPulseDaemon._supervise_mcp in packages/core/src/contextpulse_core/daemon.py).
+# If the daemon is alive, the daemon keeps MCP alive. If the daemon crashes,
+# this watchdog restarts the daemon and the daemon starts a fresh MCP.
+# A separate periodic scheduled task (scripts/watchdog-healthcheck.ps1)
+# catches the rare case where both this watchdog and the daemon are stuck.
 
 param(
     [int]$MaxRestartsPerHour = 5,
@@ -17,12 +25,12 @@ $createdNew = $false
 try {
     $script:watchdogMutex = [System.Threading.Mutex]::new($true, $mutexName, [ref]$createdNew)
 } catch {
-    # Mutex already exists and is abandoned or inaccessible — exit
+    # Mutex already exists and is abandoned or inaccessible -- exit
     exit 0
 }
 
 if (-not $createdNew) {
-    # Another watchdog instance already holds the mutex — exit silently
+    # Another watchdog instance already holds the mutex -- exit silently
     $script:watchdogMutex.Dispose()
     exit 0
 }
@@ -32,8 +40,6 @@ $WorkDir     = Split-Path $PSScriptRoot -Parent
 $VenvPythonw = Join-Path $WorkDir ".venv\Scripts\pythonw.exe"
 $VenvPython  = Join-Path $WorkDir ".venv\Scripts\python.exe"
 $Module      = "contextpulse_core.daemon"
-$McpModule   = "contextpulse_core.mcp_unified"
-$McpPort     = 8420
 $LogFile     = Join-Path $WorkDir "logs\daemon_watchdog.log"
 
 # --- State ---
@@ -57,7 +63,7 @@ function Get-RestartsInLastHour {
 
 function Kill-ZombieDaemons {
     # Kill ONLY leftover ContextPulse daemon processes.
-    # Strictly matches "contextpulse_core.daemon" in command line — will NOT touch:
+    # Strictly matches "contextpulse_core.daemon" in command line -- will NOT touch:
     #   - monitor-hotkeys.pyw
     #   - Any other pythonw/python process
     $zombies = Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" -ErrorAction SilentlyContinue |
@@ -72,47 +78,19 @@ function Kill-ZombieDaemons {
     }
 }
 
-function Kill-ZombieMcpServers {
-    # Kill leftover stdio MCP server processes from old sessions.
-    # Matches "contextpulse_*.mcp_server" but NOT "contextpulse_core.mcp_unified".
+function Kill-StaleStdioMcpServers {
+    # Kill leftover stdio MCP server processes from the pre-unified era.
+    # These are orphans from old Claude Code sessions that spawned per-module
+    # stdio servers. The unified HTTP server on port 8420 is supervised by
+    # the daemon itself and is NOT matched here.
     $zombies = Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match "contextpulse_\w+\.mcp_server" }
 
     if ($zombies) {
         foreach ($z in $zombies) {
-            Write-Log "Killing zombie MCP server (pid=$($z.ProcessId), cmd=$($z.CommandLine))" "WARN"
+            Write-Log "Killing stale stdio MCP server (pid=$($z.ProcessId), cmd=$($z.CommandLine))" "WARN"
             Stop-Process -Id $z.ProcessId -Force -ErrorAction SilentlyContinue
         }
-    }
-}
-
-function Start-McpServer {
-    # Start the unified MCP server if not already running on the configured port.
-    $listening = Test-NetConnection -ComputerName 127.0.0.1 -Port $McpPort -WarningAction SilentlyContinue
-    if ($listening.TcpTestSucceeded) {
-        Write-Log "Unified MCP server already running on port $McpPort"
-        return
-    }
-
-    # Kill any zombie per-session MCP servers from the old stdio era
-    Kill-ZombieMcpServers
-
-    Write-Log "Starting unified MCP server (python.exe -m $McpModule --port $McpPort)"
-    $mcpProc = Start-Process -FilePath $VenvPython `
-        -ArgumentList "-m", $McpModule, "--port", $McpPort `
-        -WorkingDirectory $WorkDir `
-        -PassThru -WindowStyle Hidden `
-        -RedirectStandardError "$WorkDir\mcp_unified_stderr.log"
-
-    Write-Log "Unified MCP server started (pid=$($mcpProc.Id))"
-
-    # Wait briefly and verify it came up
-    Start-Sleep -Seconds 3
-    $check = Test-NetConnection -ComputerName 127.0.0.1 -Port $McpPort -WarningAction SilentlyContinue
-    if ($check.TcpTestSucceeded) {
-        Write-Log "Unified MCP server confirmed healthy on port $McpPort"
-    } else {
-        Write-Log "Unified MCP server FAILED to start - check mcp_unified_stderr.log" "ERROR"
     }
 }
 
@@ -123,8 +101,9 @@ try {
     # Kill any zombies from previous crash before first launch
     Kill-ZombieDaemons
 
-    # Start the unified MCP server (shared across all Claude sessions)
-    Start-McpServer
+    # One-shot cleanup: kill pre-unified stdio MCP orphans. The unified
+    # MCP server itself is supervised by the daemon (not here).
+    Kill-StaleStdioMcpServers
 
     while ($true) {
         # Check restart budget
