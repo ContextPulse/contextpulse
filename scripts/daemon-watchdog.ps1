@@ -20,17 +20,26 @@ param(
 $ErrorActionPreference = "Stop"
 
 # --- Single-Instance Guard (named mutex) ---
+# Only exit when a LIVE watchdog holds the mutex. An *abandoned* mutex
+# (previous owner died uncleanly) is recoverable -- we take ownership.
+# Previously this script exited silently on AbandonedMutexException, which
+# meant after any ungraceful crash of the watchdog no new watchdog could
+# ever start until reboot. See commit for full root-cause notes.
 $mutexName = "Global\ContextPulse_DaemonWatchdog_SingleInstance"
 $createdNew = $false
+$script:watchdogMutex = [System.Threading.Mutex]::new($false, $mutexName, [ref]$createdNew)
+
 try {
-    $script:watchdogMutex = [System.Threading.Mutex]::new($true, $mutexName, [ref]$createdNew)
-} catch {
-    # Mutex already exists and is abandoned or inaccessible -- exit
-    exit 0
+    # Wait up to 1s to acquire. If a live watchdog holds it, this times out.
+    $acquired = $script:watchdogMutex.WaitOne(1000)
+} catch [System.Threading.AbandonedMutexException] {
+    # Previous owner died without releasing -- WaitOne still grants us
+    # ownership. Proceed normally.
+    $acquired = $true
 }
 
-if (-not $createdNew) {
-    # Another watchdog instance already holds the mutex -- exit silently
+if (-not $acquired) {
+    # A live watchdog already holds the mutex -- exit silently
     $script:watchdogMutex.Dispose()
     exit 0
 }

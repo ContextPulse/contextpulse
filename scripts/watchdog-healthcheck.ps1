@@ -6,7 +6,12 @@
 #     and kicks the whole stack by relaunching the startup .cmd.
 #
 # Checks:
-#   1. screen_latest.jpg mtime within $MaxStaleSeconds -- proves Sight is capturing
+#   1. heartbeat file mtime within $MaxStaleSeconds -- proves the daemon
+#      watchdog loop is alive. Written every 15s by daemon._watchdog_loop
+#      independent of user activity. (Previously used screen_latest.jpg,
+#      which falsely went stale when the user was idle >30s because the
+#      event-driven capture pauses on idle -- causing the healthcheck to
+#      kill a perfectly healthy daemon.)
 #   2. port 8420 is listening -- proves the unified MCP server is alive
 # If either fails, logs the failure, kills matching zombies, and invokes the
 # startup .cmd so the watchdog + daemon + MCP come back up cleanly.
@@ -15,7 +20,7 @@
 # everything is healthy (the common case) so it is nearly free.
 
 param(
-    [int]$MaxStaleSeconds = 120,
+    [int]$MaxStaleSeconds = 60,   # heartbeat is written every 15s; 60s = 4 misses
     [int]$McpPort = 8420,
     [switch]$DryRun
 )
@@ -23,7 +28,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $WorkDir        = Split-Path $PSScriptRoot -Parent
-$ScreenLatest   = Join-Path $env:USERPROFILE "screenshots\screen_latest.jpg"
+$HeartbeatFile  = Join-Path $env:USERPROFILE "screenshots\heartbeat"
 $StartupCmd     = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup\ContextPulse.cmd"
 $LogFile        = Join-Path $WorkDir "logs\watchdog_healthcheck.log"
 
@@ -39,14 +44,14 @@ function Write-Log {
     } catch {}
 }
 
-function Test-ScreenshotFresh {
-    if (-not (Test-Path $ScreenLatest)) {
-        Write-Log "screen_latest.jpg missing at $ScreenLatest" "WARN"
+function Test-DaemonHeartbeat {
+    if (-not (Test-Path $HeartbeatFile)) {
+        Write-Log "heartbeat file missing at $HeartbeatFile" "WARN"
         return $false
     }
-    $age = ((Get-Date) - (Get-Item $ScreenLatest).LastWriteTime).TotalSeconds
+    $age = ((Get-Date) - (Get-Item $HeartbeatFile).LastWriteTime).TotalSeconds
     if ($age -gt $MaxStaleSeconds) {
-        Write-Log ("screen_latest.jpg stale: {0:N0}s old (threshold {1}s)" -f $age, $MaxStaleSeconds) "WARN"
+        Write-Log ("heartbeat stale: {0:N0}s old (threshold {1}s)" -f $age, $MaxStaleSeconds) "WARN"
         return $false
     }
     return $true
@@ -100,14 +105,14 @@ function Invoke-Recovery {
 }
 
 # --- Main ---
-$screenOk = Test-ScreenshotFresh
-$mcpOk    = Test-McpListening
+$heartbeatOk = Test-DaemonHeartbeat
+$mcpOk       = Test-McpListening
 
-if ($screenOk -and $mcpOk) {
+if ($heartbeatOk -and $mcpOk) {
     # Healthy -- log only at debug level (suppressed by default)
     exit 0
 }
 
-Write-Log "Health check FAILED (screen=$screenOk, mcp=$mcpOk)" "ERROR"
+Write-Log "Health check FAILED (heartbeat=$heartbeatOk, mcp=$mcpOk)" "ERROR"
 Invoke-Recovery
 exit 1
