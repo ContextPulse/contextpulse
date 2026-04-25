@@ -84,7 +84,8 @@ jobs:
           pip install -e packages/core -e packages/screen -e packages/voice -e packages/touch -e packages/memory -e packages/project
 
       - name: pip-audit
-        run: pip-audit
+        # CVE-2026-3219: pip 26.0.1 — no fix version published upstream yet; revisit when pip ships a patch.
+        run: pip-audit --ignore-vuln CVE-2026-3219
 
   reuse:
     runs-on: ubuntu-latest
