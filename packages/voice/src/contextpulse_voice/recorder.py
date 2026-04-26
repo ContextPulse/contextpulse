@@ -77,6 +77,11 @@ class Recorder:
         self.channels = channels
         self._frames: list[np.ndarray] = []
         self._stream: Optional[sd.InputStream] = None
+        # Set by _to_wav: True if the captured buffer exceeded
+        # _MAX_RECORDING_S and the WAV was truncated. Voice pipeline
+        # reads this flag after stop() / stop_after_silence() to know
+        # whether to append a continuation marker.
+        self.was_truncated: bool = False
 
     def start(self) -> None:
         """Start recording audio."""
@@ -192,8 +197,12 @@ class Recorder:
         """Convert captured frames to WAV bytes.
 
         Truncates audio to `_MAX_RECORDING_S` to bound transcribe time
-        and protect against stuck-hotkey runaway recordings.
+        and protect against stuck-hotkey runaway recordings. Sets
+        self.was_truncated so the voice pipeline can append a
+        continuation marker to the transcribed text.
         """
+        # Reset every conversion — fresh recording starts clean.
+        self.was_truncated = False
         if not self._frames:
             logger.warning("No audio frames captured")
             return b""
@@ -208,6 +217,7 @@ class Recorder:
                 _MAX_RECORDING_S,
             )
             audio = audio[:max_samples]
+            self.was_truncated = True
         buf = io.BytesIO()
         with wave.open(buf, "wb") as wf:
             wf.setnchannels(self.channels)
