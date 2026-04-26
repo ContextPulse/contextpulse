@@ -12,10 +12,14 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import threading
 import time
+import uuid
+from pathlib import Path
 from typing import Any, Callable
 
+from contextpulse_core.config import APPDATA_DIR
 from contextpulse_core.spine import (
     ContextEvent,
     EventType,
@@ -27,10 +31,86 @@ from pynput import keyboard as kb
 from contextpulse_voice.cleanup import clean
 from contextpulse_voice.config import get_voice_config, has_api_key
 from contextpulse_voice.paster import paste_text
-from contextpulse_voice.recorder import Recorder
+from contextpulse_voice.recorder import Recorder, save_wav_bytes
 from contextpulse_voice.vocabulary import apply_punctuation, apply_vocabulary
 
 logger = logging.getLogger(__name__)
+
+# ── Crash-safe audio persistence ─────────────────────────────────────
+# Every captured WAV is written to RECORDINGS_DIR before transcribe
+# runs and deleted only after a successful TRANSCRIPTION event lands.
+# If the daemon dies mid-flight, the leftover WAV is recovered by
+# `contextpulse_voice.orphan_recovery` (CLI: `transcribe-orphans`).
+RECORDINGS_DIR: Path = APPDATA_DIR / "voice" / "recordings"
+_MAX_RECORDINGS = 50
+_MAX_RECORDING_AGE_DAYS = 7
+
+
+def _new_recording_path(recordings_dir: Path | None = None) -> Path:
+    """Build a unique WAV path: dict_<unixms>_<pid>_<short>.wav.
+
+    Reads the module-level RECORDINGS_DIR at call time (not at function
+    definition time) so test fixtures can monkeypatch it.
+    """
+    if recordings_dir is None:
+        recordings_dir = RECORDINGS_DIR
+    stamp = int(time.time() * 1000)
+    short = uuid.uuid4().hex[:8]
+    return recordings_dir / f"dict_{stamp}_{os.getpid()}_{short}.wav"
+
+
+def _cleanup_old_recordings(
+    recordings_dir: Path,
+    max_files: int = _MAX_RECORDINGS,
+    max_age_days: int = _MAX_RECORDING_AGE_DAYS,
+) -> None:
+    """Prune the recordings directory.
+
+    Drops anything older than `max_age_days`, then keeps only the
+    `max_files` newest WAVs. Best-effort: any IO error is logged at
+    debug level and otherwise swallowed — pruning must never fail the
+    voice pipeline.
+    """
+    recordings_dir = Path(recordings_dir)
+    if not recordings_dir.is_dir():
+        return
+    try:
+        wavs = list(recordings_dir.glob("*.wav"))
+    except OSError:
+        logger.debug("Could not enumerate %s", recordings_dir, exc_info=True)
+        return
+
+    cutoff = time.time() - max_age_days * 86400
+    survivors: list[tuple[float, Path]] = []
+    for p in wavs:
+        try:
+            mtime = p.stat().st_mtime
+        except OSError:
+            continue
+        if mtime < cutoff:
+            try:
+                p.unlink()
+                # Drop sidecar too
+                sidecar = p.with_suffix(".txt")
+                if sidecar.exists():
+                    sidecar.unlink()
+            except OSError:
+                logger.debug("Could not unlink old %s", p, exc_info=True)
+            continue
+        survivors.append((mtime, p))
+
+    if len(survivors) <= max_files:
+        return
+    survivors.sort(key=lambda t: t[0])  # oldest first
+    for _mtime, p in survivors[: len(survivors) - max_files]:
+        try:
+            p.unlink()
+            sidecar = p.with_suffix(".txt")
+            if sidecar.exists():
+                sidecar.unlink()
+        except OSError:
+            logger.debug("Could not unlink overflow %s", p, exc_info=True)
+
 
 # Parse hotkey string into pynput keys
 _HOTKEY_MAP = {
@@ -110,11 +190,13 @@ class VoiceModule(ModalityModule):
 
         # Lazy-load transcriber (downloads model on first use)
         from contextpulse_voice.transcriber import LocalTranscriber
+
         self._transcriber = LocalTranscriber(model_size=self._model_size)
 
         # Initialize recording overlay (visual feedback)
         try:
             from contextpulse_voice.overlay import RecordingOverlay
+
             self._overlay = RecordingOverlay()
             logger.info("Recording overlay initialized")
         except Exception:
@@ -163,19 +245,23 @@ class VoiceModule(ModalityModule):
     def get_config_schema(self) -> dict[str, Any]:
         return {
             "voice_hotkey": {
-                "type": "string", "default": "ctrl+space",
+                "type": "string",
+                "default": "ctrl+space",
                 "description": "Hold to dictate",
             },
             "voice_fix_hotkey": {
-                "type": "string", "default": "ctrl+shift+space",
+                "type": "string",
+                "default": "ctrl+shift+space",
                 "description": "Re-transcribe last dictation with higher quality",
             },
             "voice_whisper_model": {
-                "type": "string", "default": "base",
+                "type": "string",
+                "default": "base",
                 "description": "Whisper model size (base/small/medium/large)",
             },
             "voice_always_use_llm": {
-                "type": "boolean", "default": False,
+                "type": "boolean",
+                "default": False,
                 "description": "Always use LLM for text cleanup",
             },
         }
@@ -196,9 +282,9 @@ class VoiceModule(ModalityModule):
         """Get current foreground app and window title."""
         try:
             from contextpulse_core.platform import get_platform_provider
+
             platform = get_platform_provider()
-            return (platform.get_foreground_process_name(),
-                    platform.get_foreground_window_title())
+            return (platform.get_foreground_process_name(), platform.get_foreground_window_title())
         except Exception:
             return ("", "")
 
@@ -243,19 +329,23 @@ class VoiceModule(ModalityModule):
             self._recorder.start()
             if self._overlay:
                 self._overlay.show_recording()
-            self._emit(ContextEvent(
-                modality=Modality.VOICE,
-                event_type=EventType.SPEECH_START,
-                app_name=app_name,
-                window_title=window_title,
-            ))
+            self._emit(
+                ContextEvent(
+                    modality=Modality.VOICE,
+                    event_type=EventType.SPEECH_START,
+                    app_name=app_name,
+                    window_title=window_title,
+                )
+            )
             logger.info("Recording...")
 
     def _on_release(self, key: kb.Key | kb.KeyCode | None) -> None:
         try:
             self._on_release_inner(key)
         except Exception:
-            logger.exception("Error in voice _on_release handler (swallowed to keep listener alive)")
+            logger.exception(
+                "Error in voice _on_release handler (swallowed to keep listener alive)"
+            )
 
     def _on_release_inner(self, key: kb.Key | kb.KeyCode | None) -> None:
         self._pressed_keys.discard(key)
@@ -287,12 +377,14 @@ class VoiceModule(ModalityModule):
             if self._overlay:
                 self._overlay.show_transcribing()
             app_name, window_title = self._get_foreground_info()
-            self._emit(ContextEvent(
-                modality=Modality.VOICE,
-                event_type=EventType.SPEECH_END,
-                app_name=app_name,
-                window_title=window_title,
-            ))
+            self._emit(
+                ContextEvent(
+                    modality=Modality.VOICE,
+                    event_type=EventType.SPEECH_END,
+                    app_name=app_name,
+                    window_title=window_title,
+                )
+            )
 
             # Stop recording and transcribe in a background thread.
             # The thread adds a brief tail delay before stopping the
@@ -309,14 +401,16 @@ class VoiceModule(ModalityModule):
 
     _TAIL_BUFFER_MS = 700  # minimum tail before silence detection kicks in
 
-    def _stop_and_transcribe(
-        self, app_name: str, window_title: str
-    ) -> None:
+    def _stop_and_transcribe(self, app_name: str, window_title: str) -> None:
         """Stop recorder with energy-based tail extension.
 
         Called in a background thread so the tail delay doesn't block
         the pynput listener.  Records until silence is detected (up to
         2s) so trailing words are never cut off.
+
+        Persists the captured WAV to disk BEFORE invoking transcribe so
+        that a daemon crash mid-transcribe leaves the audio recoverable
+        via `contextpulse_voice.orphan_recovery`.
         """
         try:
             # Brief minimum delay, then let silence detection decide when to stop
@@ -330,27 +424,59 @@ class VoiceModule(ModalityModule):
                     self._overlay.hide()
                 return
 
+            # _transcribe_and_paste handles WAV persistence itself.
             self._transcribe_and_paste(wav_bytes, app_name, window_title)
+
+            # Best-effort prune. If the success path already deleted
+            # this WAV, the prune is just a noop pass over the dir.
+            try:
+                _cleanup_old_recordings(RECORDINGS_DIR)
+            except Exception:
+                logger.debug("Cleanup pass failed", exc_info=True)
         except Exception:
             logger.exception("stop_and_transcribe failed")
             if self._overlay:
                 self._overlay.hide()
 
     def _transcribe_and_paste(
-        self, wav_bytes: bytes, app_name: str, window_title: str
+        self,
+        wav_bytes: bytes,
+        app_name: str,
+        window_title: str,
     ) -> None:
-        """Run full pipeline: transcribe → cleanup → vocabulary → paste → emit."""
-        try:
-            # Guard: skip if this exact audio was already transcribed (duplicate
-            # thread spawn from keyboard hook re-delivery on Windows).
-            audio_hash = hashlib.sha256(wav_bytes).hexdigest()[:16]
-            if audio_hash == getattr(self, "_last_audio_hash", None):
-                logger.warning(
-                    "Duplicate audio hash %s — skipping transcription", audio_hash
-                )
-                return
-            self._last_audio_hash = audio_hash
+        """Run full pipeline: transcribe → cleanup → vocabulary → paste → emit.
 
+        Persists the WAV to disk BEFORE invoking the transcriber and
+        deletes it ONLY after a successful TRANSCRIPTION event is
+        emitted. Any failure path (exception, empty transcript) leaves
+        the WAV on disk so `contextpulse_voice.orphan_recovery` can
+        salvage the audio.
+        """
+        # Guard: skip if this exact audio was already transcribed (duplicate
+        # thread spawn from keyboard hook re-delivery on Windows). Run this
+        # BEFORE persistence so duplicate spawns don't pile up WAVs.
+        audio_hash = hashlib.sha256(wav_bytes).hexdigest()[:16]
+        if audio_hash == getattr(self, "_last_audio_hash", None):
+            logger.warning("Duplicate audio hash %s — skipping transcription", audio_hash)
+            return
+        self._last_audio_hash = audio_hash
+
+        # Crash-safe persistence: write WAV BEFORE invoking transcribe so
+        # a daemon crash mid-flight leaves audio recoverable.
+        wav_path: Path | None = None
+        try:
+            wav_path = _new_recording_path()
+            save_wav_bytes(wav_bytes, wav_path)
+            logger.info(
+                "Persisted recording (%d bytes) -> %s",
+                len(wav_bytes),
+                wav_path.name,
+            )
+        except OSError:
+            logger.exception("Could not persist recording — running without crash safety")
+            wav_path = None
+
+        try:
             # Build Whisper initial_prompt from screen OCR hot-words
             whisper_prompt = ""
             try:
@@ -359,15 +485,18 @@ class VoiceModule(ModalityModule):
                     build_whisper_prompt,
                     extract_hot_words,
                 )
+
                 hot_words = extract_hot_words()
                 whisper_prompt = build_whisper_prompt(
-                    hot_words, get_known_proper_nouns(),
+                    hot_words,
+                    get_known_proper_nouns(),
                 )
             except Exception:
                 logger.debug("Hot-word extraction failed (non-fatal)", exc_info=True)
 
             raw_text = self._transcriber.transcribe(
-                wav_bytes, initial_prompt=whisper_prompt,
+                wav_bytes,
+                initial_prompt=whisper_prompt,
             )
             if not raw_text or len(raw_text.strip()) < 2:
                 logger.warning("Empty or too-short transcription — skipping")
@@ -395,23 +524,39 @@ class VoiceModule(ModalityModule):
                 self._overlay.show_ready()
 
             # Emit TRANSCRIPTION event with both raw and cleaned text
-            self._emit(ContextEvent(
-                modality=Modality.VOICE,
-                event_type=EventType.TRANSCRIPTION,
-                app_name=app_name,
-                window_title=window_title,
-                payload={
-                    "transcript": text,
-                    "raw_transcript": raw_text,
-                    "confidence": 0.85,  # TODO: get from Whisper segments
-                    "language": "en",
-                    "duration_seconds": len(wav_bytes) / (16000 * 2),
-                    "cleanup_applied": use_llm,
-                    "paste_text_hash": paste_hash,
-                    "paste_timestamp": paste_timestamp,
-                },
-            ))
+            self._emit(
+                ContextEvent(
+                    modality=Modality.VOICE,
+                    event_type=EventType.TRANSCRIPTION,
+                    app_name=app_name,
+                    window_title=window_title,
+                    payload={
+                        "transcript": text,
+                        "raw_transcript": raw_text,
+                        "confidence": 0.85,  # TODO: get from Whisper segments
+                        "language": "en",
+                        "duration_seconds": len(wav_bytes) / (16000 * 2),
+                        "cleanup_applied": use_llm,
+                        "paste_text_hash": paste_hash,
+                        "paste_timestamp": paste_timestamp,
+                    },
+                )
+            )
             logger.info("Dictated: %s", text[:100])
+
+            # Crash-safe persistence: delete the on-disk WAV only after
+            # the TRANSCRIPTION event has been emitted successfully.
+            # Any earlier `return` path leaves the file in place so
+            # orphan recovery can salvage the audio.
+            if wav_path is not None:
+                try:
+                    wav_path.unlink(missing_ok=True)
+                except OSError:
+                    logger.debug(
+                        "Could not delete persisted WAV %s",
+                        wav_path,
+                        exc_info=True,
+                    )
 
             # Schedule background screen correction harvesting.
             # Wait a few seconds for Claude to respond, then check if
@@ -445,15 +590,19 @@ class VoiceModule(ModalityModule):
                     build_whisper_prompt,
                     extract_hot_words,
                 )
+
                 hot_words = extract_hot_words()
                 whisper_prompt = build_whisper_prompt(
-                    hot_words, get_known_proper_nouns(),
+                    hot_words,
+                    get_known_proper_nouns(),
                 )
             except Exception:
                 logger.debug("Hot-word extraction failed in fix-last (non-fatal)", exc_info=True)
 
             raw_text = self._transcriber.transcribe(
-                self._last_wav_bytes, beam_size=10, initial_prompt=whisper_prompt,
+                self._last_wav_bytes,
+                beam_size=10,
+                initial_prompt=whisper_prompt,
             )
             raw_text = apply_punctuation(raw_text)
             app_name_fl, window_title_fl = self._get_foreground_info()
@@ -468,23 +617,25 @@ class VoiceModule(ModalityModule):
                 paste_timestamp, paste_hash = paste_text(text)
 
                 app_name, window_title = self._get_foreground_info()
-                self._emit(ContextEvent(
-                    modality=Modality.VOICE,
-                    event_type=EventType.TRANSCRIPTION,
-                    app_name=app_name,
-                    window_title=window_title,
-                    payload={
-                        "transcript": text,
-                        "raw_transcript": raw_text,
-                        "confidence": 0.95,
-                        "language": "en",
-                        "duration_seconds": len(self._last_wav_bytes) / (16000 * 2),
-                        "cleanup_applied": True,
-                        "paste_text_hash": paste_hash,
-                        "paste_timestamp": paste_timestamp,
-                        "fix_last": True,
-                    },
-                ))
+                self._emit(
+                    ContextEvent(
+                        modality=Modality.VOICE,
+                        event_type=EventType.TRANSCRIPTION,
+                        app_name=app_name,
+                        window_title=window_title,
+                        payload={
+                            "transcript": text,
+                            "raw_transcript": raw_text,
+                            "confidence": 0.95,
+                            "language": "en",
+                            "duration_seconds": len(self._last_wav_bytes) / (16000 * 2),
+                            "cleanup_applied": True,
+                            "paste_text_hash": paste_hash,
+                            "paste_timestamp": paste_timestamp,
+                            "fix_last": True,
+                        },
+                    )
+                )
                 logger.info("Fix-last replaced: %s", text[:100])
         except Exception:
             self._error = "Fix-last failed"
@@ -492,9 +643,7 @@ class VoiceModule(ModalityModule):
 
     # ── Context-aware helpers ────────────────────────────────────────
 
-    def _build_profile_context(
-        self, app_name: str = "", window_title: str = ""
-    ) -> str:
+    def _build_profile_context(self, app_name: str = "", window_title: str = "") -> str:
         """Build a context string for LLM cleanup from screen context.
 
         Uses recent window titles from Sight events (last 60s) to identify
@@ -523,11 +672,7 @@ class VoiceModule(ModalityModule):
 
                 titles = [r["window_title"] for r in rows if r["window_title"]]
                 # Filter out generic titles
-                titles = [
-                    t for t in titles
-                    if t not in ("Claude", "Search", "")
-                    and len(t) > 3
-                ]
+                titles = [t for t in titles if t not in ("Claude", "Search", "") and len(t) > 3]
                 if titles:
                     parts.append("Recent windows: " + ", ".join(titles[:5]))
         except Exception:
@@ -536,6 +681,7 @@ class VoiceModule(ModalityModule):
         # Add known proper nouns from context vocabulary
         try:
             from contextpulse_voice.context_vocab import get_known_proper_nouns
+
             nouns = get_known_proper_nouns()
             if nouns:
                 parts.append("Known terms: " + ", ".join(nouns[:15]))
@@ -613,7 +759,8 @@ class VoiceModule(ModalityModule):
                     if added:
                         logger.info(
                             "Screen-learned correction: %r -> %r",
-                            phrase_lower, word,
+                            phrase_lower,
+                            word,
                         )
         except Exception:
             logger.debug("Screen correction harvesting failed", exc_info=True)

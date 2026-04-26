@@ -7,14 +7,46 @@ Audio recording via sounddevice.
 
 import io
 import logging
+import os
 import time
 import wave
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import sounddevice as sd
 
 logger = logging.getLogger(__name__)
+
+
+def save_wav_bytes(wav_bytes: bytes, path: Path) -> None:
+    """Atomically write WAV bytes to disk.
+
+    Used by VoiceModule to persist captured audio BEFORE invoking the
+    transcriber, so that a daemon crash mid-transcribe does not lose
+    the recording. Writes via a `.partial` sidecar then renames into
+    place so partially-flushed files are never picked up by orphan
+    recovery.
+
+    Empty `wav_bytes` is a no-op (no zero-byte file is created).
+    Parent directories are created if missing.
+    """
+    if not wav_bytes:
+        return
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".partial")
+    try:
+        tmp.write_bytes(wav_bytes)
+        os.replace(tmp, path)  # atomic on Windows + POSIX
+    finally:
+        # If rename failed, scrub the partial so we don't leave litter
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                logger.debug("Could not remove partial WAV: %s", tmp)
+
 
 SAMPLE_RATE = 16000  # Whisper expects 16kHz
 CHANNELS = 1
@@ -23,9 +55,9 @@ DTYPE = "int16"
 # Energy-based tail extension: after key release, keep recording until
 # the mic goes quiet or MAX_TAIL_S elapses.  This prevents cutting off
 # trailing words that the user finishes after releasing the hotkey.
-_SILENCE_THRESHOLD_RMS = 200      # RMS below this = silence (int16 range)
-_SILENCE_DURATION_S = 0.5         # need 500ms of consecutive silence to stop
-_MAX_TAIL_S = 2.0                 # hard cap on tail extension
+_SILENCE_THRESHOLD_RMS = 200  # RMS below this = silence (int16 range)
+_SILENCE_DURATION_S = 0.5  # need 500ms of consecutive silence to stop
+_MAX_TAIL_S = 2.0  # hard cap on tail extension
 
 
 class Recorder:
@@ -109,9 +141,7 @@ class Recorder:
             while True:
                 elapsed = time.monotonic() - tail_start
                 if elapsed >= _MAX_TAIL_S:
-                    logger.info(
-                        "Tail extension hit max (%.1fs) — stopping", _MAX_TAIL_S
-                    )
+                    logger.info("Tail extension hit max (%.1fs) — stopping", _MAX_TAIL_S)
                     break
 
                 # Check energy of most recent frames
