@@ -17,6 +17,8 @@ from typing import Any
 
 from contextpulse_pipeline.compress import (
     AudioTooLargeError as CompressAudioTooLargeError,
+)
+from contextpulse_pipeline.compress import (
     compress_for_whisper,
 )
 from contextpulse_pipeline.manifest import Manifest
@@ -76,23 +78,26 @@ def _call_groq(audio_path: Path, **kwargs: Any) -> dict[str, Any]:
     """Call Groq Whisper API. Separated for easy mocking in tests.
 
     Returns dict with keys: text, segments (list of segment dicts).
-    Raises GroqRateLimitError on HTTP 429.
+    Raises GroqRateLimitError on HTTP 429 — translated from the SDK's
+    groq.RateLimitError so the retry-with-wait loop in transcribe() can
+    catch it (Rule #11).
     """
     try:
-        from groq import Groq  # type: ignore[import-untyped]
+        from groq import Groq, RateLimitError  # type: ignore[import-untyped]
     except ImportError as exc:
-        raise ImportError(
-            "groq package not installed. Run: uv add groq"
-        ) from exc
+        raise ImportError("groq package not installed. Run: uv add groq") from exc
 
     client = Groq()
-    with audio_path.open("rb") as f:
-        response = client.audio.transcriptions.create(
-            file=(audio_path.name, f),
-            model="whisper-large-v3",
-            response_format="verbose_json",
-            timestamp_granularities=["segment"],
-        )
+    try:
+        with audio_path.open("rb") as f:
+            response = client.audio.transcriptions.create(
+                file=(audio_path.name, f),
+                model="whisper-large-v3",
+                response_format="verbose_json",
+                timestamp_granularities=["segment"],
+            )
+    except RateLimitError as exc:
+        raise GroqRateLimitError(str(exc)) from exc
 
     # Convert to plain dict
     segments = []
