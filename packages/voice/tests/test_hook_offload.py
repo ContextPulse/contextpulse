@@ -247,6 +247,91 @@ class TestShutdown:
         )
 
 
+class TestRecordingTimeoutWatchdog:
+    """If pynput drops a release event (known Windows hook failure
+    mode), the daemon would otherwise stay stuck thinking recording
+    is active — recorder keeps capturing, overlay stuck on "recording",
+    no transcription. The worker periodically checks recording duration
+    and force-enqueues a STOP if recording has run past the cap.
+    """
+
+    def test_long_recording_auto_stops_after_cap(self, live_module):
+        """When recording exceeds the duration cap, the worker
+        auto-enqueues a STOP without needing a key release."""
+        # Patch the duration cap to a small value for fast testing.
+        # The watchdog should trip after CAP + grace period (~5s).
+        import contextpulse_voice.voice_module as vm
+
+        original_cap = vm._MAX_RECORDING_S
+        original_grace = vm._RECORDING_TIMEOUT_GRACE_S
+        try:
+            vm._MAX_RECORDING_S = 0.5  # 500ms cap
+            vm._RECORDING_TIMEOUT_GRACE_S = 0.2  # 200ms grace
+
+            # Simulate user pressing ctrl+space (recording starts)
+            live_module._on_press_inner(kb.Key.ctrl_l)
+            live_module._on_press_inner(kb.Key.space)
+
+            # Wait for the worker to handle START
+            deadline = time.time() + 2
+            while time.time() < deadline and not live_module._recorder.start.called:
+                time.sleep(0.05)
+            assert live_module._recorder.start.called, "Recorder.start was never called"
+
+            # Now WITHOUT releasing the keys, wait past cap + grace.
+            # Watchdog should auto-enqueue a STOP.
+            deadline = time.time() + 3
+            while time.time() < deadline:
+                if live_module._recorder.stop_after_silence.called:
+                    break
+                time.sleep(0.1)
+
+            assert live_module._recorder.stop_after_silence.called, (
+                "Worker did not auto-stop the recording after duration cap "
+                "(stuck-release safety net failed)"
+            )
+        finally:
+            vm._MAX_RECORDING_S = original_cap
+            vm._RECORDING_TIMEOUT_GRACE_S = original_grace
+
+    def test_normal_recording_not_auto_stopped(self, live_module):
+        """Recordings within the cap must NOT be auto-stopped."""
+        live_module._on_press_inner(kb.Key.ctrl_l)
+        live_module._on_press_inner(kb.Key.space)
+        time.sleep(0.2)
+        # Recording started but only 0.2s in — far below 60s cap.
+        # User releases normally:
+        live_module._on_release_inner(kb.Key.space)
+        # Wait long enough for worker to process STOP (includes the
+        # 700ms tail-buffer sleep inside _stop_and_transcribe).
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            if live_module._recorder.stop_after_silence.called:
+                break
+            time.sleep(0.05)
+
+        # stop_after_silence WAS called once (from the user release),
+        # not from a watchdog auto-stop.
+        assert live_module._recorder.stop_after_silence.call_count == 1
+
+    def test_handle_stop_clears_recording_timestamp(self, live_module):
+        """After a normal stop processes, the recording timestamp is
+        cleared so the watchdog doesn't fire on the NEXT idle cycle."""
+        live_module._on_press_inner(kb.Key.ctrl_l)
+        live_module._on_press_inner(kb.Key.space)
+        time.sleep(0.2)
+        live_module._on_release_inner(kb.Key.space)
+        # Wait for stop pipeline to finish (tail buffer + transcribe)
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            if live_module._recording_started_at is None:
+                break
+            time.sleep(0.05)
+
+        # After stop processes, _recording_started_at is None
+        assert live_module._recording_started_at is None
+
+
 class TestQueueOverflow:
     def test_overflow_drops_oldest_with_warning(self, live_module, caplog):
         """A burst of commands must not block the hook thread.
