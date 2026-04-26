@@ -144,13 +144,17 @@ _RECORDING_TIMEOUT_GRACE_S = 5.0
 
 # Appended to transcribed text when the recorder truncated the audio
 # buffer (either via the stuck-release watchdog or just a long user
-# hold). Tells the receiving AI to wait for the next dictation
-# before responding so it doesn't process a half-sentence.
+# hold). The wording speaks to both audiences:
+#   - You (the user): see that you hit the cap, choose to delete this
+#     notice and keep dictating to extend the thought, or send as-is.
+#   - The AI: don't respond to a mid-thought; wait if the user is
+#     about to send more.
 # ASCII-only so it survives non-UTF8 receiving apps.
 _CONTINUATION_MARKER = (
-    "\n\n[CONTINUATION PENDING -- voice dictation was truncated at "
-    "the 60-second cap. Please wait for the next message before "
-    "responding.]"
+    "\n\n[60-second voice dictation limit reached -- transcription "
+    "was truncated. You can delete this notice and continue "
+    "dictating, or send as-is. AI: please wait for the user to "
+    "finish before responding.]"
 )
 
 
