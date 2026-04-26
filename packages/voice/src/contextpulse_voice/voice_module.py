@@ -13,11 +13,13 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import queue
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from contextpulse_core.config import APPDATA_DIR
 from contextpulse_core.spine import (
@@ -112,6 +114,33 @@ def _cleanup_old_recordings(
             logger.debug("Could not unlink overflow %s", p, exc_info=True)
 
 
+# ── Hook-thread offload ──────────────────────────────────────────────
+# pynput's keyboard hook callback runs on a thread that owns the Win32
+# WH_KEYBOARD_LL hook. Windows enforces `LowLevelHooksTimeout` (default
+# 5000ms) on that thread — exceed it and the OS silently unhooks pynput.
+# The cascading failures: keys appear stuck, the listener thread exits,
+# pystray unwinds, the daemon process returns with exit code 0.
+#
+# To make the hook callback non-blocking, all heavy work (open audio
+# device, stop+transcribe pipeline, fix-last) is dispatched onto a
+# dedicated worker thread via a bounded queue. Hook callbacks only
+# update lightweight state and enqueue a command.
+_VoiceAction = Literal["start", "stop", "fix_last", "shutdown"]
+_QUEUE_MAX = 8  # commands; small because we drop oldest on overflow
+_WORKER_GET_TIMEOUT_S = 1.0
+_WORKER_JOIN_TIMEOUT_S = 5.0
+
+
+@dataclass(frozen=True)
+class _VoiceCommand:
+    """One unit of work for the voice worker thread."""
+
+    action: _VoiceAction
+    app_name: str = ""
+    window_title: str = ""
+    enqueued_at: float = 0.0
+
+
 # Parse hotkey string into pynput keys
 _HOTKEY_MAP = {
     "ctrl": kb.Key.ctrl_l,
@@ -163,6 +192,12 @@ class VoiceModule(ModalityModule):
         self._last_wav_bytes: bytes | None = None
         self._last_stop_time: float = 0.0  # debounce: prevent double stop-recording
 
+        # Worker thread for hook-thread offload — see module docstring above
+        # the _VoiceCommand class. Created on start(), torn down on stop().
+        self._command_queue: queue.Queue[_VoiceCommand] = queue.Queue(maxsize=_QUEUE_MAX)
+        self._worker: threading.Thread | None = None
+        self._worker_stop = threading.Event()
+
         # Config
         cfg = get_voice_config()
         self._model_size = model_size or cfg["whisper_model"]
@@ -206,6 +241,10 @@ class VoiceModule(ModalityModule):
         self._running = True
         self._error = None
 
+        # Spin up the hook-offload worker BEFORE starting the listener so
+        # the first key event has somewhere to dispatch.
+        self._start_worker()
+
         # Start keyboard listener in a thread
         self._listener = kb.Listener(
             on_press=self._on_press,
@@ -223,6 +262,9 @@ class VoiceModule(ModalityModule):
         if self._listener:
             self._listener.stop()
             self._listener = None
+        # Tear down the worker LAST so any in-flight commands triggered
+        # by the listener still have somewhere to land.
+        self._stop_worker(timeout=_WORKER_JOIN_TIMEOUT_S)
         logger.info("VoiceModule stopped")
 
     def is_alive(self) -> bool:
@@ -231,7 +273,140 @@ class VoiceModule(ModalityModule):
         # Using _listener.is_alive() here causes false negatives and a permanent
         # voice=OFF tray status. _running is set True by start() and False only
         # by stop() or a genuine exception, so it is the reliable source of truth.
-        return self._running
+        #
+        # The worker thread, on the other hand, IS reliable: if it died we
+        # cannot dispatch hotkey commands, so the daemon watchdog should
+        # restart us. None means tests bypassed start() — accept that.
+        if not self._running:
+            return False
+        if self._worker is not None and not self._worker.is_alive():
+            return False
+        return True
+
+    # ── Worker thread ────────────────────────────────────────────────
+
+    def _start_worker(self) -> None:
+        """Spin up the dedicated voice worker thread.
+
+        Idempotent — calling twice is a no-op (existing worker survives).
+        """
+        if self._worker is not None and self._worker.is_alive():
+            return
+        self._worker_stop.clear()
+        self._worker = threading.Thread(
+            target=self._worker_loop,
+            name="cp-voice-worker",
+            daemon=True,
+        )
+        self._worker.start()
+
+    def _stop_worker(self, timeout: float = _WORKER_JOIN_TIMEOUT_S) -> None:
+        """Send shutdown sentinel + join the worker thread.
+
+        Best-effort: if the worker won't exit within `timeout`, we log
+        and move on. The daemon process is shutting down anyway.
+        """
+        if self._worker is None:
+            return
+        self._worker_stop.set()
+        try:
+            self._command_queue.put_nowait(
+                _VoiceCommand(action="shutdown", enqueued_at=time.time())
+            )
+        except queue.Full:
+            # Drain one slot and try again — sentinel must land
+            try:
+                self._command_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._command_queue.put_nowait(
+                    _VoiceCommand(action="shutdown", enqueued_at=time.time())
+                )
+            except queue.Full:
+                logger.warning("Could not enqueue shutdown sentinel")
+        self._worker.join(timeout=timeout)
+        if self._worker.is_alive():
+            logger.warning("Voice worker did not exit within %.1fs", timeout)
+        # NB: do NOT clear self._worker here. Tests + is_alive() inspect
+        # the post-shutdown thread to detect "worker died" — clearing
+        # the reference makes that impossible. _start_worker already
+        # idempotently checks is_alive() and replaces a dead one.
+
+    def _worker_loop(self) -> None:
+        """Drain the command queue, dispatch to handlers.
+
+        Each command is wrapped in try/except so a single failure
+        doesn't kill the worker.
+        """
+        logger.debug("Voice worker loop entered")
+        while not self._worker_stop.is_set():
+            try:
+                cmd = self._command_queue.get(timeout=_WORKER_GET_TIMEOUT_S)
+            except queue.Empty:
+                continue
+            if cmd.action == "shutdown":
+                logger.debug("Voice worker received shutdown sentinel")
+                return
+            try:
+                self._dispatch_command(cmd)
+            except Exception:
+                logger.exception("Voice worker: command %r raised — continuing", cmd.action)
+        logger.debug("Voice worker loop exited via stop event")
+
+    def _dispatch_command(self, cmd: _VoiceCommand) -> None:
+        """Invoke the appropriate handler for a command."""
+        if cmd.action == "start":
+            self._handle_start(cmd)
+        elif cmd.action == "stop":
+            self._handle_stop(cmd)
+        elif cmd.action == "fix_last":
+            self._handle_fix_last(cmd)
+        else:
+            logger.warning("Voice worker: unknown action %r", cmd.action)
+
+    def _enqueue(self, cmd: _VoiceCommand) -> None:
+        """Submit a command for the worker.
+
+        - If no worker is running (test-mode where start() wasn't
+          called), runs the command inline so existing tests keep
+          working without modification.
+        - If the queue is full, drops the OLDEST pending command and
+          logs a warning. We never block the hook thread.
+        """
+        if self._worker is None or not self._worker.is_alive():
+            # Test fallback: run inline so existing test suite works
+            # without spinning up real threads.
+            try:
+                self._dispatch_command(cmd)
+            except Exception:
+                logger.exception("Inline dispatch raised for %r", cmd.action)
+            return
+
+        try:
+            self._command_queue.put_nowait(cmd)
+            return
+        except queue.Full:
+            pass
+
+        # Drop oldest, then retry. Hook thread MUST NOT block.
+        try:
+            dropped = self._command_queue.get_nowait()
+            logger.warning(
+                "Voice command queue full — dropped oldest %r to make room for %r",
+                dropped.action,
+                cmd.action,
+            )
+        except queue.Empty:
+            pass
+        try:
+            self._command_queue.put_nowait(cmd)
+        except queue.Full:
+            logger.warning("Voice command queue still full — dropping %r", cmd.action)
+
+    def _enqueue_test(self, action: _VoiceAction) -> None:
+        """Test helper: enqueue a bare-action command."""
+        self._enqueue(_VoiceCommand(action=action, enqueued_at=time.time()))
 
     def get_status(self) -> dict[str, Any]:
         return {
@@ -300,6 +475,9 @@ class VoiceModule(ModalityModule):
             logger.exception("Error in voice _on_press handler (swallowed to keep listener alive)")
 
     def _on_press_inner(self, key: kb.Key | kb.KeyCode | None) -> None:
+        # CRITICAL: this callback runs on the pynput hook thread —
+        # it must return in <50ms or Windows unhooks the listener.
+        # All real work is dispatched onto the worker via _enqueue.
         self._pressed_keys.add(key)
         if key in (kb.Key.ctrl_l, kb.Key.ctrl_r):
             self._pressed_keys.add(kb.Key.ctrl_l)
@@ -315,7 +493,7 @@ class VoiceModule(ModalityModule):
             and not self._fixing
         ):
             self._fixing = True
-            threading.Thread(target=self._fix_last, daemon=True).start()
+            self._enqueue(_VoiceCommand(action="fix_last", enqueued_at=time.time()))
             return
 
         # Main dictation hotkey (hold)
@@ -325,19 +503,17 @@ class VoiceModule(ModalityModule):
             and not self._recording
         ):
             self._recording = True
+            # Capture foreground info now (cheap, registry lookup) but
+            # the actual recorder.start() call is dispatched on the worker.
             app_name, window_title = self._get_foreground_info()
-            self._recorder.start()
-            if self._overlay:
-                self._overlay.show_recording()
-            self._emit(
-                ContextEvent(
-                    modality=Modality.VOICE,
-                    event_type=EventType.SPEECH_START,
+            self._enqueue(
+                _VoiceCommand(
+                    action="start",
                     app_name=app_name,
                     window_title=window_title,
+                    enqueued_at=time.time(),
                 )
             )
-            logger.info("Recording...")
 
     def _on_release(self, key: kb.Key | kb.KeyCode | None) -> None:
         try:
@@ -360,6 +536,9 @@ class VoiceModule(ModalityModule):
             self._fixing = False
 
         if self._recording and not self._hotkey_keys.issubset(self._pressed_keys):
+            # CRITICAL: callback must return in <50ms — all heavy work
+            # (tail delay, recorder.stop, transcribe) goes to the worker.
+            #
             # Debounce: on Windows, multiple pynput keyboard hooks (Voice,
             # Touch, Sight) can cause duplicate release events for the same
             # physical key release.  Guard against firing twice within 1s.
@@ -374,28 +553,72 @@ class VoiceModule(ModalityModule):
             self._last_stop_time = now
 
             self._recording = False
-            if self._overlay:
-                self._overlay.show_transcribing()
             app_name, window_title = self._get_foreground_info()
-            self._emit(
-                ContextEvent(
-                    modality=Modality.VOICE,
-                    event_type=EventType.SPEECH_END,
+            self._enqueue(
+                _VoiceCommand(
+                    action="stop",
                     app_name=app_name,
                     window_title=window_title,
+                    enqueued_at=time.time(),
                 )
             )
 
-            # Stop recording and transcribe in a background thread.
-            # The thread adds a brief tail delay before stopping the
-            # stream so trailing speech is captured — this MUST NOT
-            # happen on the pynput listener thread or it blocks key
-            # event processing and causes runaway recording loops.
-            threading.Thread(
-                target=self._stop_and_transcribe,
-                args=(app_name, window_title),
-                daemon=True,
-            ).start()
+    # ── Worker handlers ──────────────────────────────────────────────
+    # These run on the cp-voice-worker thread, never on the hook thread.
+
+    def _handle_start(self, cmd: _VoiceCommand) -> None:
+        """Open the audio stream and emit SPEECH_START.
+
+        Called by the worker after a "start" command. Was previously
+        inline on the hook thread, where its 100-500ms WASAPI device
+        init blocked the listener.
+        """
+        if self._recorder is None:
+            logger.warning("Voice handler: recorder not initialized")
+            return
+        try:
+            self._recorder.start()
+        except Exception:
+            logger.exception("Recorder.start failed on worker")
+            self._recording = False  # release the latch so user can retry
+            return
+        if self._overlay:
+            self._overlay.show_recording()
+        self._emit(
+            ContextEvent(
+                modality=Modality.VOICE,
+                event_type=EventType.SPEECH_START,
+                app_name=cmd.app_name,
+                window_title=cmd.window_title,
+            )
+        )
+        logger.info("Recording...")
+
+    def _handle_stop(self, cmd: _VoiceCommand) -> None:
+        """Show transcribing overlay, emit SPEECH_END, and run the
+        stop+transcribe pipeline. Replaces the spawned thread that
+        used to be created on the hook callback."""
+        if self._overlay:
+            self._overlay.show_transcribing()
+        self._emit(
+            ContextEvent(
+                modality=Modality.VOICE,
+                event_type=EventType.SPEECH_END,
+                app_name=cmd.app_name,
+                window_title=cmd.window_title,
+            )
+        )
+        self._stop_and_transcribe(cmd.app_name, cmd.window_title)
+
+    def _handle_fix_last(self, _cmd: _VoiceCommand) -> None:
+        """Re-transcribe the last dictation. Replaces the spawned
+        thread that used to be created on the hook callback.
+
+        Note: `_fixing` is a key-state latch (set by press, cleared by
+        release in _on_release_inner) — NOT a work-progress flag. We do
+        not clear it here so a long fix-last run doesn't re-trigger
+        on the next user keypress."""
+        self._fix_last()
 
     # ── Transcription Pipeline ───────────────────────────────────────
 

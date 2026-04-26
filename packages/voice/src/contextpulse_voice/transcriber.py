@@ -25,18 +25,17 @@ class Transcriber(ABC):
         ...
 
 
-
 # Quality filters are DISABLED for dictation — they silently drop segments
 # and cause sentence truncation.  Only no_speech_threshold is kept at 0.95
 # to filter out pure silence.  These profiles are retained for logging only.
 #
 # Each profile is: (log_prob_threshold, no_speech_threshold, compression_ratio_threshold)
 _MODEL_THRESHOLDS: dict[str, tuple[float, float, float]] = {
-    "tiny":      (-1.5, 0.8, 3.0),
-    "base":      (-2.0, 0.85, 3.5),
-    "small":     (-3.0, 0.95, 5.0),
-    "medium":    (-3.0, 0.95, 5.0),
-    "large-v3":  (-3.5, 0.98, 6.0),
+    "tiny": (-1.5, 0.8, 3.0),
+    "base": (-2.0, 0.85, 3.5),
+    "small": (-3.0, 0.95, 5.0),
+    "medium": (-3.0, 0.95, 5.0),
+    "large-v3": (-3.5, 0.98, 6.0),
 }
 _DEFAULT_THRESHOLDS = (-3.0, 0.95, 5.0)
 
@@ -56,13 +55,15 @@ class LocalTranscriber(Transcriber):
         self._thresholds = _MODEL_THRESHOLDS.get(model_size, _DEFAULT_THRESHOLDS)
         logger.info(
             "Whisper '%s' thresholds: log_prob=%.1f, no_speech=%.2f, compression=%.1f",
-            model_size, *self._thresholds,
+            model_size,
+            *self._thresholds,
         )
         import platform
 
         if sys.platform == "darwin" and platform.machine() == "arm64":
             self._backend = "mlx"
             import mlx_whisper
+
             self._mlx_whisper = mlx_whisper
             # Map model sizes to HuggingFace repos
             model_map = {
@@ -85,7 +86,10 @@ class LocalTranscriber(Transcriber):
             logger.info("Whisper model loaded")
 
     def transcribe(
-        self, wav_bytes: bytes, beam_size: int = 1, initial_prompt: str = "",
+        self,
+        wav_bytes: bytes,
+        beam_size: int = 1,
+        initial_prompt: str = "",
     ) -> str:
         if not wav_bytes:
             return ""
@@ -94,6 +98,7 @@ class LocalTranscriber(Transcriber):
             # mlx-whisper needs a file path, write temp file
             import os
             import tempfile
+
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                 f.write(wav_bytes)
                 tmp_path = f.name
@@ -113,7 +118,16 @@ class LocalTranscriber(Transcriber):
             segments, info = self.model.transcribe(
                 audio_file,
                 beam_size=beam_size,
-                condition_on_previous_text=True,
+                # condition_on_previous_text=False:
+                # On long dictations, conditioning on prior segments
+                # extends decode time non-linearly and is the
+                # documented faster-whisper hallucination-loop path.
+                # Worse, holding the GIL >5s starves the pynput
+                # keyboard hook -> Windows unhooks the listener ->
+                # daemon dies cleanly with exit code 0. Trade a small
+                # amount of contextual coherence for a non-hanging
+                # dictation pipeline. (See incident 2026-04-26.)
+                condition_on_previous_text=False,
                 initial_prompt=initial_prompt or None,
                 # Disable all quality filters — they silently drop segments
                 # and cause mid-sentence/end-of-sentence truncation.
@@ -129,8 +143,12 @@ class LocalTranscriber(Transcriber):
                 t = seg.text.strip()
                 logger.info(
                     "Segment [%.1f-%.1fs] logprob=%.2f no_speech=%.2f cr=%.1f %r",
-                    seg.start, seg.end, seg.avg_logprob,
-                    seg.no_speech_prob, seg.compression_ratio, t[:60],
+                    seg.start,
+                    seg.end,
+                    seg.avg_logprob,
+                    seg.no_speech_prob,
+                    seg.compression_ratio,
+                    t[:60],
                 )
                 if t and (not parts or t != parts[-1]):
                     parts.append(t)

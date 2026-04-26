@@ -5,7 +5,12 @@ import wave
 from unittest.mock import MagicMock
 
 import numpy as np
-from contextpulse_voice.recorder import CHANNELS, SAMPLE_RATE, Recorder
+from contextpulse_voice.recorder import (
+    _MAX_RECORDING_S,
+    CHANNELS,
+    SAMPLE_RATE,
+    Recorder,
+)
 
 
 class TestRecorder:
@@ -100,7 +105,60 @@ class TestRecorder:
 
         def _boom(*args, **kwargs):
             raise OSError("no audio device")
+
         monkeypatch.setattr(rec_mod.sd, "InputStream", _boom)
 
         r = Recorder()
         r.warm_start()  # must not raise
+
+
+class TestRecordingDurationCap:
+    """Audio is truncated to _MAX_RECORDING_S in _to_wav.
+
+    Bounds transcribe time and protects against stuck-hotkey runaway
+    recordings that could otherwise hold the GIL long enough to
+    starve the pynput keyboard hook.
+    """
+
+    def test_short_recording_passes_through(self):
+        """A 1-second recording is well under the cap and untouched."""
+        r = Recorder()
+        # 1 second of audio: 100 callbacks * 160 samples = 16000 samples
+        for _ in range(100):
+            r._frames.append(np.zeros((160, 1), dtype=np.int16))
+        wav_bytes = r._to_wav()
+        wf = wave.open(io.BytesIO(wav_bytes), "rb")
+        # 16000 samples / 16000 Hz = 1 second
+        assert wf.getnframes() == 16000
+        wf.close()
+
+    def test_recording_exceeding_cap_is_truncated(self):
+        """A 90-second recording is truncated to _MAX_RECORDING_S."""
+        r = Recorder()
+        # 90 seconds of audio at 16kHz, in 1600-sample chunks
+        chunk_size = 1600
+        total_chunks = (90 * SAMPLE_RATE) // chunk_size
+        for _ in range(total_chunks):
+            r._frames.append(np.zeros((chunk_size, 1), dtype=np.int16))
+        wav_bytes = r._to_wav()
+        wf = wave.open(io.BytesIO(wav_bytes), "rb")
+        max_samples = int(_MAX_RECORDING_S * SAMPLE_RATE)
+        assert wf.getnframes() == max_samples, (
+            f"expected truncation to {max_samples} samples, got {wf.getnframes()}"
+        )
+        wf.close()
+
+    def test_cap_logs_warning(self, caplog):
+        """When truncation triggers, a WARNING is logged."""
+        import logging
+
+        r = Recorder()
+        chunk_size = 1600
+        total_chunks = (90 * SAMPLE_RATE) // chunk_size
+        for _ in range(total_chunks):
+            r._frames.append(np.zeros((chunk_size, 1), dtype=np.int16))
+        with caplog.at_level(logging.WARNING):
+            r._to_wav()
+        assert any("truncating" in rec.message.lower() for rec in caplog.records), (
+            "expected truncation warning"
+        )
