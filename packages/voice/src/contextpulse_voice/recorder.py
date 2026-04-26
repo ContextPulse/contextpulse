@@ -59,6 +59,15 @@ _SILENCE_THRESHOLD_RMS = 200  # RMS below this = silence (int16 range)
 _SILENCE_DURATION_S = 0.5  # need 500ms of consecutive silence to stop
 _MAX_TAIL_S = 2.0  # hard cap on tail extension
 
+# Hard cap on total dictation length. Anything longer is more likely
+# a stuck hotkey or a forgotten release than legitimate speech, AND
+# long clips put the transcribe pipeline at GIL-hold risk that can
+# starve the pynput keyboard hook (Windows then unhooks the listener
+# and the daemon dies cleanly with exit code 0). Captured audio is
+# truncated to this length at WAV-conversion time. Users who need
+# longer can release + re-press to start a new dictation.
+_MAX_RECORDING_S = 60.0
+
 
 class Recorder:
     """Records audio from the default microphone."""
@@ -180,11 +189,25 @@ class Recorder:
         self._frames.append(indata.copy())
 
     def _to_wav(self) -> bytes:
-        """Convert captured frames to WAV bytes."""
+        """Convert captured frames to WAV bytes.
+
+        Truncates audio to `_MAX_RECORDING_S` to bound transcribe time
+        and protect against stuck-hotkey runaway recordings.
+        """
         if not self._frames:
             logger.warning("No audio frames captured")
             return b""
         audio = np.concatenate(self._frames, axis=0)
+        max_samples = int(_MAX_RECORDING_S * self.sample_rate)
+        if audio.shape[0] > max_samples:
+            duration_s = audio.shape[0] / self.sample_rate
+            logger.warning(
+                "Recording (%.1fs) exceeded max (%.1fs) — truncating to keep "
+                "the transcribe pipeline responsive",
+                duration_s,
+                _MAX_RECORDING_S,
+            )
+            audio = audio[:max_samples]
         buf = io.BytesIO()
         with wave.open(buf, "wb") as wf:
             wf.setnchannels(self.channels)
