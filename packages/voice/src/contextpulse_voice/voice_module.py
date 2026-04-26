@@ -33,7 +33,7 @@ from pynput import keyboard as kb
 from contextpulse_voice.cleanup import clean
 from contextpulse_voice.config import get_voice_config, has_api_key
 from contextpulse_voice.paster import paste_text
-from contextpulse_voice.recorder import Recorder, save_wav_bytes
+from contextpulse_voice.recorder import _MAX_RECORDING_S, Recorder, save_wav_bytes
 from contextpulse_voice.vocabulary import apply_punctuation, apply_vocabulary
 
 logger = logging.getLogger(__name__)
@@ -130,6 +130,17 @@ _QUEUE_MAX = 8  # commands; small because we drop oldest on overflow
 _WORKER_GET_TIMEOUT_S = 1.0
 _WORKER_JOIN_TIMEOUT_S = 5.0
 
+# Stuck-release safety net: pynput on Windows can occasionally drop
+# release events under heavy hook load (incident 2026-04-26: 128s
+# recording with no release event ever delivered). The worker
+# monitors recording duration on every queue.get-timeout pass and
+# force-enqueues a STOP if we exceed the duration cap + grace.
+# Cap is sourced from recorder._MAX_RECORDING_S (single source of
+# truth). Re-exported here so tests can monkeypatch one constant
+# instead of reaching into recorder internals.
+
+_RECORDING_TIMEOUT_GRACE_S = 5.0
+
 
 @dataclass(frozen=True)
 class _VoiceCommand:
@@ -197,6 +208,12 @@ class VoiceModule(ModalityModule):
         self._command_queue: queue.Queue[_VoiceCommand] = queue.Queue(maxsize=_QUEUE_MAX)
         self._worker: threading.Thread | None = None
         self._worker_stop = threading.Event()
+
+        # Stuck-release safety net: timestamp of the current active
+        # recording (None when not recording). Stamped in _handle_start,
+        # cleared in _handle_stop. The worker checks this on every
+        # idle pass and force-enqueues STOP if elapsed > cap + grace.
+        self._recording_started_at: float | None = None
 
         # Config
         cfg = get_voice_config()
@@ -338,12 +355,17 @@ class VoiceModule(ModalityModule):
 
         Each command is wrapped in try/except so a single failure
         doesn't kill the worker.
+
+        On every queue.get-timeout (idle) pass, also runs the
+        stuck-release safety net — see _check_recording_timeout.
         """
         logger.debug("Voice worker loop entered")
         while not self._worker_stop.is_set():
             try:
                 cmd = self._command_queue.get(timeout=_WORKER_GET_TIMEOUT_S)
             except queue.Empty:
+                # Idle tick — opportunistic safety check.
+                self._check_recording_timeout()
                 continue
             if cmd.action == "shutdown":
                 logger.debug("Voice worker received shutdown sentinel")
@@ -353,6 +375,44 @@ class VoiceModule(ModalityModule):
             except Exception:
                 logger.exception("Voice worker: command %r raised — continuing", cmd.action)
         logger.debug("Voice worker loop exited via stop event")
+
+    def _check_recording_timeout(self) -> None:
+        """If a recording has been active longer than the cap (plus
+        grace), force-enqueue a STOP. Defends against pynput dropping
+        release events on Windows under hook load.
+        """
+        started = self._recording_started_at
+        if started is None:
+            return
+        # Read globals at call time so tests can monkeypatch.
+        cap = globals()["_MAX_RECORDING_S"]
+        grace = globals()["_RECORDING_TIMEOUT_GRACE_S"]
+        elapsed = time.monotonic() - started
+        if elapsed <= cap + grace:
+            return
+        logger.warning(
+            "Recording exceeded cap (%.1fs > %.1fs + %.1fs grace) — "
+            "auto-stopping. Likely pynput dropped a release event.",
+            elapsed,
+            cap,
+            grace,
+        )
+        # Clear timestamp so we only fire once per stuck recording
+        self._recording_started_at = None
+        # Reset the latch on the hook side so a future press is honored
+        self._recording = False
+        app_name, window_title = self._get_foreground_info()
+        try:
+            self._command_queue.put_nowait(
+                _VoiceCommand(
+                    action="stop",
+                    app_name=app_name,
+                    window_title=window_title,
+                    enqueued_at=time.time(),
+                )
+            )
+        except queue.Full:
+            logger.warning("Could not enqueue auto-stop — queue full")
 
     def _dispatch_command(self, cmd: _VoiceCommand) -> None:
         """Invoke the appropriate handler for a command."""
@@ -506,6 +566,13 @@ class VoiceModule(ModalityModule):
             # Capture foreground info now (cheap, registry lookup) but
             # the actual recorder.start() call is dispatched on the worker.
             app_name, window_title = self._get_foreground_info()
+            # Overlay state change runs on the hook thread — fast enough,
+            # and avoids any tkinter-from-worker-thread quirks.
+            if self._overlay:
+                try:
+                    self._overlay.show_recording()
+                except Exception:
+                    logger.debug("Overlay show_recording failed (non-fatal)", exc_info=True)
             self._enqueue(
                 _VoiceCommand(
                     action="start",
@@ -554,6 +621,12 @@ class VoiceModule(ModalityModule):
 
             self._recording = False
             app_name, window_title = self._get_foreground_info()
+            # Overlay update on hook thread (was here originally; works).
+            if self._overlay:
+                try:
+                    self._overlay.show_transcribing()
+                except Exception:
+                    logger.debug("Overlay show_transcribing failed (non-fatal)", exc_info=True)
             self._enqueue(
                 _VoiceCommand(
                     action="stop",
@@ -582,8 +655,8 @@ class VoiceModule(ModalityModule):
             logger.exception("Recorder.start failed on worker")
             self._recording = False  # release the latch so user can retry
             return
-        if self._overlay:
-            self._overlay.show_recording()
+        # Stamp recording start for the stuck-release watchdog.
+        self._recording_started_at = time.monotonic()
         self._emit(
             ContextEvent(
                 modality=Modality.VOICE,
@@ -595,11 +668,14 @@ class VoiceModule(ModalityModule):
         logger.info("Recording...")
 
     def _handle_stop(self, cmd: _VoiceCommand) -> None:
-        """Show transcribing overlay, emit SPEECH_END, and run the
-        stop+transcribe pipeline. Replaces the spawned thread that
-        used to be created on the hook callback."""
-        if self._overlay:
-            self._overlay.show_transcribing()
+        """Emit SPEECH_END and run the stop+transcribe pipeline.
+        Replaces the spawned thread that used to be created on the
+        hook callback. Overlay state changes are made on the hook
+        thread (in _on_release_inner) — keeping them off the worker
+        avoids any tkinter-from-non-main-thread quirks."""
+        # Clear recording timestamp BEFORE we start the transcribe
+        # pipeline — the watchdog must not retry-fire mid-transcribe.
+        self._recording_started_at = None
         self._emit(
             ContextEvent(
                 modality=Modality.VOICE,
