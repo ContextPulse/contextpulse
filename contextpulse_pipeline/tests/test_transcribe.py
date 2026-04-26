@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from contextpulse_pipeline.manifest import AudioEntry, ContainerState, Manifest
+from contextpulse_pipeline.manifest import AudioEntry, Manifest
 from contextpulse_pipeline.transcribe import AudioTooLargeError, transcribe
 
 # ---------------------------------------------------------------------------
@@ -94,7 +94,9 @@ class TestIdempotentSkip:
         s3 = _make_s3_client(existing_keys=[existing_key])
 
         with patch("contextpulse_pipeline.transcribe._call_groq") as mock_groq:
-            result = transcribe(audio, episode="ep-test", manifest=m, s3_client=s3, bucket="test-bucket")
+            result = transcribe(
+                audio, episode="ep-test", manifest=m, s3_client=s3, bucket="test-bucket"
+            )
 
         mock_groq.assert_not_called()
         assert result == existing_key
@@ -115,8 +117,12 @@ class TestIdempotentSkip:
 
         fake_result = {"text": "hello", "segments": []}
 
-        with patch("contextpulse_pipeline.transcribe._call_groq", return_value=fake_result) as mock_groq:
-            result = transcribe(audio, episode="ep-test", manifest=m, s3_client=s3, bucket="test-bucket")
+        with patch(
+            "contextpulse_pipeline.transcribe._call_groq", return_value=fake_result
+        ) as mock_groq:
+            result = transcribe(
+                audio, episode="ep-test", manifest=m, s3_client=s3, bucket="test-bucket"
+            )
 
         mock_groq.assert_called_once()
         assert "transcripts" in result
@@ -154,10 +160,14 @@ class TestRetryWithWait:
             return {"text": "recovered", "segments": []}
 
         with (
-            patch("contextpulse_pipeline.transcribe._call_groq", side_effect=_fail_twice_then_succeed),
+            patch(
+                "contextpulse_pipeline.transcribe._call_groq", side_effect=_fail_twice_then_succeed
+            ),
             patch("contextpulse_pipeline.transcribe.time.sleep"),  # skip real sleep
         ):
-            result = transcribe(audio, episode="ep-test", manifest=m, s3_client=s3, bucket="test-bucket")
+            result = transcribe(
+                audio, episode="ep-test", manifest=m, s3_client=s3, bucket="test-bucket"
+            )
 
         assert call_count == 3
         assert result is not None
@@ -231,6 +241,42 @@ class TestRetryWithWait:
 
 
 # ---------------------------------------------------------------------------
+# SDK exception translation (would have caught the v0.1 acceptance-test bug)
+# ---------------------------------------------------------------------------
+
+
+class TestSdkExceptionTranslation:
+    """The SDK's groq.RateLimitError must be translated to the package's
+    GroqRateLimitError so the retry-with-wait loop catches it.
+
+    Regression: v0.1 shipped with _call_groq letting groq.RateLimitError escape,
+    bypassing the retry loop entirely. Caught by the Phase 3 acceptance test
+    on 2026-04-26 when Groq's free-tier ASPH (7200 sec/hour) was hit on file 5/7.
+    """
+
+    def test_sdk_rate_limit_translates_to_package_exception(self, tmp_path: Path) -> None:
+        from contextpulse_pipeline.transcribe import GroqRateLimitError, _call_groq
+
+        audio = _make_audio_file(tmp_path)
+
+        # Build a fake groq SDK module with RateLimitError that mimics the real one
+        fake_sdk_exc = type("RateLimitError", (Exception,), {})
+        fake_client = MagicMock()
+        fake_client.audio.transcriptions.create.side_effect = fake_sdk_exc(
+            "Rate limit reached for whisper-large-v3 ... try again in 14m8s"
+        )
+
+        with (
+            patch("groq.Groq", return_value=fake_client),
+            patch("groq.RateLimitError", fake_sdk_exc),
+        ):
+            with pytest.raises(GroqRateLimitError) as exc_info:
+                _call_groq(audio)
+
+        assert "14m8s" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
 # Auto-compress for large files (Rule #7)
 # ---------------------------------------------------------------------------
 
@@ -259,7 +305,10 @@ class TestAutoCompress:
                 "contextpulse_pipeline.transcribe.compress_for_whisper",
                 return_value=compressed,
             ) as mock_compress,
-            patch("contextpulse_pipeline.transcribe._call_groq", return_value={"text": "ok", "segments": []}),
+            patch(
+                "contextpulse_pipeline.transcribe._call_groq",
+                return_value={"text": "ok", "segments": []},
+            ),
         ):
             transcribe(audio, episode="ep-test", manifest=m, s3_client=s3, bucket="test-bucket")
 
@@ -282,7 +331,10 @@ class TestAutoCompress:
 
         with (
             patch("contextpulse_pipeline.transcribe.compress_for_whisper") as mock_compress,
-            patch("contextpulse_pipeline.transcribe._call_groq", return_value={"text": "ok", "segments": []}),
+            patch(
+                "contextpulse_pipeline.transcribe._call_groq",
+                return_value={"text": "ok", "segments": []},
+            ),
         ):
             transcribe(audio, episode="ep-test", manifest=m, s3_client=s3, bucket="test-bucket")
 
