@@ -142,6 +142,18 @@ _WORKER_JOIN_TIMEOUT_S = 5.0
 _RECORDING_TIMEOUT_GRACE_S = 5.0
 
 
+# Appended to transcribed text when the recorder truncated the audio
+# buffer (either via the stuck-release watchdog or just a long user
+# hold). Tells the receiving AI to wait for the next dictation
+# before responding so it doesn't process a half-sentence.
+# ASCII-only so it survives non-UTF8 receiving apps.
+_CONTINUATION_MARKER = (
+    "\n\n[CONTINUATION PENDING -- voice dictation was truncated at "
+    "the 60-second cap. Please wait for the next message before "
+    "responding.]"
+)
+
+
 @dataclass(frozen=True)
 class _VoiceCommand:
     """One unit of work for the voice worker thread."""
@@ -818,6 +830,16 @@ class VoiceModule(ModalityModule):
                     self._overlay.hide()
                 return
 
+            # Truncation continuation marker: if the recorder hit
+            # _MAX_RECORDING_S and clipped the buffer, the transcribed
+            # text is mid-sentence. Append a clear notice so the
+            # receiving AI waits for the next dictation rather than
+            # responding to a cut-off thought.
+            was_truncated = bool(getattr(self._recorder, "was_truncated", False))
+            if was_truncated:
+                text = text + _CONTINUATION_MARKER
+                logger.info("Recording was truncated — appended continuation marker")
+
             self._last_wav_bytes = wav_bytes
             paste_timestamp, paste_hash = paste_text(text)
             if self._overlay:
@@ -839,6 +861,7 @@ class VoiceModule(ModalityModule):
                         "cleanup_applied": use_llm,
                         "paste_text_hash": paste_hash,
                         "paste_timestamp": paste_timestamp,
+                        "was_truncated": was_truncated,
                     },
                 )
             )
