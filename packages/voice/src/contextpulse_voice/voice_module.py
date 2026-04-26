@@ -384,9 +384,10 @@ class VoiceModule(ModalityModule):
         started = self._recording_started_at
         if started is None:
             return
-        # Read globals at call time so tests can monkeypatch.
-        cap = globals()["_MAX_RECORDING_S"]
-        grace = globals()["_RECORDING_TIMEOUT_GRACE_S"]
+        # Bare references resolve at call time against this module's
+        # globals, so tests can still monkeypatch these constants.
+        cap = _MAX_RECORDING_S
+        grace = _RECORDING_TIMEOUT_GRACE_S
         elapsed = time.monotonic() - started
         if elapsed <= cap + grace:
             return
