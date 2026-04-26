@@ -72,7 +72,7 @@ dev = [
     "pytest-timeout>=2.4.0",
     "pytest-threadleak>=0.1",
     "hypothesis>=6.100",
-    "ruff>=0.15.11",
+    "ruff>=0.15.12",
     "moto[s3]>=5.0",
     "botocore>=1.34",
 ]
