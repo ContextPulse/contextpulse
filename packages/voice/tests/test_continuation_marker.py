@@ -113,8 +113,8 @@ class TestContinuationMarker:
         assert not mock_paste.called
 
     def test_marker_text_is_ascii_and_clear(self):
-        """The marker must survive non-UTF8 receiving apps and be
-        unambiguous to a downstream LLM."""
+        """The marker must survive non-UTF8 receiving apps and address
+        both audiences (user + AI) clearly."""
         from contextpulse_voice.voice_module import _CONTINUATION_MARKER
 
         # ASCII-only check — no smart quotes, em dashes, or emoji that
@@ -124,10 +124,19 @@ class TestContinuationMarker:
         except UnicodeEncodeError as exc:
             pytest.fail(f"Marker contains non-ASCII: {exc}")
 
-        # The marker contains an unambiguous instruction
         marker_lower = _CONTINUATION_MARKER.lower()
-        assert "continuation" in marker_lower
-        assert "wait" in marker_lower or "before responding" in marker_lower
+        # Speaks to the user: gives them an action to take
+        assert (
+            "delete" in marker_lower
+            or "continue" in marker_lower
+            or "erase" in marker_lower
+        ), "marker must offer the user an action"
+        # Speaks to the AI: tells it to wait
+        assert (
+            "wait" in marker_lower or "before responding" in marker_lower
+        ), "marker must instruct the AI to wait"
+        # Names what happened so the user understands at a glance
+        assert "60-second" in marker_lower or "truncat" in marker_lower
 
     def test_marker_event_payload_records_truncation(self, module):
         """The TRANSCRIPTION event payload should record was_truncated
