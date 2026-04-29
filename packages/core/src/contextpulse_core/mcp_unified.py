@@ -30,7 +30,14 @@ import logging
 import signal
 import sys
 
+# isort: off
+# Import _thread_caps FIRST so OMP/MKL/OPENBLAS/NUMEXPR env vars are set
+# before transitive imports (memory/voice tool modules) pull in numpy /
+# faster-whisper / sentence-transformers and eagerly allocate worker pools.
+# Without this, the daemon spawns ~163 baseline threads (incident: 2026-04-29).
+from contextpulse_core import _thread_caps  # noqa: F401  side-effect; must be first
 from mcp.server.fastmcp import FastMCP
+# isort: on
 
 logging.basicConfig(
     level=logging.INFO,
