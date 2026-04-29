@@ -25,6 +25,12 @@ import time
 import traceback
 from pathlib import Path
 
+# Import _thread_caps FIRST so that OMP/MKL/OPENBLAS/NUMEXPR env vars are set
+# before any contextpulse module transitively imports numpy or faster-whisper.
+# Without this, each pool eagerly allocates ``cpu_count()`` worker threads at
+# first import — see _thread_caps.py for the full incident write-up.
+from contextpulse_core import _thread_caps  # noqa: F401  -- side-effect import; must be first
+
 if sys.platform == "darwin":
     # rumps imported lazily in tray_macos.py
     pass
