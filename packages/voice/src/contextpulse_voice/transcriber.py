@@ -75,13 +75,30 @@ class LocalTranscriber(Transcriber):
             logger.info("Using mlx-whisper with model %s", self._mlx_model)
         else:
             self._backend = "ctranslate2"
+            from contextpulse_core._thread_caps import get_cap
             from faster_whisper import WhisperModel
 
             from contextpulse_voice.model_manager import get_model_path
 
             model_path = get_model_path(model_size)
-            logger.info("Loading Whisper '%s' model (path: %s)...", model_size, model_path)
-            self.model = WhisperModel(model_path, device=device, compute_type="int8")
+            cpu_threads = get_cap()
+            logger.info(
+                "Loading Whisper '%s' model (path: %s, cpu_threads=%d)...",
+                model_size, model_path, cpu_threads,
+            )
+            # cpu_threads caps the OpenMP intra-op pool; num_workers=1 keeps
+            # the inter-op (batch parallelism) pool at a single worker since
+            # ContextPulse only ever transcribes one clip at a time. Without
+            # these, ctranslate2 allocates ~cpu_count() workers per pool which
+            # was the dominant contributor to a 163-thread daemon baseline
+            # (incident: 2026-04-29).
+            self.model = WhisperModel(
+                model_path,
+                device=device,
+                compute_type="int8",
+                cpu_threads=cpu_threads,
+                num_workers=1,
+            )
             logger.info("Whisper model loaded")
 
     def transcribe(
