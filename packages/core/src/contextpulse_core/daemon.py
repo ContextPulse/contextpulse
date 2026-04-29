@@ -51,6 +51,60 @@ LOG_FILE = OUTPUT_DIR / "contextpulse.log"
 CRASH_LOG = OUTPUT_DIR / "contextpulse_crash.log"
 ACTIVITY_DB_PATH = OUTPUT_DIR / os.environ.get("CONTEXTPULSE_ACTIVITY_DB", "activity.db")
 
+# Default warn threshold for the thread-budget diagnostic. Override via
+# CONTEXTPULSE_THREAD_BUDGET_WARN. The 2026-04-29 incident saw a 163-thread
+# baseline; with _thread_caps in place the expected steady-state is ~30-50.
+# A threshold of 100 leaves headroom while still catching real regressions.
+THREAD_BUDGET_WARN_DEFAULT = 100
+
+
+def sample_os_thread_count() -> int | None:
+    """Return the OS-level thread count for the current process.
+
+    Uses psutil if available; returns None on ImportError so the caller
+    can gracefully fall back. C extension threads (OpenMP/BLAS workers)
+    only appear in the OS count, not threading.active_count() — that's
+    why this is the metric that actually matters for the leak we're
+    monitoring.
+    """
+    try:
+        import psutil
+    except ImportError:
+        return None
+    try:
+        return int(psutil.Process().num_threads())
+    except Exception:
+        # psutil raised — process may be in an odd state. Don't crash the
+        # watchdog; just degrade.
+        return None
+
+
+def format_thread_budget(py_active: int, os_threads: int | None) -> str:
+    """One-line diagnostic format for the thread-budget log."""
+    os_part = str(os_threads) if os_threads is not None else "?"
+    return f"thread budget: py={py_active} os={os_part}"
+
+
+def log_thread_budget(
+    py_active: int,
+    os_threads: int | None,
+    warn_threshold: int = THREAD_BUDGET_WARN_DEFAULT,
+) -> None:
+    """Emit the thread-budget log line at INFO or WARNING.
+
+    The OS thread count is preferred for threshold comparison (it reflects
+    C extension worker pools); when psutil is unavailable, fall back to
+    the Python-level active_count(). Note that ``py_active`` is typically
+    much smaller than ``os_threads``, so a fallback warning is intentionally
+    noisier than a normal one would be.
+    """
+    msg = format_thread_budget(py_active, os_threads)
+    metric_for_threshold = os_threads if os_threads is not None else py_active
+    if metric_for_threshold >= warn_threshold:
+        logger.warning("%s (>= %d)", msg, warn_threshold)
+    else:
+        logger.info(msg)
+
 
 def _setup_logging() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -281,19 +335,38 @@ class ContextPulseDaemon:
         """
         MAX_RESTARTS = 3
         STUCK_PAUSE_THRESHOLD = 3600  # 1 hour — if paused this long, likely stuck
+        # Thread-budget diagnostic cadence: log every 4 watchdog ticks (~60s).
+        BUDGET_LOG_EVERY = 4
+        budget_warn = int(os.environ.get(
+            "CONTEXTPULSE_THREAD_BUDGET_WARN", str(THREAD_BUDGET_WARN_DEFAULT)
+        ))
         heartbeat_path = OUTPUT_DIR / "heartbeat"
         logger.info("Daemon watchdog started (monitoring Voice + Touch + heartbeat + stuck-pause)")
 
+        tick = 0
         while not self.stop_event.is_set():
             self.stop_event.wait(15)  # check every 15 seconds
             if self.stop_event.is_set():
                 break
+            tick += 1
 
             # Write heartbeat file (timestamp) for external health checks
             try:
                 heartbeat_path.write_text(str(time.time()), encoding="utf-8")
             except Exception:
                 logger.debug("Heartbeat write failed", exc_info=True)
+
+            # Thread-budget diagnostic — emit every ~60s so leak regressions
+            # are visible in the log without an external probe.
+            if tick % BUDGET_LOG_EVERY == 0:
+                try:
+                    log_thread_budget(
+                        py_active=threading.active_count(),
+                        os_threads=sample_os_thread_count(),
+                        warn_threshold=budget_warn,
+                    )
+                except Exception:
+                    logger.debug("Thread budget log failed", exc_info=True)
 
             # Stuck-pause detection: if Sight has been paused but the user
             # didn't manually pause, the session monitor may have died.
