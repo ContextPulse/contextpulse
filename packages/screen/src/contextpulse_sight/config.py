@@ -35,6 +35,16 @@ BUFFER_DIR = OUTPUT_DIR / "buffer"
 BUFFER_MAX_AGE = max(0, int(_env("CONTEXTPULSE_BUFFER_MAX_AGE", "1800")))  # seconds (30 min)
 CHANGE_THRESHOLD = max(0.0, float(_env("CONTEXTPULSE_CHANGE_THRESHOLD", "0.5")))  # % pixel diff
 
+# OCR-skip threshold — frames stored in the buffer below this diff %
+# are NOT enqueued for OCR. Idle screens with cursor blinks / clock ticks
+# usually produce 0.5%-3% diffs, which is enough to update the visual
+# buffer but not worth a 0.2-0.7s OCR pass. Real content changes (window
+# switch, scroll, edit) produce >5% diffs. Set to 0 to disable the gate
+# (fall back to prior behavior of always OCR'ing every stored frame).
+OCR_DIFF_THRESHOLD = max(
+    0.0, float(_env("CONTEXTPULSE_OCR_DIFF_THRESHOLD", "5.0"))
+)  # % pixel diff
+
 # Storage mode: "smart" (text-only when text-heavy, image otherwise),
 #               "visual" (always save image, never text-only),
 #               "both" (always save image + run OCR text),

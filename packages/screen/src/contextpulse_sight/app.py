@@ -29,6 +29,7 @@ from contextpulse_sight.config import (
     CHANGE_THRESHOLD,
     FILE_LATEST,
     FILE_REGION,
+    OCR_DIFF_THRESHOLD,
     OUTPUT_DIR,
 )
 from contextpulse_sight.events import EventDetector
@@ -43,6 +44,29 @@ from contextpulse_sight.privacy import (
 from contextpulse_sight.sight_module import SightModule
 
 _WARNING_COLOR = _COLORS.get("dark", {}).get("warning", "#F0B429")
+
+
+def should_run_ocr(diff_pct: float, force_ocr: bool, threshold: float) -> bool:
+    """Return True if a stored frame should be enqueued for OCR.
+
+    The capture loop stores any frame above the buffer ``CHANGE_THRESHOLD``
+    (default 0.5%). On idle screens that includes cursor blinks and clock
+    ticks — frames that match the previous one almost everywhere. OCR'ing
+    each one costs 0.2-0.7s of CPU per monitor per cycle, which sustained
+    20-40% of one core. This gate skips OCR for those near-identical
+    frames; the visual buffer still records them for replay.
+
+    The ``force_ocr`` flag lets event-driven captures (window switch, app
+    focus change) bypass the gate so meaningful UI transitions are always
+    indexed even if the pixel diff happens to be small.
+
+    Setting ``threshold`` to 0 disables the gate (always OCR), restoring
+    pre-2026-04-29 behavior.
+    """
+    if force_ocr:
+        return True
+    return diff_pct >= threshold
+
 
 _LOG_FILE = OUTPUT_DIR / "contextpulse_sight.log"
 
@@ -144,8 +168,15 @@ class ContextPulseSightApp:
 
     # -- Auto-capture loop -------------------------------------------------
 
-    def _do_auto_capture(self):
-        """Capture all monitors, store in buffer, record activity. Returns True on success."""
+    def _do_auto_capture(self, force_ocr: bool = False):
+        """Capture all monitors, store in buffer, record activity. Returns True on success.
+
+        Args:
+            force_ocr: When True, every stored frame is OCR'd regardless of
+                diff_pct. Set by the auto-capture loop on event-driven runs
+                (window switch, app focus change) so meaningful UI changes
+                are always indexed even when their pixel diff is small.
+        """
         monitors = capture.capture_all_monitors(keep_native=True)
         cursor_idx = monitors[0][0] if monitors else 0
         try:
@@ -185,13 +216,22 @@ class ContextPulseSightApp:
                     diff_score=diff_pct,
                 )
                 # Queue for background OCR — pass native-res image for
-                # higher OCR accuracy (buffer stores downscaled JPEG)
+                # higher OCR accuracy (buffer stores downscaled JPEG).
+                # Skip OCR on near-identical frames (cursor blinks, clock
+                # ticks) per OCR_DIFF_THRESHOLD; force_ocr=True bypasses
+                # the gate for event-driven captures.
                 if frame_path and isinstance(frame_path, Path):
-                    self._ocr_worker.enqueue(
-                        frame_path, row_id, app_name,
-                        window_title=window_title,
-                        native_img=img,
-                    )
+                    if should_run_ocr(diff_pct, force_ocr, OCR_DIFF_THRESHOLD):
+                        self._ocr_worker.enqueue(
+                            frame_path, row_id, app_name,
+                            window_title=window_title,
+                            native_img=img,
+                        )
+                    else:
+                        logger.debug(
+                            "OCR skipped m%d (diff=%.1f%% < %.1f%%)",
+                            idx, diff_pct, OCR_DIFF_THRESHOLD,
+                        )
 
                 if idx == cursor_idx:
                     capture.save_image(img, FILE_LATEST, fmt="JPEG")
@@ -230,7 +270,10 @@ class ContextPulseSightApp:
                         logger.debug("Event-driven capture: %s", reason)
                         self._event_detector.clear_pending()
 
-                    self._do_auto_capture()
+                    # Event-driven captures always OCR (window switch / app
+                    # focus change is meaningful even with small pixel diff).
+                    # Timer-driven captures rely on the OCR_DIFF_THRESHOLD gate.
+                    self._do_auto_capture(force_ocr=event_fired)
                     last_capture_time = time.time()
                     consecutive_errors = 0
                 except MemoryError:
