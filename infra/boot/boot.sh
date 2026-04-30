@@ -85,6 +85,11 @@ PYEOF
 mark "06-models-ready"
 
 # Systemd unit for the worker (idempotent)
+# Worker systemd unit + ExecStopPost log capture (so we always get logs even if
+# the worker calls shutdown -h now from its self-terminate fallback).
+# Lesson 2026-04-29: prior on-demand run died silently with no master files
+# and no recoverable journalctl — instance went into shutting-down before SSM
+# could fetch logs. ExecStopPost fires during graceful service stop (incl. shutdown).
 tee /etc/systemd/system/cpp-spot-worker.service >/dev/null <<EOF
 [Unit]
 Description=ContextPulse Spot Worker
@@ -93,8 +98,10 @@ After=network-online.target
 Type=simple
 User=ubuntu
 ExecStart=/opt/cpp/venv/bin/python -m contextpulse_pipeline.workers.spot_worker
+ExecStopPost=/usr/bin/bash -c 'TS=\$(date -u +%Y%m%dT%H%M%SZ); journalctl -u cpp-spot-worker.service --no-pager > /tmp/worker-final.log 2>&1; aws s3 cp /tmp/worker-final.log s3://jerard-activefounder/build-state/josh-worker-journal-\$TS.log --region us-east-1 || true'
 Restart=always
 RestartSec=10
+TimeoutStopSec=120
 Environment=PYTHONPATH=/opt/cpp
 Environment=AWS_DEFAULT_REGION=us-east-1
 [Install]
@@ -102,6 +109,26 @@ WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
 systemctl enable cpp-spot-worker.service
+
+# Also: a continuous live-tail uploader (every 60s). Belt + suspenders so that
+# even if ExecStopPost is starved by abrupt shutdown, we have a near-live snapshot.
+# Stops itself when the worker service is gone.
+tee /etc/systemd/system/cpp-worker-logtail.service >/dev/null <<EOF
+[Unit]
+Description=ContextPulse Worker Log Tailer (uploads journalctl to S3 every 60s)
+After=cpp-spot-worker.service
+[Service]
+Type=simple
+User=ubuntu
+ExecStart=/usr/bin/bash -c 'while systemctl is-active --quiet cpp-spot-worker.service || systemctl is-failed --quiet cpp-spot-worker.service; do journalctl -u cpp-spot-worker.service --no-pager > /tmp/worker-live.log 2>&1; aws s3 cp /tmp/worker-live.log s3://jerard-activefounder/build-state/josh-worker-journal-LIVE.log --region us-east-1 --quiet || true; sleep 60; done'
+Restart=on-failure
+RestartSec=10
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable cpp-worker-logtail.service
+systemctl start cpp-worker-logtail.service
 systemctl start cpp-spot-worker.service
 
 mark "07-worker-started"
