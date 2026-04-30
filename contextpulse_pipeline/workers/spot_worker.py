@@ -323,7 +323,7 @@ def process_job(job: TranscriptionJob) -> None:
         logger.info("[5/8] pyannote 3.1 diarization...")
         pyannote_pipeline = PyannotePipeline.from_pretrained(
             "pyannote/speaker-diarization-3.1",
-            use_auth_token=hf_token,
+            token=hf_token,  # pyannote 4.x renamed use_auth_token -> token
         )
         pyannote_pipeline.to(torch.device(device))
 
@@ -333,8 +333,13 @@ def process_job(job: TranscriptionJob) -> None:
         diarize_wav = compressed_files[diarize_channel]
 
         diarization = pyannote_pipeline(str(diarize_wav))
+        # pyannote 4.x: pipeline returns DiarizeOutput wrapper, not Annotation directly.
+        # The .speaker_diarization attr is the Annotation with .itertracks (3.x-equivalent).
+        # 4.x also exposes .exclusive_speaker_diarization (one speaker active at a time)
+        # and .speaker_embeddings — see DiarizeOutput dir.
+        diarization_annotation = diarization.speaker_diarization
         diarization_segments: list[dict] = []
-        for turn, _, speaker_label in diarization.itertracks(yield_label=True):
+        for turn, _, speaker_label in diarization_annotation.itertracks(yield_label=True):
             diarization_segments.append({
                 "start": turn.start,
                 "end": turn.end,
