@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 Jerard Ventures LLC
 """Pydantic schema: AudioEntry, SynthesisRun, Manifest.
 
 Manifest is the source of truth for every container. Every audio file gets

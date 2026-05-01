@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 Jerard Ventures LLC
 """ffmpeg WAV -> opus compression wrapper.
 
 Pre-compresses audio before Groq Whisper API calls.
