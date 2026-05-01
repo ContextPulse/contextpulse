@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 Jerard Ventures LLC
 """contextpulse_pipeline — foundational transcription + synthesis pipeline.
 
 AGPL-3.0. Part of the ContextPulse platform.

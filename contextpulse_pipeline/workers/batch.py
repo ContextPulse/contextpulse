@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 Jerard Ventures LLC
 """BatchPipeline — local-runnable, S3-backed batch transcription + synthesis worker.
 
 This is the v0.1 Mode A (Batch) worker. It runs locally and requires an S3
