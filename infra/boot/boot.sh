@@ -98,7 +98,7 @@ After=network-online.target
 Type=simple
 User=ubuntu
 ExecStart=/opt/cpp/venv/bin/python -m contextpulse_pipeline.workers.spot_worker
-ExecStopPost=/usr/bin/bash -c 'TS=\$(date -u +%Y%m%dT%H%M%SZ); journalctl -u cpp-spot-worker.service --no-pager > /tmp/worker-final.log 2>&1; aws s3 cp /tmp/worker-final.log s3://jerard-activefounder/build-state/josh-worker-journal-\$TS.log --region us-east-1 || true'
+ExecStopPost=/usr/bin/bash -c 'TS=\$(date -u +%%Y%%m%%dT%%H%%M%%SZ); journalctl -u cpp-spot-worker.service --no-pager > /tmp/worker-final.log 2>&1; aws s3 cp /tmp/worker-final.log s3://jerard-activefounder/build-state/josh-worker-journal-\$TS.log --region us-east-1 || true'
 Restart=always
 RestartSec=10
 TimeoutStopSec=120
@@ -128,8 +128,12 @@ WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
 systemctl enable cpp-worker-logtail.service
-systemctl start cpp-worker-logtail.service
+# Start worker FIRST so logtail's `while is-active worker` loop sees an active
+# worker on its first tick. Otherwise logtail exits immediately and never uploads.
 systemctl start cpp-spot-worker.service
+# Tiny delay so worker reaches "active" before logtail polls.
+sleep 2
+systemctl start cpp-worker-logtail.service
 
 mark "07-worker-started"
 
