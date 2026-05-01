@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 Jerard Ventures LLC
 """ActiveFounder integration example.
 
 Shows how the AF hike pipeline would consume contextpulse_pipeline.

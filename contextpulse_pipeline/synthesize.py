@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 Jerard Ventures LLC
 """Sonnet synthesis with prompt caching.
 
 Uses Anthropic claude-sonnet-4-5 with prompt caching on the unified transcript.

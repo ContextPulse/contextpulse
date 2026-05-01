@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 Jerard Ventures LLC
 """Groq Whisper API client — idempotent, 429-retry-with-wait.
 
 Rule #7: auto-compress input if >25 MB.
