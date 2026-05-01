@@ -169,6 +169,51 @@ def _s3_key_exists(s3: Any, bucket: str, key: str) -> bool:
         raise
 
 
+# ---------------------------------------------------------------------------
+# Stage-level S3 checkpoint helpers
+#
+# Pattern: for each expensive stage, persist its output to
+#   s3://{bucket}/intermediate/{session_id}/{kind}[_{channel}].json
+# so that a stage 7+ failure does not force a full Whisper/align/diarize re-run
+# (those are the GPU-expensive stages — 10 min, 5 min, 4 min respectively).
+# Restart cost on retry: ~5 sec to download cached JSON instead of recomputing.
+# ---------------------------------------------------------------------------
+
+
+def _cache_key(session_id: str, kind: str, channel: str | None = None) -> str:
+    if channel is None:
+        return f"intermediate/{session_id}/{kind}.json"
+    return f"intermediate/{session_id}/{kind}_{channel}.json"
+
+
+def _cache_get_json(s3: Any, bucket: str, session_id: str, kind: str, channel: str | None = None) -> dict | None:
+    """Return cached JSON dict, or None on cache miss / any error."""
+    key = _cache_key(session_id, kind, channel)
+    try:
+        obj = s3.get_object(Bucket=bucket, Key=key)
+        return json.loads(obj["Body"].read())
+    except Exception as exc:
+        # NoSuchKey is the common case; we treat any error as cache miss
+        # and let the caller recompute. Log only unexpected errors.
+        if "NoSuchKey" not in str(exc) and "404" not in str(exc):
+            logger.warning("Cache GET failed for %s: %s", key, exc)
+        return None
+
+
+def _cache_put_json(s3: Any, bucket: str, session_id: str, kind: str, data: dict, channel: str | None = None) -> None:
+    """Best-effort cache upload. Failure is non-fatal — pipeline continues."""
+    key = _cache_key(session_id, kind, channel)
+    try:
+        s3.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=json.dumps(data, ensure_ascii=False).encode("utf-8"),
+            ContentType="application/json",
+        )
+    except Exception as exc:
+        logger.warning("Cache PUT failed for %s: %s", key, exc)
+
+
 def process_job(job: TranscriptionJob) -> None:
     """Execute the full transcription pipeline for one job.
 
@@ -246,111 +291,158 @@ def process_job(job: TranscriptionJob) -> None:
             logger.info("  Compressed: %s -> %s", audio_file.name, wav_out.name)
 
         # ── Stage 3: Whisper transcribe each channel ─────────────────────────
-        logger.info("[3/8] Loading Whisper large-v3...")
-        whisper_model = WhisperModel(
-            "large-v3",
-            device=device,
-            compute_type=compute_type,
-            download_root=str(MODELS_DIR / "whisper"),
-        )
+        # Per-channel S3 checkpoint at intermediate/{session}/whisper_{channel}.json
+        # Non-cached channels run in parallel via ThreadPoolExecutor (faster-whisper
+        # is reentrant-safe per its docs; L4 has 18 GB VRAM headroom for 4-way).
+        from concurrent.futures import ThreadPoolExecutor, as_completed
 
         channel_transcripts: dict[str, dict] = {}
+        whisper_todo: list[tuple[str, Path]] = []
         for channel_key, wav_path in compressed_files.items():
-            logger.info("  Transcribing channel: %s (%s)", channel_key, wav_path.name)
-            segments, info = whisper_model.transcribe(
-                str(wav_path),
-                language="en",
-                word_timestamps=True,
-                vad_filter=True,
-            )
-            segments_list = []
-            for seg in segments:
-                seg_dict = {
-                    "start": seg.start,
-                    "end": seg.end,
-                    "text": seg.text.strip(),
-                    "words": [
-                        {"start": w.start, "end": w.end, "word": w.word}
-                        for w in (seg.words or [])
-                    ],
-                }
-                segments_list.append(seg_dict)
-            channel_transcripts[channel_key] = {
-                "language": info.language,
-                "segments": segments_list,
-            }
-            logger.info("    %d segments, language=%s", len(segments_list), info.language)
+            cached = _cache_get_json(s3, job.s3_bucket, job.session_id, "whisper", channel_key)
+            if cached is not None:
+                channel_transcripts[channel_key] = cached
+                logger.info("  [3/8] CACHED Whisper %s (%d segments, lang=%s)",
+                            channel_key, len(cached["segments"]), cached.get("language"))
+            else:
+                whisper_todo.append((channel_key, wav_path))
 
-        # Free Whisper model before loading next ML model
-        del whisper_model
-        if device == "cuda":
-            torch.cuda.empty_cache()
+        if whisper_todo:
+            logger.info("[3/8] Loading Whisper large-v3 (%d channels to transcribe)", len(whisper_todo))
+            whisper_model = WhisperModel(
+                "large-v3",
+                device=device,
+                compute_type=compute_type,
+                download_root=str(MODELS_DIR / "whisper"),
+            )
+
+            def _transcribe_one(args: tuple[str, Path]) -> tuple[str, dict]:
+                channel_key, wav_path = args
+                logger.info("  Transcribing channel: %s (%s)", channel_key, wav_path.name)
+                segments, info = whisper_model.transcribe(
+                    str(wav_path),
+                    language="en",
+                    word_timestamps=True,
+                    vad_filter=True,
+                )
+                segments_list = []
+                for seg in segments:
+                    segments_list.append({
+                        "start": seg.start,
+                        "end": seg.end,
+                        "text": seg.text.strip(),
+                        "words": [
+                            {"start": w.start, "end": w.end, "word": w.word}
+                            for w in (seg.words or [])
+                        ],
+                    })
+                result = {"language": info.language, "segments": segments_list}
+                logger.info("    %s: %d segments, language=%s", channel_key, len(segments_list), info.language)
+                return channel_key, result
+
+            # max_workers=4 chosen to fit comfortably in 24 GB L4 VRAM (~5 GB per call observed).
+            with ThreadPoolExecutor(max_workers=min(4, len(whisper_todo))) as ex:
+                for fut in as_completed([ex.submit(_transcribe_one, t) for t in whisper_todo]):
+                    channel_key, result = fut.result()
+                    channel_transcripts[channel_key] = result
+                    _cache_put_json(s3, job.s3_bucket, job.session_id, "whisper", result, channel_key)
+
+            # Free Whisper model before loading next ML model
+            del whisper_model
+            if device == "cuda":
+                torch.cuda.empty_cache()
+        else:
+            logger.info("[3/8] All %d channels cached — skipped Whisper", len(compressed_files))
 
         # ── Stage 4: WhisperX alignment (word-level timestamps) ──────────────
-        logger.info("[4/8] WhisperX forced alignment...")
-        align_model, align_metadata = whisperx.load_align_model(
-            language_code="en",
-            device=device,
-        )
+        # Same checkpoint + parallelism pattern as stage 3.
         aligned_transcripts: dict[str, dict] = {}
-        for channel_key, transcript in channel_transcripts.items():
-            wav_path = compressed_files[channel_key]
-            import numpy as np
+        align_todo: list[str] = []
+        for channel_key in channel_transcripts:
+            cached = _cache_get_json(s3, job.s3_bucket, job.session_id, "aligned", channel_key)
+            if cached is not None:
+                aligned_transcripts[channel_key] = cached
+                logger.info("  [4/8] CACHED align %s (%d segments)", channel_key, len(cached["segments"]))
+            else:
+                align_todo.append(channel_key)
+
+        if align_todo:
+            logger.info("[4/8] WhisperX forced alignment (%d channels to align)", len(align_todo))
+            align_model, align_metadata = whisperx.load_align_model(
+                language_code="en",
+                device=device,
+            )
             import soundfile as sf
 
-            audio_arr, sample_rate = sf.read(str(wav_path), dtype="float32", always_2d=False)
-            aligned = whisperx.align(
-                transcript["segments"],
-                align_model,
-                align_metadata,
-                audio_arr,
-                device,
-                return_char_alignments=False,
-            )
-            aligned_transcripts[channel_key] = {
-                "language": transcript["language"],
-                "segments": aligned["segments"],
-                "word_segments": aligned.get("word_segments", []),
-            }
-            logger.info("    Aligned channel %s: %d segments", channel_key,
-                        len(aligned["segments"]))
+            def _align_one(channel_key: str) -> tuple[str, dict]:
+                wav_path = compressed_files[channel_key]
+                audio_arr, _ = sf.read(str(wav_path), dtype="float32", always_2d=False)
+                aligned = whisperx.align(
+                    channel_transcripts[channel_key]["segments"],
+                    align_model,
+                    align_metadata,
+                    audio_arr,
+                    device,
+                    return_char_alignments=False,
+                )
+                result = {
+                    "language": channel_transcripts[channel_key]["language"],
+                    "segments": aligned["segments"],
+                    "word_segments": aligned.get("word_segments", []),
+                }
+                logger.info("    Aligned channel %s: %d segments", channel_key, len(aligned["segments"]))
+                return channel_key, result
 
-        del align_model
-        if device == "cuda":
-            torch.cuda.empty_cache()
+            with ThreadPoolExecutor(max_workers=min(4, len(align_todo))) as ex:
+                for fut in as_completed([ex.submit(_align_one, k) for k in align_todo]):
+                    channel_key, result = fut.result()
+                    aligned_transcripts[channel_key] = result
+                    _cache_put_json(s3, job.s3_bucket, job.session_id, "aligned", result, channel_key)
+
+            del align_model
+            if device == "cuda":
+                torch.cuda.empty_cache()
+        else:
+            logger.info("[4/8] All channels cached — skipped WhisperX align")
 
         # ── Stage 5: pyannote diarization on ambient/mixed track ──────────────
-        logger.info("[5/8] pyannote 3.1 diarization...")
-        pyannote_pipeline = PyannotePipeline.from_pretrained(
-            "pyannote/speaker-diarization-3.1",
-            token=hf_token,  # pyannote 4.x renamed use_auth_token -> token
-        )
-        pyannote_pipeline.to(torch.device(device))
-
-        # Run diarization on the channel most likely to have multiple speakers
-        # Prefer "ambient" if present, otherwise use first available channel
+        # Single-channel stage; cache by diarize-channel name. pyannote pipeline
+        # is NOT thread-safe so no parallelism here, but it only runs once anyway.
         diarize_channel = "ambient" if "ambient" in compressed_files else list(compressed_files.keys())[0]
-        diarize_wav = compressed_files[diarize_channel]
+        cached_diar = _cache_get_json(s3, job.s3_bucket, job.session_id, "diarization", diarize_channel)
+        if cached_diar is not None:
+            diarization_segments = cached_diar["segments"]
+            logger.info("[5/8] CACHED diarization on %s (%d turns)", diarize_channel, len(diarization_segments))
+        else:
+            logger.info("[5/8] pyannote 3.1 diarization...")
+            pyannote_pipeline = PyannotePipeline.from_pretrained(
+                "pyannote/speaker-diarization-3.1",
+                token=hf_token,  # pyannote 4.x renamed use_auth_token -> token
+            )
+            pyannote_pipeline.to(torch.device(device))
 
-        diarization = pyannote_pipeline(str(diarize_wav))
-        # pyannote 4.x: pipeline returns DiarizeOutput wrapper, not Annotation directly.
-        # The .speaker_diarization attr is the Annotation with .itertracks (3.x-equivalent).
-        # 4.x also exposes .exclusive_speaker_diarization (one speaker active at a time)
-        # and .speaker_embeddings — see DiarizeOutput dir.
-        diarization_annotation = diarization.speaker_diarization
-        diarization_segments: list[dict] = []
-        for turn, _, speaker_label in diarization_annotation.itertracks(yield_label=True):
-            diarization_segments.append({
-                "start": turn.start,
-                "end": turn.end,
-                "speaker": speaker_label,
-            })
-        logger.info("    Diarization found %d turns on channel %s",
-                    len(diarization_segments), diarize_channel)
+            diarize_wav = compressed_files[diarize_channel]
+            diarization = pyannote_pipeline(str(diarize_wav))
+            # pyannote 4.x: pipeline returns DiarizeOutput wrapper, not Annotation directly.
+            diarization_annotation = diarization.speaker_diarization
+            diarization_segments = []
+            for turn, _, speaker_label in diarization_annotation.itertracks(yield_label=True):
+                diarization_segments.append({
+                    "start": turn.start,
+                    "end": turn.end,
+                    "speaker": speaker_label,
+                })
+            logger.info("    Diarization found %d turns on channel %s",
+                        len(diarization_segments), diarize_channel)
+            _cache_put_json(
+                s3, job.s3_bucket, job.session_id, "diarization",
+                {"channel": diarize_channel, "segments": diarization_segments},
+                diarize_channel,
+            )
 
-        del pyannote_pipeline
-        if device == "cuda":
-            torch.cuda.empty_cache()
+            del pyannote_pipeline
+            if device == "cuda":
+                torch.cuda.empty_cache()
 
         # ── Stage 6: Attribution merge ────────────────────────────────────────
         logger.info("[6/8] Attribution merge...")

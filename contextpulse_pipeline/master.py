@@ -36,6 +36,41 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Audio-stage S3 checkpoint helpers
+#
+# Tier 1 audio mix is CPU-heavy (concat+filter+bleed_cancel for 7 channels of
+# ~1-2 hr audio takes ~12-15 min on g6.xlarge). Cache each stage's per-channel
+# output to s3://{bucket}/intermediate/{session_id}/master/{kind}_{channel}.{ext}
+# so retries skip the work that already succeeded. Cost: ~2 sec download per
+# cached file vs ~2 min per stage per channel.
+# ---------------------------------------------------------------------------
+
+
+def _audio_cache_key(session_id: str, kind: str, channel: str, ext: str) -> str:
+    return f"intermediate/{session_id}/master/{kind}_{channel}.{ext}"
+
+
+def _audio_cache_get(s3: Any, bucket: str, session_id: str, kind: str, channel: str, dest_path: Path, ext: str) -> bool:
+    """Download cached audio to dest_path. Returns True on hit, False on miss."""
+    key = _audio_cache_key(session_id, kind, channel, ext)
+    try:
+        s3.download_file(bucket, key, str(dest_path))
+        return True
+    except Exception:
+        return False
+
+
+def _audio_cache_put(s3: Any, bucket: str, session_id: str, kind: str, channel: str, src_path: Path, ext: str) -> None:
+    """Best-effort upload — failure is non-fatal."""
+    key = _audio_cache_key(session_id, kind, channel, ext)
+    try:
+        s3.upload_file(str(src_path), bucket, key)
+    except Exception as exc:
+        logger.warning("Audio cache PUT failed for %s: %s", key, exc)
+
+
 # ---------------------------------------------------------------------------
 # Output dataclass — clean interface for Tier 2 to read
 # ---------------------------------------------------------------------------
@@ -205,36 +240,53 @@ def unify_audio(
         logger.info("Found %d raw channel files", len(channel_files))
 
         # Step 2: Group by channel (TX prefix) and concat per-channel
+        # S3-cached at master/concat_{channel}.ogg
         channel_map = _group_by_channel(channel_files, speaker_mapping)
         concat_paths: dict[str, Path] = {}
         for channel_key, files in channel_map.items():
             out = tmp / f"concat_{channel_key}.ogg"
-            if not out.exists():
+            if _audio_cache_get(s3_client, s3_bucket, session_id, "concat", channel_key, out, "ogg"):
+                logger.info("Concatenated %s: CACHED -> %s", channel_key, out.name)
+            else:
                 _concat_per_channel(files, out)
+                logger.info("Concatenated %s: %d files -> %s", channel_key, len(files), out.name)
+                _audio_cache_put(s3_client, s3_bucket, session_id, "concat", channel_key, out, "ogg")
             concat_paths[channel_key] = out
-            logger.info("Concatenated %s: %d files -> %s", channel_key, len(files), out.name)
 
         # Step 3: Apply Tier 1 filters per channel
+        # S3-cached at master/filtered_{channel}.ogg
         filtered_paths: dict[str, Path] = {}
         for channel_key, concat_path in concat_paths.items():
             out = tmp / f"filtered_{channel_key}.ogg"
-            if not out.exists():
+            if _audio_cache_get(s3_client, s3_bucket, session_id, "filtered", channel_key, out, "ogg"):
+                logger.info("Filtered %s: CACHED -> %s", channel_key, out.name)
+            else:
                 _apply_tier1_filters(concat_path, out, enhancements)
+                _audio_cache_put(s3_client, s3_bucket, session_id, "filtered", channel_key, out, "ogg")
             filtered_paths[channel_key] = out
 
         # Step 4: Optional bleed cancellation (only when exactly 2 channels)
+        # FIX: previously wrote PCM_16 audio to .ogg-named files, which soundfile
+        # rejects ("Invalid combination of format, subtype and endian"). Use .wav.
+        # S3-cached at master/debled_{channel}.wav
         if enhancements.get("bleed_cancel") and len(filtered_paths) == 2:
             keys_list = list(filtered_paths.keys())
             ch_a_key, ch_b_key = keys_list[0], keys_list[1]
-            out_a = tmp / f"debled_{ch_a_key}.ogg"
-            out_b = tmp / f"debled_{ch_b_key}.ogg"
-            if not out_a.exists() or not out_b.exists():
+            out_a = tmp / f"debled_{ch_a_key}.wav"
+            out_b = tmp / f"debled_{ch_b_key}.wav"
+            cached_a = _audio_cache_get(s3_client, s3_bucket, session_id, "debled", ch_a_key, out_a, "wav")
+            cached_b = _audio_cache_get(s3_client, s3_bucket, session_id, "debled", ch_b_key, out_b, "wav")
+            if cached_a and cached_b:
+                logger.info("Bleed cancel: BOTH CACHED -> %s, %s", out_a.name, out_b.name)
+            else:
                 _bleed_cancel(
                     filtered_paths[ch_a_key],
                     filtered_paths[ch_b_key],
                     out_a,
                     out_b,
                 )
+                _audio_cache_put(s3_client, s3_bucket, session_id, "debled", ch_a_key, out_a, "wav")
+                _audio_cache_put(s3_client, s3_bucket, session_id, "debled", ch_b_key, out_b, "wav")
             filtered_paths[ch_a_key] = out_a
             filtered_paths[ch_b_key] = out_b
 
