@@ -65,7 +65,7 @@ dev = [
     "pytest-cov>=5.0",
     "pytest-timeout>=2.4.0",
     "pytest-threadleak>=0.1",
-    "hypothesis>=6.100",
+    "hypothesis>=6.152.4",
     "ruff>=0.15.11",
 ]
 
