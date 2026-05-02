@@ -16,6 +16,21 @@ Interface contract for Tier 2:
 - MasterOutput dataclass is importable: `from contextpulse_pipeline.master import MasterOutput`
 - Each channel's processed audio is kept in the local temp dir until caller
   disposes of it — Tier 2 can receive the temp dir path via extended API.
+
+WARNING — Known limitations (2026-05-01):
+- The bleed_cancel step assumes PARALLEL channel inputs (each channel records
+  the same wall-clock window). For SEQUENTIAL alternating inputs (e.g. DJI
+  Mic 3 set to alternating-mode rather than parallel-record-both), bleed
+  cancellation produces unusable Frankenstein output (overlapping audio
+  chunks, loud breathing, wrong primary speaker). bleed_cancel is therefore
+  DISABLED by default as of 2026-05-01.
+- The amix mixdown also assumes parallel inputs. For sequential alternating
+  capture, the per-channel concat produces wall-clock-broken outputs that
+  the amix can't repair. Use the local editorial workflow
+  (assembling-podcasts skill) for podcast production from sequential capture.
+- Stage 6 voice isolation per speaker (DeepFilterNet/Resemble Enhance with
+  enrolled voice profiles) is the planned replacement for bleed_cancel.
+  See AgentConfig/plans/stage-6-voice-isolation-design.md (next session).
 """
 
 from __future__ import annotations
@@ -26,6 +41,7 @@ import re
 import subprocess
 import tempfile
 import time
+import warnings
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -190,7 +206,9 @@ def unify_audio(
             Example: {"TX01": "Josh", "TX00": "Chris", "ambient": "David"}
         enhancements: Which Tier 1 filters to apply.
             Keys: "highpass", "denoise", "level_match", "bleed_cancel".
-            Defaults to all enabled.
+            Defaults to {highpass, denoise, level_match} ENABLED and
+            bleed_cancel DISABLED (deprecated — see module docstring).
+            Passing bleed_cancel=True emits a DeprecationWarning.
         s3_client: Optional pre-built boto3 S3 client. Created automatically
             if not provided (uses default credential chain).
         local_raw_prefix: S3 prefix where raw OGGs live.
@@ -200,7 +218,17 @@ def unify_audio(
         MasterOutput with S3 URIs and metadata for all produced artifacts.
     """
     if enhancements is None:
-        enhancements = {"highpass": True, "denoise": True, "level_match": True, "bleed_cancel": True}
+        enhancements = {"highpass": True, "denoise": True, "level_match": True, "bleed_cancel": False}
+
+    if enhancements.get("bleed_cancel"):
+        warnings.warn(
+            "bleed_cancel is deprecated and will be removed once Stage 6 voice isolation "
+            "lands. It assumes parallel-channel inputs and produces Frankenstein output for "
+            "sequential alternating capture (e.g. DJI Mic 3 alternating-mode). See module "
+            "docstring for context.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     if s3_client is None:
         s3_client = boto3.client("s3", region_name="us-east-1")

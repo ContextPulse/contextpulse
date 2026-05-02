@@ -389,6 +389,79 @@ class TestQcChecks:
 # ---------------------------------------------------------------------------
 
 
+class TestBleedCancelDeprecation:
+    """bleed_cancel is deprecated as of 2026-05-01 (assumes parallel inputs;
+    produces Frankenstein output for DJI alternating-mode capture).
+    Default behavior should NOT trigger bleed_cancel; explicit opt-in emits
+    DeprecationWarning."""
+
+    def test_default_enhancements_disable_bleed_cancel(self, tmp_path: Path) -> None:
+        """When unify_audio is called without enhancements arg, the default
+        config should have bleed_cancel disabled."""
+        import warnings as _warn
+
+        session_id = "ep-test-default-no-bleed"
+        bucket = "test-bucket"
+        existing_audio_key = f"outputs/{session_id}/master_basic.mp3"
+
+        s3 = _make_s3_mock(existing_keys={existing_audio_key})
+
+        def _get_side(Bucket, Key, **kwargs):  # noqa: N803
+            if "transcript" in Key and Key.endswith(".json"):
+                body = json.dumps({"segments": [{"start": 0.0, "end": 1.0, "speaker": "Josh", "text": "hi"}]})
+                return {"Body": MagicMock(read=lambda: body.encode())}
+            if "qc" in Key:
+                body = json.dumps({"master_duration_sec": 60.0, "sync_drift_ms": 0.0})
+                return {"Body": MagicMock(read=lambda: body.encode())}
+            return {"Body": MagicMock(read=lambda: b"{}")}
+
+        s3.get_object.side_effect = _get_side
+
+        speaker_mapping = {"TX01": "Josh", "TX00": "Chris"}
+        with _warn.catch_warnings(record=True) as caught:
+            _warn.simplefilter("always")
+            unify_audio(session_id, bucket, speaker_mapping, s3_client=s3)
+
+        # No DeprecationWarning should fire when caller doesn't opt in
+        deprecation_warnings = [w for w in caught if issubclass(w.category, DeprecationWarning)]
+        assert not deprecation_warnings, (
+            f"Default unify_audio call emitted DeprecationWarning: {[str(w.message) for w in deprecation_warnings]}"
+        )
+
+    def test_explicit_bleed_cancel_emits_deprecation(self, tmp_path: Path) -> None:
+        """When caller explicitly opts into bleed_cancel=True, DeprecationWarning
+        is emitted (so legacy callers get a clear migration signal)."""
+        import warnings as _warn
+
+        session_id = "ep-test-explicit-bleed"
+        bucket = "test-bucket"
+        existing_audio_key = f"outputs/{session_id}/master_basic.mp3"
+
+        s3 = _make_s3_mock(existing_keys={existing_audio_key})
+
+        def _get_side(Bucket, Key, **kwargs):  # noqa: N803
+            if "transcript" in Key and Key.endswith(".json"):
+                body = json.dumps({"segments": []})
+                return {"Body": MagicMock(read=lambda: body.encode())}
+            if "qc" in Key:
+                body = json.dumps({"master_duration_sec": 0.0, "sync_drift_ms": 0.0})
+                return {"Body": MagicMock(read=lambda: body.encode())}
+            return {"Body": MagicMock(read=lambda: b"{}")}
+
+        s3.get_object.side_effect = _get_side
+
+        speaker_mapping = {"TX01": "Josh", "TX00": "Chris"}
+        explicit = {"highpass": True, "denoise": True, "level_match": True, "bleed_cancel": True}
+
+        with _warn.catch_warnings(record=True) as caught:
+            _warn.simplefilter("always")
+            unify_audio(session_id, bucket, speaker_mapping, enhancements=explicit, s3_client=s3)
+
+        deprecation_warnings = [w for w in caught if issubclass(w.category, DeprecationWarning)]
+        assert deprecation_warnings, "Expected DeprecationWarning when bleed_cancel=True passed explicitly"
+        assert "bleed_cancel" in str(deprecation_warnings[0].message)
+
+
 class TestIdempotentSkip:
     def test_second_run_skips_heavy_steps_when_outputs_exist(self, tmp_path: Path) -> None:
         """When master_basic.mp3 already exists in S3, unify_audio should return

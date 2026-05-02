@@ -132,10 +132,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     unify_parser.add_argument(
         "--enhancements",
-        default="highpass,denoise,level_match,bleed_cancel",
+        default="highpass,denoise,level_match",
         help="Comma-separated list of Tier 1 enhancements to apply. "
              "Choices: highpass, denoise, level_match, bleed_cancel. "
-             "Default: all enabled.",
+             "Default: highpass,denoise,level_match (bleed_cancel is "
+             "DEPRECATED — see master.py module docstring).",
     )
     unify_parser.add_argument(
         "--region",
