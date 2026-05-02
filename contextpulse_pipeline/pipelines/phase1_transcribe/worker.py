@@ -28,6 +28,7 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "4")
 
 import json  # noqa: E402
 import logging  # noqa: E402
+import posixpath  # noqa: E402
 import subprocess  # noqa: E402
 import sys  # noqa: E402
 import tempfile  # noqa: E402
@@ -37,6 +38,17 @@ import urllib.request  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 import boto3  # noqa: E402
+
+
+def _cross_platform_basename(path_str: str) -> str:
+    """Return basename of a path string regardless of source OS path separators.
+
+    Path() on Linux does NOT split on '\\' (Windows backslash), so a Windows-serialized
+    path like 'C:\\Users\\david\\foo.mp3' has Path().name == the entire string. Normalize
+    by replacing backslashes with forward slashes first.
+    """
+    return posixpath.basename(path_str.replace("\\", "/"))
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -162,7 +174,9 @@ def main() -> int:
     rs_key = spec["raw_sources_s3_key"]
     rs_body = s3.get_object(Bucket=rs_bucket, Key=rs_key)["Body"].read().decode("utf-8")
     coll = RawSourceCollection.from_json(rs_body)
-    by_path_basename: dict[str, RawSource] = {Path(s.file_path).name: s for s in coll.sources}
+    by_path_basename: dict[str, RawSource] = {
+        _cross_platform_basename(s.file_path): s for s in coll.sources
+    }
 
     output_prefix = spec["output_prefix"].rstrip("/")
     model = spec.get("model", "large-v3")

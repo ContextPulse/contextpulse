@@ -276,6 +276,17 @@ def main() -> int:
         return 0
 
     success = poll_for_done(bucket=args.bucket, container=args.container, s3_client=s3)
+
+    # Always terminate the spot instance after polling completes (success, failure, or timeout).
+    # The worker has IAM permission to read/write S3 but NOT to terminate itself, so the
+    # orchestrator owns instance lifecycle. This avoids orphaned spend if the worker exits
+    # before its self-shutdown path executes (which it usually can't anyway as ubuntu user).
+    try:
+        ec2.terminate_instances(InstanceIds=[iid])
+        logger.info("Sent terminate-instances for %s", iid)
+    except Exception as exc:
+        logger.warning("Failed to terminate %s: %s", iid, exc)
+
     if success:
         download_outputs(
             bucket=args.bucket,
