@@ -1,0 +1,92 @@
+{
+  "_comment": "Example episode manifest for the cluster_validation gate. Lifted from the attributing-speakers skill example with the 2026-05-02 fingerprint additions. Use as a template for new episodes; do NOT commit real personal audio output to this repo (see .gitignore). Voice profile paths are placeholders for v2 (voice-embedding signal).",
+  "episode_id": "ep-2026-04-26-josh-cashman",
+  "expected_speakers": [
+    {
+      "id": "david",
+      "display_name": "David Jerard",
+      "role": "host",
+      "mic_channel": null,
+      "voice_profile_path": null,
+      "fingerprints": [
+        "AWS",
+        "EC2",
+        "trading bot",
+        "spot instance",
+        "Cloud Code",
+        "AgentConfig",
+        "MCP server",
+        "Honda Civic",
+        "Ferrari",
+        "tokens",
+        "Claude Code",
+        "deterministic"
+      ],
+      "fingerprint_phrases": [
+        "I have a fleet of trading bots",
+        "I work at AWS",
+        "build a skill",
+        "skill that creates skills",
+        "10 commandments",
+        "co-work is like you bought",
+        "great for just getting places"
+      ]
+    },
+    {
+      "id": "chris",
+      "display_name": "Chris Jerard",
+      "role": "host",
+      "mic_channel": "TX00",
+      "voice_profile_path": null,
+      "fingerprints": [
+        "Outside Inc",
+        "180 contracts",
+        "brand activations",
+        "FreeSkier",
+        "LinkedIn Learning",
+        "Ray Villa Bobos",
+        "Cowork",
+        "marketing funnel",
+        "GEO",
+        "AEO"
+      ],
+      "fingerprint_phrases": [
+        "brand activations across our portfolio",
+        "Outside Inc has 180"
+      ]
+    },
+    {
+      "id": "josh",
+      "display_name": "Josh Cashman",
+      "role": "guest",
+      "mic_channel": "TX01",
+      "voice_profile_path": null,
+      "fingerprints": [
+        "QoEAgent",
+        "QOE Agent",
+        "Tom Yeh",
+        "Ron Neufeld",
+        "Intrinsic",
+        "transaction advisory",
+        "private equity",
+        "lower middle market",
+        "DU"
+      ],
+      "fingerprint_phrases": [
+        "quality of earnings",
+        "proof of cash",
+        "transcend intermediaries"
+      ]
+    }
+  ],
+  "voice_profile_library": "s3://contextpulse-voice-profiles/jerard-jv/",
+  "channel_to_speaker_default": {
+    "TX00": "chris",
+    "TX01": "josh"
+  },
+  "_notes": [
+    "DJI Mic 3 alternating-mode capture invalidates channel routing for the Josh hike (skill rule 2026-05-03). When inferred via the audio-signal-first speaker map, ALL mic_channel fields should be null. Channel routing weights collapse to 0; content + addressee + role + voice carry the signal.",
+    "David has no mic (mic_channel=null) — content/addressee weighted higher.",
+    "Validate against the attribute.py reference: the prototype run on this manifest with the labeled unified transcript should produce A=Josh, B=Chris, C=David per 2026-05-03 lesson. (cluster sizes by descending count after Phase 1.5 ECAPA: A=2922 chunks, B=1294, C=817.)"
+  ]
+}
