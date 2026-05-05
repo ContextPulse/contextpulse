@@ -136,6 +136,41 @@ class SyncResult:
             path.write_text(text, encoding="utf-8")
         return text
 
+    @classmethod
+    def from_json(cls, text: str | None = None, *, path: Path | None = None) -> "SyncResult":
+        """Symmetric deserializer for to_json output."""
+        if text is None:
+            if path is None:
+                raise ValueError("SyncResult.from_json requires text or path")
+            text = path.read_text(encoding="utf-8")
+        data = json.loads(text)
+        return cls(
+            container=data["container"],
+            anchor_source_sha256=data["anchor_source_sha256"],
+            anchor_origination_utc=datetime.fromisoformat(data["anchor_origination_utc"]),
+            resolved_sources=[
+                ResolvedSource(
+                    sha256=r["sha256"],
+                    wall_start_utc=datetime.fromisoformat(r["wall_start_utc"]),
+                    provenance=r["provenance"],
+                    anchor_count=int(r.get("anchor_count", 0)),
+                    offset_from_anchor_sec=float(r.get("offset_from_anchor_sec", 0.0)),
+                )
+                for r in data.get("resolved_sources", [])
+            ],
+            unreachable_sources=list(data.get("unreachable_sources", [])),
+            pair_offsets=[
+                PairOffset(
+                    source_a=p["source_a"],
+                    source_b=p["source_b"],
+                    offset_sec=float(p["offset_sec"]),
+                    n_anchors=int(p["n_anchors"]),
+                    std_dev_sec=float(p["std_dev_sec"]),
+                )
+                for p in data.get("pair_offsets", [])
+            ],
+        )
+
 
 # ---------------------------------------------------------------------------
 # n-gram extraction
