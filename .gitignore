@@ -79,3 +79,21 @@ contextpulse_pipeline/examples/ep-*/
 *.npz
 fingerprint_result.json
 unified_transcript_labeled.json
+
+# Audio / video originals — global catch-all (defense in depth).
+# Originals belong in S3 or LFS, never git. The pre-publish gate
+# (AgentConfig/scripts/pre-publish.py check 72) will BLOCK any tracked
+# file >25 MB, but this keeps them out of the index in the first place.
+*.wav
+*.flac
+*.mp3
+*.m4a
+*.ogg
+*.opus
+*.mov
+*.mp4
+*.aac
+
+# Generic personal-research data directories — never meant for git
+local-archive/
+recordings/
