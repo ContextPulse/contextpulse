@@ -67,3 +67,33 @@ docs/**
 packages/screen/benchmark_results/
 CHANGELOG_INTERNAL.md
 .internal/
+
+# Pipeline run outputs (per-episode working directory).
+# These are large binary outputs from real recording sessions and personal
+# audio content — must never reach a public AGPL repo. Added 2026-05-04
+# after the 0788a53 incident where auto-backup committed 5+ GB of WAVs.
+working/
+contextpulse_pipeline/examples/ep-*/
+
+# Voice profile / fingerprint artifacts (use S3, not git)
+*.npz
+fingerprint_result.json
+unified_transcript_labeled.json
+
+# Audio / video originals — global catch-all (defense in depth).
+# Originals belong in S3 or LFS, never git. The pre-publish gate
+# (AgentConfig/scripts/pre-publish.py check 72) will BLOCK any tracked
+# file >25 MB, but this keeps them out of the index in the first place.
+*.wav
+*.flac
+*.mp3
+*.m4a
+*.ogg
+*.opus
+*.mov
+*.mp4
+*.aac
+
+# Generic personal-research data directories — never meant for git
+local-archive/
+recordings/
