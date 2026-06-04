@@ -17,12 +17,12 @@ $createdNew = $false
 try {
     $script:watchdogMutex = [System.Threading.Mutex]::new($true, $mutexName, [ref]$createdNew)
 } catch {
-    # Mutex already exists and is abandoned or inaccessible — exit
+    # Mutex already exists and is abandoned or inaccessible - exit
     exit 0
 }
 
 if (-not $createdNew) {
-    # Another watchdog instance already holds the mutex — exit silently
+    # Another watchdog instance already holds the mutex - exit silently
     $script:watchdogMutex.Dispose()
     exit 0
 }
@@ -57,7 +57,7 @@ function Get-RestartsInLastHour {
 
 function Kill-ZombieDaemons {
     # Kill ONLY leftover ContextPulse daemon processes.
-    # Strictly matches "contextpulse_core.daemon" in command line — will NOT touch:
+    # Strictly matches "contextpulse_core.daemon" in command line - will NOT touch:
     #   - monitor-hotkeys.pyw
     #   - Any other pythonw/python process
     $zombies = Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" -ErrorAction SilentlyContinue |
@@ -87,33 +87,47 @@ function Kill-ZombieMcpServers {
 }
 
 function Start-McpServer {
-    # Start the unified MCP server if not already running on the configured port.
+    # Ensure the unified MCP server is running on the configured port.
+    # Idempotent: returns immediately if the port is already listening, so it
+    # is safe to call on every supervisor loop iteration. If the server is NOT
+    # up (initial start OR it died since the last check), retry a few times
+    # before giving up for this iteration. Previously this ran once at startup
+    # with no retry, so a failed launch or a later MCP crash left agents with a
+    # dead endpoint until the watchdog was manually restarted.
+    param([int]$MaxAttempts = 3)
+
     $listening = Test-NetConnection -ComputerName 127.0.0.1 -Port $McpPort -WarningAction SilentlyContinue
     if ($listening.TcpTestSucceeded) {
-        Write-Log "Unified MCP server already running on port $McpPort"
         return
     }
 
     # Kill any zombie per-session MCP servers from the old stdio era
     Kill-ZombieMcpServers
 
-    Write-Log "Starting unified MCP server (python.exe -m $McpModule --port $McpPort)"
-    $mcpProc = Start-Process -FilePath $VenvPython `
-        -ArgumentList "-m", $McpModule, "--port", $McpPort `
-        -WorkingDirectory $WorkDir `
-        -PassThru -WindowStyle Hidden `
-        -RedirectStandardError "$WorkDir\mcp_unified_stderr.log"
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        Write-Log "Starting unified MCP server (attempt $attempt/$MaxAttempts, -m $McpModule --port $McpPort)"
+        $mcpProc = Start-Process -FilePath $VenvPython `
+            -ArgumentList "-m", $McpModule, "--port", $McpPort `
+            -WorkingDirectory $WorkDir `
+            -PassThru -WindowStyle Hidden `
+            -RedirectStandardError "$WorkDir\mcp_unified_stderr.log"
 
-    Write-Log "Unified MCP server started (pid=$($mcpProc.Id))"
+        Write-Log "Unified MCP server started (pid=$($mcpProc.Id))"
 
-    # Wait briefly and verify it came up
-    Start-Sleep -Seconds 3
-    $check = Test-NetConnection -ComputerName 127.0.0.1 -Port $McpPort -WarningAction SilentlyContinue
-    if ($check.TcpTestSucceeded) {
-        Write-Log "Unified MCP server confirmed healthy on port $McpPort"
-    } else {
-        Write-Log "Unified MCP server FAILED to start - check mcp_unified_stderr.log" "ERROR"
+        # Wait briefly and verify it came up
+        Start-Sleep -Seconds 3
+        $check = Test-NetConnection -ComputerName 127.0.0.1 -Port $McpPort -WarningAction SilentlyContinue
+        if ($check.TcpTestSucceeded) {
+            Write-Log "Unified MCP server confirmed healthy on port $McpPort"
+            return
+        }
+
+        Write-Log "Unified MCP server did not come up (attempt $attempt/$MaxAttempts) - check mcp_unified_stderr.log" "WARN"
+        Kill-ZombieMcpServers
+        Start-Sleep -Seconds 3
     }
+
+    Write-Log "Unified MCP server FAILED to start after $MaxAttempts attempts - will retry next loop iteration" "ERROR"
 }
 
 # --- Main Loop ---
@@ -127,6 +141,11 @@ try {
     Start-McpServer
 
     while ($true) {
+        # Re-assert MCP server health every iteration. Start-McpServer no-ops
+        # if the port is already listening, so this only acts when the server
+        # died. Catches MCP crashes that happen after the initial launch.
+        Start-McpServer
+
         # Check restart budget
         $recentRestarts = Get-RestartsInLastHour
         if ($recentRestarts -ge $MaxRestartsPerHour) {
