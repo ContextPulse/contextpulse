@@ -140,6 +140,39 @@ class TestVoiceModuleTranscription:
         assert "raw_transcript" in evt.payload
         assert "paste_text_hash" in evt.payload
 
+    def test_transcription_event_emitted_before_paste(self, module_with_mocks):
+        """Regression: the TRANSCRIPTION event must be written to the spine
+        BEFORE the synthetic Ctrl+V fires. paste_text() triggers the Touch
+        CorrectionDetector, which queries activity.db for this event ~0.1s
+        later. If we emit after paste_text() returns, the row never exists at
+        query time and no voice correction is ever harvested (the corrections
+        pipeline read zero rows for 19 days because of this ordering).
+        """
+        module, received = module_with_mocks
+        call_order = []
+
+        original_emit = module._emit
+
+        def tracking_emit(event):
+            if event.event_type == EventType.TRANSCRIPTION:
+                call_order.append("emit")
+            return original_emit(event)
+
+        module._emit = tracking_emit
+
+        with patch("contextpulse_voice.voice_module.paste_text") as mock_paste:
+            def record_paste(_text):
+                call_order.append("paste")
+                return (time.time(), "abc123")
+
+            mock_paste.side_effect = record_paste
+            with patch("contextpulse_voice.voice_module.has_api_key", return_value=False):
+                module._transcribe_and_paste(b"fake_wav", "code.exe", "test.py")
+
+        assert call_order == ["emit", "paste"], (
+            f"TRANSCRIPTION event must be emitted before paste_text() — got {call_order}"
+        )
+
     def test_empty_transcription_skipped(self, module_with_mocks):
         module, received = module_with_mocks
         module._transcriber.transcribe.return_value = ""

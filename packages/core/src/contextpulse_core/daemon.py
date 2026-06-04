@@ -597,7 +597,6 @@ class ContextPulseDaemon:
                     platform.kill_process(pid)
                     logger.info("Killed zombie pid=%d", pid)
                 # Brief pause to let the OS release the mutex
-                import time
                 time.sleep(0.5)
 
         self._mutex = platform.acquire_single_instance_lock("ContextPulse_SingleInstance")
@@ -657,14 +656,37 @@ class ContextPulseDaemon:
             # Windows rebuilds the notification area (explorer.exe restart,
             # WM_ENDSESSION, clipboard interaction).  We retry automatically
             # so the daemon doesn't die.
+            #
+            # The restart budget counts only *rapid* exits. A tray that ran
+            # healthy for a while before glitching is not a boot-loop, so its
+            # counter resets — otherwise occasional notification-area rebuilds
+            # accumulate over ~24h and silently exhaust the budget. When the
+            # budget IS genuinely exhausted we exit NON-ZERO so the external
+            # watchdog treats it as a crash and relaunches (exit 0 reads as a
+            # graceful shutdown and the watchdog would stop too).
             _MAX_TRAY_RESTARTS = 5
-            for _tray_attempt in range(_MAX_TRAY_RESTARTS):
+            _HEALTHY_RUN_SECONDS = 300  # ran this long → not a boot-loop, reset budget
+            _tray_attempt = 0
+            while True:
+                _tray_start = time.time()
                 self.tray.run()  # blocks until quit or unexpected exit
+                _tray_runtime = time.time() - _tray_start
                 if not self._running:
                     break  # intentional quit via menu
+
+                if _tray_runtime > _HEALTHY_RUN_SECONDS:
+                    _tray_attempt = 0  # stable run before glitch — not a boot-loop
+                _tray_attempt += 1
+                if _tray_attempt > _MAX_TRAY_RESTARTS:
+                    logger.error(
+                        "Tray restart limit reached (%d rapid exits) — daemon exiting non-zero for watchdog relaunch",
+                        _MAX_TRAY_RESTARTS,
+                    )
+                    sys.exit(1)
+
                 logger.warning(
-                    "Tray exited unexpectedly (attempt %d/%d) — restarting",
-                    _tray_attempt + 1, _MAX_TRAY_RESTARTS,
+                    "Tray exited unexpectedly after %.0fs (attempt %d/%d) — restarting",
+                    _tray_runtime, _tray_attempt, _MAX_TRAY_RESTARTS,
                 )
                 try:
                     from contextpulse_sight.icon import create_icon
@@ -676,9 +698,7 @@ class ContextPulseDaemon:
                     )
                 except Exception:
                     logger.exception("Failed to recreate tray icon")
-                    break
-            else:
-                logger.error("Tray restart limit reached — daemon exiting")
+                    sys.exit(1)
 
 
 def main() -> None:

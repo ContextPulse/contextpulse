@@ -357,3 +357,56 @@ class TestNotifyTrayDebounce:
         daemon._last_tray_notification = 0
         # No tray attribute set — should not raise
         daemon._notify_tray("No Tray", "Message")
+
+
+# ---------------------------------------------------------------------------
+# run() entry point — tray keep-alive loop
+# ---------------------------------------------------------------------------
+
+class TestRunTrayLoop:
+    """Smoke-tests the run() tray keep-alive loop.
+
+    Regression guard: a local ``import time`` inside run()'s zombie-kill block
+    made Python treat ``time`` as function-local for the whole method, so the
+    tray loop's ``time.time()`` raised UnboundLocalError whenever the
+    zombie-kill branch did NOT run (the common no-zombie case). The unit suite
+    missed it because nothing exercised run(); this crash-looped the live
+    daemon on deploy. These tests drive run() with no zombies and assert it
+    reaches and exits the tray loop cleanly.
+    """
+
+    def _run_once(self, tmp_path, zombies):
+        daemon, mocks = _make_daemon(tmp_path)
+
+        mock_platform = MagicMock()
+        mock_platform.find_contextpulse_processes.return_value = zombies
+        mock_platform.acquire_single_instance_lock.return_value = object()
+
+        mock_tray = MagicMock()
+        # Break the keep-alive loop after one iteration by simulating an
+        # intentional quit (the line under regression test, _tray_start =
+        # time.time(), runs BEFORE tray.run() each iteration).
+        def _quit_after_run():
+            daemon._running = False
+        mock_tray.run.side_effect = _quit_after_run
+
+        with patch("contextpulse_core.daemon.get_platform_provider", return_value=mock_platform), \
+             patch("contextpulse_core.daemon.is_first_run", return_value=False), \
+             patch.object(ContextPulseDaemon, "_start_modules"), \
+             patch.object(ContextPulseDaemon, "_create_tray_menu", return_value=MagicMock()), \
+             patch("contextpulse_core.daemon.threading.Thread"), \
+             patch("contextpulse_core.daemon.pystray.Icon", return_value=mock_tray), \
+             patch("contextpulse_sight.icon.create_icon", return_value=MagicMock()):
+            daemon.run()
+
+        return daemon, mock_tray
+
+    def test_run_no_zombies_does_not_raise(self, tmp_path):
+        # The exact branch that crash-looped prod: no zombies, so the local
+        # ``import time`` never executed and time.time() hit an unbound local.
+        daemon, mock_tray = self._run_once(tmp_path, zombies=[])
+        mock_tray.run.assert_called_once()
+
+    def test_run_with_zombies_does_not_raise(self, tmp_path):
+        daemon, mock_tray = self._run_once(tmp_path, zombies=[99999])
+        mock_tray.run.assert_called_once()
