@@ -390,11 +390,13 @@ class VoiceModule(ModalityModule):
                 return
 
             self._last_wav_bytes = wav_bytes
-            paste_timestamp, paste_hash = paste_text(text)
-            if self._overlay:
-                self._overlay.show_ready()
 
-            # Emit TRANSCRIPTION event with both raw and cleaned text
+            # Emit the TRANSCRIPTION event BEFORE pasting. paste_text() fires a
+            # synthetic Ctrl+V that triggers the Touch CorrectionDetector, which
+            # queries activity.db for this event ~0.1s later. Emitting after
+            # paste_text() returns (~0.5s later) means the detector always
+            # queries before the row exists, so no correction is ever matched.
+            paste_hash = hashlib.sha256(text.encode()).hexdigest()[:16]
             self._emit(ContextEvent(
                 modality=Modality.VOICE,
                 event_type=EventType.TRANSCRIPTION,
@@ -408,9 +410,13 @@ class VoiceModule(ModalityModule):
                     "duration_seconds": len(wav_bytes) / (16000 * 2),
                     "cleanup_applied": use_llm,
                     "paste_text_hash": paste_hash,
-                    "paste_timestamp": paste_timestamp,
+                    "paste_timestamp": time.time(),
                 },
             ))
+
+            paste_text(text)
+            if self._overlay:
+                self._overlay.show_ready()
             logger.info("Dictated: %s", text[:100])
 
             # Schedule background screen correction harvesting.
@@ -462,11 +468,12 @@ class VoiceModule(ModalityModule):
             text = apply_vocabulary(text)
 
             if text:
-                time.sleep(0.15)
-                pag.hotkey("ctrl", "a")
-                time.sleep(0.05)
-                paste_timestamp, paste_hash = paste_text(text)
-
+                # Emit the TRANSCRIPTION event BEFORE pasting — paste_text()
+                # fires a synthetic Ctrl+V that the Touch CorrectionDetector
+                # picks up ~0.1s later and immediately queries activity.db for
+                # this event. Emitting after paste_text() returns means the row
+                # never exists at query time, so no correction is matched.
+                paste_hash = hashlib.sha256(text.encode()).hexdigest()[:16]
                 app_name, window_title = self._get_foreground_info()
                 self._emit(ContextEvent(
                     modality=Modality.VOICE,
@@ -481,10 +488,15 @@ class VoiceModule(ModalityModule):
                         "duration_seconds": len(self._last_wav_bytes) / (16000 * 2),
                         "cleanup_applied": True,
                         "paste_text_hash": paste_hash,
-                        "paste_timestamp": paste_timestamp,
+                        "paste_timestamp": time.time(),
                         "fix_last": True,
                     },
                 ))
+
+                time.sleep(0.15)
+                pag.hotkey("ctrl", "a")
+                time.sleep(0.05)
+                paste_text(text)
                 logger.info("Fix-last replaced: %s", text[:100])
         except Exception:
             self._error = "Fix-last failed"
