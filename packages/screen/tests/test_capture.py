@@ -191,6 +191,47 @@ class TestCaptureBackend:
         _, g, _ = img.getpixel((25, 25))
         assert g == 128
 
+    def test_get_dxcam_camera_caches_failure_as_none(self):
+        """dxcam.create() failures cache None so we stop retrying every capture."""
+        from unittest.mock import MagicMock, patch
+
+        mock_dxcam = MagicMock()
+        # Simulate dxcam.create raising IndexError for output_idx=1 (second monitor on different adapter)
+        mock_dxcam.create.side_effect = IndexError("list index out of range")
+
+        with patch.dict("sys.modules", {"dxcam": mock_dxcam}):
+            import contextpulse_sight.capture as cap
+            cap._dxcam_cameras = {}
+
+            # First call: dxcam.create raises, None is cached
+            result1 = cap._get_dxcam_camera(1)
+            assert result1 is None
+            assert cap._dxcam_cameras == {1: None}
+            assert mock_dxcam.create.call_count == 1
+
+            # Second call: cached None returned, no second dxcam.create call
+            result2 = cap._get_dxcam_camera(1)
+            assert result2 is None
+            assert mock_dxcam.create.call_count == 1  # unchanged
+
+    def test_get_dxcam_camera_caches_success(self):
+        """Successful dxcam.create() result is cached."""
+        from unittest.mock import MagicMock, patch
+
+        fake_camera = MagicMock()
+        mock_dxcam = MagicMock()
+        mock_dxcam.create.return_value = fake_camera
+
+        with patch.dict("sys.modules", {"dxcam": mock_dxcam}):
+            import contextpulse_sight.capture as cap
+            cap._dxcam_cameras = {}
+
+            result1 = cap._get_dxcam_camera(0)
+            assert result1 is fake_camera
+            result2 = cap._get_dxcam_camera(0)
+            assert result2 is fake_camera
+            assert mock_dxcam.create.call_count == 1
+
 
 class TestActiveWindowRect:
     """Test active window detection for adaptive region capture."""
