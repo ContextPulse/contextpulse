@@ -1,0 +1,25 @@
+{"format":"cp-conformance/1","api_surface":"cp_core.v1","vector_id":"cv-017-as-of-with-include-retracted",
+ "description":"M-3 pin: facts_about(as_of=t, include_retracted=True) MUST still apply the assertion-time filter asserted_at<=t. `include_retracted` lifts ONLY the retracted-exclusion clause, NOT the believed-as-of predicate (§1.2). Setup: sonet->Sonet asserted @T0; correct_fact->Sonnet asserted @T0+HOUR (retracts Sonet at T0+HOUR, superseded_by the user replacement). Before the fix the as_of predicate was built only in the not-include_retracted branch, so as_of was silently ignored when include_retracted=True, leaking the Sonnet replacement (asserted an hour AFTER as_of) into the audit view (time-travel leak). Expected: as_of=T0+1 include_retracted=True returns ONLY Sonet (Sonnet not yet asserted); as_of=T0+HOUR+1 include_retracted=True returns BOTH (Sonnet first then Sonet — facts_about total order is valid_from ASC, predicate ASC, id ASC; both share valid_from and predicate, and the user Sonnet id sorts before the deterministic Sonet id, matching cv-004's proven tiebreak). fact_count 3 = 1 session.occurred + retracted det Sonet + open user Sonnet.",
+ "given":{"now":1751000000000,"config":{"session_gap_ms":900000,"corroboration_factor":0.25,"confidence_cap":0.99,"projects":[]}},
+ "ingest":[
+  {"step":"observe","observation":{"source":"test","source_event_id":"c1","kind":"correction_detected",
+    "observed_at":1751000000000,"content":"sonet -> Sonet","meta":{"original_text":"sonet","corrected_text":"Sonet"}}},
+  {"step":"flush","now":1751000600000,"force":true},
+  {"step":"correct_fact","select":{"subject_id":"vocab:sonet","predicate":"vocab.corrects_to"},
+   "new_object_value":"Sonnet","asserted_at":1751003600000}],
+ "expect":{
+  "fact_count":3,
+  "facts":[
+   {"$id":"det","subject_id":"vocab:sonet","predicate":"vocab.corrects_to","object_value":"Sonet",
+    "valid_from":1751000000000,"asserted_at":1751000000000,"retracted_at":1751003600000,
+    "superseded_by":{"$ref":"user"},"extraction":"deterministic"},
+   {"$id":"user","subject_id":"vocab:sonet","predicate":"vocab.corrects_to","object_value":"Sonnet",
+    "valid_from":1751000000000,"valid_to":null,"asserted_at":1751003600000,"retracted_at":null,
+    "extraction":"user","confidence":1.0}],
+  "queries":[
+   {"call":"facts_about","args":{"subject":"vocab:sonet","predicate":"vocab.corrects_to","as_of":1751000001000,"include_retracted":true},
+    "expect_facts":[{"object_value":"Sonet"}]},
+   {"call":"facts_about","args":{"subject":"vocab:sonet","predicate":"vocab.corrects_to","as_of":1751003601000,"include_retracted":true},
+    "expect_facts":[{"object_value":"Sonnet"},{"object_value":"Sonet"}]},
+   {"call":"facts_about","args":{"subject":"vocab:sonet","predicate":"vocab.corrects_to","as_of":1751000001000},
+    "expect_facts":[{"object_value":"Sonet"}]}]}}
