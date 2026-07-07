@@ -82,10 +82,13 @@ def main(argv: list[str] | None = None) -> int:
     if proc.returncode != 0:
         sys.stderr.write(proc.stderr)
         return proc.returncode
+    # query-journal has no --category filter and --last N would scroll early
+    # saves out of view (red-team M3). Count with --since the phase-0 start date
+    # and an anchored grep so prose mentioning the token can't inflate the count.
     print(
-        "\nSAVE LOGGED. Count them: "
-        "python ~/.claude/shared-knowledge/scripts/query-journal.py "
-        "--project ContextPulse --last 100 | grep PHASE0-SAVE"
+        "\nSAVE LOGGED. Count them (no --last; anchored grep):\n"
+        "  python ~/.claude/shared-knowledge/scripts/query-journal.py "
+        '--project ContextPulse --since 2026-07-07 | grep -c "PHASE0-SAVE | tool="'
     )
     return 0
 

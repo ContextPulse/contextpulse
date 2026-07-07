@@ -95,9 +95,16 @@ def main(argv: list[str] | None = None) -> int:
         src.close()
 
     logger.info("Read %d events", len(events))
-    if not events:
-        logger.info("No events in window — nothing to consolidate.")
-        return 0
+    if len(events) >= args.limit:
+        # A real day exceeds the cap (measured ~1900 events/24h), so a single
+        # --hours 24 pass only sees the most recent ~1.75h (red-team C2). Run
+        # this every 6h with --hours 6 to cover the full day under the cap.
+        logger.warning(
+            "Event cap hit (%d) — window truncated to the most recent %d events; "
+            "schedule shorter windows more often for full-day coverage.",
+            args.limit,
+            args.limit,
+        )
 
     prompt = probe.build_extraction_prompt(events)
 
@@ -106,20 +113,28 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("Dry run — %d chars of prompt, no LLM call.", len(prompt))
         return 0
 
-    logger.info("Calling Claude CLI for extraction...")
-    output = call_claude(prompt, timeout=args.timeout)
-    facts = probe.parse_facts(output)
-    logger.info("Parsed %d facts from LLM output", len(facts))
-
     pconn = probe.connect_probe(args.probe_db)
     try:
+        if not events:
+            probe.record_run(pconn, events=0, facts=0, error="no events in window")
+            logger.info("No events in window — nothing to consolidate.")
+            return 0
+        try:
+            logger.info("Calling Claude CLI for extraction...")
+            output = call_claude(prompt, timeout=args.timeout)
+        except Exception as exc:  # noqa: BLE001 — record then fail loud
+            probe.record_run(pconn, events=len(events), facts=0, error=str(exc)[:300])
+            logger.exception("Claude CLI call failed")
+            return 1
+        facts = probe.parse_facts(output)
+        logger.info("Parsed %d facts from LLM output", len(facts))
         n = probe.write_facts(pconn, facts)
+        probe.record_run(pconn, events=len(events), facts=n, error=None)
+        logger.info("Wrote %d new facts to %s", n, args.probe_db)
+        print(f"OK: {len(events)} events -> {n} new facts written to {args.probe_db}")
+        return 0
     finally:
         pconn.close()
-
-    logger.info("Wrote %d facts to %s", n, args.probe_db)
-    print(f"OK: {len(events)} events -> {n} facts written to {args.probe_db}")
-    return 0
 
 
 if __name__ == "__main__":

@@ -28,8 +28,49 @@ import json
 import logging
 import os
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+# ISO datetime formats an LLM might emit for valid_from despite the prompt.
+_ISO_FORMATS = (
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%dT%H:%M",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d %H:%M",
+    "%Y-%m-%d",
+)
+
+
+def _coerce_ts(value: Any) -> float | None:
+    """Coerce a valid_from to a float epoch-seconds, or None if unusable.
+
+    Guards two real corruptions (red-team M2): an ISO string stored as TEXT is
+    invisible to context_at's numeric BETWEEN and sorts above REAL in
+    facts_about; a millisecond epoch lands facts ~50,000 years in the future.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):  # bool is an int subclass — reject explicitly
+        return None
+    if isinstance(value, (int, float)):
+        f = float(value)
+    elif isinstance(value, str):
+        try:
+            f = float(value.strip())
+        except ValueError:
+            for fmt in _ISO_FORMATS:
+                try:
+                    return datetime.strptime(value.strip(), fmt).timestamp()
+                except ValueError:
+                    continue
+            return None
+    else:
+        return None
+    if f > 1e12:  # milliseconds — bring back to seconds
+        f /= 1000.0
+    return f
+
 
 logger = logging.getLogger(__name__)
 
@@ -63,10 +104,24 @@ CREATE TABLE IF NOT EXISTS facts (
     valid_from REAL,
     source_event_ids TEXT,        -- JSON array of event_id
     confidence REAL DEFAULT 0.5,
-    created_at REAL NOT NULL DEFAULT (unixepoch('subsec'))
+    created_at REAL NOT NULL DEFAULT (unixepoch('subsec')),
+    -- Disjoint nightly windows + manual reruns re-extract stable facts; an exact
+    -- (entity, fact) dedup keeps append-only recall from cluttering (red-team M4).
+    UNIQUE(entity, fact)
 );
 CREATE INDEX IF NOT EXISTS idx_facts_entity ON facts(entity COLLATE NOCASE);
 CREATE INDEX IF NOT EXISTS idx_facts_valid_from ON facts(valid_from);
+
+-- Per-run ledger so a failed/empty 3am run is visible, not a silent zero
+-- (red-team M1). Reviewed at the exit gate to distinguish "no saves" from
+-- "consolidator never actually ran".
+CREATE TABLE IF NOT EXISTS probe_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ran_at REAL NOT NULL DEFAULT (unixepoch('subsec')),
+    events INTEGER NOT NULL DEFAULT 0,
+    facts INTEGER NOT NULL DEFAULT 0,
+    error TEXT
+);
 """
 
 
@@ -83,11 +138,11 @@ def connect_probe(path: Path | str) -> sqlite3.Connection:
 
 
 def write_facts(conn: sqlite3.Connection, facts: list[dict[str, Any]]) -> int:
-    """Insert parsed facts; return the number written."""
+    """Insert parsed facts (deduped on entity+fact); return the number written."""
     written = 0
     for f in facts:
-        conn.execute(
-            "INSERT INTO facts (entity, fact, valid_from, source_event_ids, confidence)"
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO facts (entity, fact, valid_from, source_event_ids, confidence)"
             " VALUES (?, ?, ?, ?, ?)",
             (
                 f["entity"],
@@ -97,9 +152,18 @@ def write_facts(conn: sqlite3.Connection, facts: list[dict[str, Any]]) -> int:
                 float(f.get("confidence", 0.5)),
             ),
         )
-        written += 1
+        written += cur.rowcount  # 0 when the UNIQUE(entity, fact) dedup fires
     conn.commit()
     return written
+
+
+def record_run(conn: sqlite3.Connection, events: int, facts: int, error: str | None = None) -> None:
+    """Append a row to the run ledger so empty/failed runs aren't silent."""
+    conn.execute(
+        "INSERT INTO probe_runs (events, facts, error) VALUES (?, ?, ?)",
+        (events, facts, error),
+    )
+    conn.commit()
 
 
 def _row_to_fact(row: sqlite3.Row) -> dict[str, Any]:
@@ -141,6 +205,13 @@ def query_context_at(
 # ── events (read-only source) ───────────────────────────────────────
 
 
+# Mirror ContextEvent._TEXT_PAYLOAD_KEYS (events.py). The live events_fts trigger
+# only indexes the first 3; burst_text (typed bursts) and correction_text (voice
+# corrections) are the person's own words — strongest intent signal — so the
+# probe extracts all 5 even though FTS can't (a genuine fused-recall edge).
+_TEXT_KEYS = ("ocr_text", "transcript", "text", "burst_text", "correction_text")
+
+
 def _extract_text(payload_raw: str | None) -> str:
     """Pull the best text field out of an event payload; never raise."""
     if not payload_raw:
@@ -151,7 +222,11 @@ def _extract_text(payload_raw: str | None) -> str:
         return ""
     if not isinstance(payload, dict):
         return ""
-    return payload.get("ocr_text") or payload.get("transcript") or payload.get("text") or ""
+    for key in _TEXT_KEYS:
+        value = payload.get(key)
+        if value:
+            return value
+    return ""
 
 
 def read_recent_events(
@@ -189,25 +264,125 @@ def read_recent_events(
 # ── extraction prompt ───────────────────────────────────────────────
 
 
+# Authored + red-teamed by Fable (2026-07-07); see
+# .internal/fable-redesign/phase0-extraction-prompt-2026-07-07.md for rationale +
+# golden set. Overridable at runtime via CONTEXTPULSE_PROBE_PROMPT_FILE (a file
+# whose contents replace this header) so the prompt can be iterated without a
+# code change — the single biggest quality lever for the probe.
 _PROMPT_HEADER = """\
-You are a memory consolidator for a personal activity-capture system. Below is a
-timestamped log of one person's recent computer activity (app, window title, and
-any OCR'd/transcribed text). Extract durable FACTS about entities the person was
-working with — projects, people, files, decisions, tasks, tools, states.
+You are the nightly memory consolidator for a personal activity-capture system.
+Input: a chronological, timestamped log of ONE person's computer activity over
+roughly the last 24 hours. Each line:
+  [<event_id>] ts=<unix_ts> <modality> app='<app>' win='<window title>' :: <text>
+Modalities: sight = screen OCR (noisy), voice = speech transcript, touch =
+typed text, clipboard = copied text. Voice and touch are the person's own
+words and are the strongest evidence of intent and decisions.
 
-Return ONLY a JSON array. Each element:
-  {"entity": "<short name>", "fact": "<one concrete fact>",
-   "valid_from": <unix timestamp when it became true>,
-   "source_event_ids": ["<event_id>", ...], "confidence": <0.0-1.0>}
+YOUR JOB
+Distill durable FACTS to be recalled later via two tools: facts_about(entity)
+and context_at(timestamp). The raw log is ALREADY fully keyword-searchable, so
+a fact has value ONLY if a keyword search over the raw log could not produce
+the same answer. Emit exactly two kinds of facts:
 
-Rules:
-- Prefer facts that a plain keyword search over the log could NOT answer:
-  relationships, states, decisions, "who/what/when" fusion across events.
-- One clear fact per element. No speculation. Skip UI chrome and noise.
-- If nothing durable is present, return [].
+1. FUSED facts — synthesized across MULTIPLE events, usually spanning times,
+   apps, or modalities: decisions and their reasons, outcomes, state changes,
+   relationships, cause/effect, who-what-why connections.
+     GOOD: "Booked the Southwest DEN-BOS 11:25 AM flight for $214.96 over the
+            cheaper $198 JetBlue because JetBlue arrived too late."
+            (price-comparison screen + voice remark + confirmation page)
+     GOOD: "Fixed the Decimal*float TypeError in invoicer's tax.py by coercing
+            rate to Decimal; full test suite passing afterward."
+            (error on screen + typed fix + green pytest run)
+2. TEMPORAL facts — what was true or happening at/around a time, phrased so
+   context_at(t) can answer them: work sessions, states with a start, blocked/
+   unblocked transitions, before-vs-after.
+     GOOD: "From ~13:05 to ~14:20 was debugging the invoicer tax rounding bug."
+     GOOD: "As of the evening, the staging deploy was still blocked waiting on
+            ACM certificate validation."
 
-Activity log:
+NEVER emit restatements — anything answerable by grepping a single event:
+     BAD: "United flight DEN-BOS costs $238."         (on-screen text; FTS has it)
+     BAD: "An email from Alice Wong is in the inbox." (screen content)
+     BAD: "tax.py defines apply_tax()."               (visible code)
+Apply this test to every candidate fact: "would a keyword search of the raw
+log for this entity surface this same answer?" If yes, drop the fact.
+
+ENTITIES
+- "entity" is the short canonical name the person would later type into
+  facts_about(): a project, person, product, file, trip, ticket, or topic.
+- Use ONE canonical form per real-world thing across your entire output. Fold
+  aliases, abbreviations, vendor prefixes, and misspellings into the most
+  specific name the person themselves uses: "ToS" / "thinkorswim" /
+  "TD Ameritrade thinkorswim" -> "thinkorswim"; "Bob" / "Robert Chen" /
+  "rchen@acme.com" -> "Robert Chen".
+- Prefer the project over the file, the person over their email address, the
+  product over its parent company (unless the fact is about the company).
+
+FIELDS
+- fact: ONE self-contained sentence with the concrete specifics (names,
+  amounts, versions, outcomes, reasons) needed to be useful months from now,
+  standing alone. No pronouns without antecedents.
+- valid_from: unix timestamp when the fact BECAME TRUE — the decision moment,
+  the state-change event, or the session start. Use the ts of the earliest
+  event that proves the fact. Never invent a timestamp outside the log.
+- source_event_ids: the real event ids supporting the fact. A fused fact
+  should normally cite 2 or more events.
+- confidence:
+    0.90-1.00  the person explicitly said/typed it, or multiple independent
+               events confirm it
+    0.70-0.85  solid multi-event inference with only one plausible reading
+    0.50-0.65  single-event inference of a durable state; alternative
+               readings possible
+    below 0.50 do not emit the fact at all
+
+NOISE AND HONESTY
+- Skip UI chrome, menus, ads, promotions, notifications, cookie banners,
+  boilerplate, autocomplete suggestions, code merely scrolled past, and
+  articles merely glimpsed.
+- Passive reading becomes a fact only at session level ("spent ~40 minutes
+  researching Rust WASM toolchains"), never per headline or per page.
+- Every fact must be traceable to its cited events — no hallucination, no
+  speculation. Where OCR is garbled or ambiguous, prefer omission.
+- Quality over quantity: a typical day yields 0-15 facts; hard cap 25. No
+  near-duplicates of the same fact in different words.
+- If nothing durable happened, return [].
+
+SENSITIVE DATA
+The log WILL contain secrets and personal data. Hard rules:
+- NEVER output passwords, API keys or tokens, OTP/2FA codes, full credit
+  card, bank, routing, or account numbers, SSNs or government IDs, or private
+  keys — not even partially, masked, or paraphrased. If an event contains
+  only such data, ignore the whole event.
+- Last-4 digits are permitted only when needed to identify WHICH card or
+  account was used.
+- The person's OWN health, financial, and legal facts ARE worth capturing
+  when they themselves stated or acted on them (appointments made, amounts
+  paid, decisions taken) — this memory exists to serve them. Capture exactly
+  what is evidenced; never infer diagnoses, conditions, or legal exposure
+  beyond what is explicit.
+
+OUTPUT FORMAT
+Return ONLY a JSON array — the first character of your reply is '[' and the
+last is ']'. No markdown fences, no prose, no comments, no trailing commas.
+Double-quoted keys and strings; valid_from is a bare number. Each element:
+  {"entity": "<canonical name>", "fact": "<one durable fact>",
+   "valid_from": <unix_ts>, "source_event_ids": ["<id>", ...],
+   "confidence": <0.0-1.0>}
+If nothing qualifies, return [].
+
+Activity log (chronological):
 """
+
+
+def _prompt_header() -> str:
+    """Return the extraction prompt header, honoring a file override if set."""
+    override = os.environ.get("CONTEXTPULSE_PROBE_PROMPT_FILE")
+    if override:
+        try:
+            return Path(override).read_text(encoding="utf-8")
+        except OSError:
+            logger.warning("prompt override %s unreadable; using built-in", override)
+    return _PROMPT_HEADER
 
 
 def build_extraction_prompt(events: list[dict[str, Any]]) -> str:
@@ -223,7 +398,7 @@ def build_extraction_prompt(events: list[dict[str, Any]]) -> str:
             f"win={e.get('window_title')!r} :: {text}"
         )
     body = "\n".join(lines) if lines else "(no events in window)"
-    return _PROMPT_HEADER + body + "\n\nJSON array:"
+    return _prompt_header() + body + "\n\nJSON array:"
 
 
 # ── tolerant parsing ────────────────────────────────────────────────
@@ -267,7 +442,7 @@ def parse_facts(llm_output: str) -> list[dict[str, Any]]:
             {
                 "entity": str(entity),
                 "fact": str(fact),
-                "valid_from": item.get("valid_from"),
+                "valid_from": _coerce_ts(item.get("valid_from")),
                 "source_event_ids": ids,
                 "confidence": conf,
             }
