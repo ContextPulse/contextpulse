@@ -17,6 +17,20 @@ planning function, (3) applies the returned ChangeSet transactionally.
 
 Divergence ledger (D1-D8) and BD-1 live in ``migrate.py`` / ``schema.sql``.
 BD-1 (short-alias word-boundary rule) is implemented in :func:`resolve_entity`.
+
+C-2 RESOLUTION (authoritative — resolves the v2 dossier m4 vs §3.1 contradiction):
+For ``session.active_project`` under an open session, a re-derived candidate whose
+project == the currently-open project pins ``valid_from = session_start`` (m4's
+intent: same deterministic fact id => rule-1 fusion corroborates the open era). A
+candidate for a DIFFERENT project is a genuine mid-session transition and pins
+``valid_from = observed_at``, so rule 2's strict ``candidate.valid_from >
+old.valid_from`` fires: the old interval closes at the switch time and the new one
+opens. Pinning the switch to ``session_start`` instead would build a zero-width
+``[x, x)`` era (violating §1.2 "never zero-width") and crash the schema CHECK — this
+resolution makes §3.1's promised rule-2 supersession reachable. Implemented in
+:func:`_plan_project`; the open fact's ``valid_from`` is carried in
+``IngestState.open_project_valid_from`` so :func:`_close_session` can address it.
+Pinned by cv-016.
 """
 
 from __future__ import annotations
@@ -98,6 +112,10 @@ class IngestState:
     open_app_first_seen: tuple[tuple[str, int], ...] = ()
     open_app_last_seen: tuple[tuple[str, int], ...] = ()
     open_project_id: Optional[str] = None  # entity id of current active project (in open session)
+    # valid_from of the CURRENTLY-open active_project fact. Equals session_start for the
+    # first project of a session; equals the switch's observed_at after a mid-session
+    # project change (C-2). _close_session needs this to compute the open fact's id.
+    open_project_valid_from: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -230,13 +248,20 @@ _WS = re.compile(r"\s+")
 
 def slugify(s: str) -> str:
     """NFKC-normalize, casefold, trim, collapse internal whitespace to '-',
-    drop chars outside [a-z0-9._-], collapse repeated '-'."""
+    DROP chars outside [a-z0-9._-] (§1.3 — M-2: drop, do NOT replace with '-'),
+    collapse repeated '-', strip leading/trailing '-'.
+
+    M-2 (identity layer, Rust-port byte-equality): ``slugify("notepad++") == "notepad"``
+    (not ``"notepad-"``). Dropping keeps punctuation-bearing surfaces from minting ids
+    with dangling dashes.
+    """
     s = unicodedata.normalize("NFKC", s)
     s = s.casefold()
     s = s.strip()
     s = _WS.sub("-", s)
-    s = _SLUG_DROP.sub("-", s)
+    s = _SLUG_DROP.sub("", s)  # DROP disallowed chars (M-2), not replace with '-'
     s = _SLUG_DASHES.sub("-", s)
+    s = s.strip("-")
     return s
 
 
@@ -293,6 +318,18 @@ def _alias_matches_title(alias: str, title: str) -> bool:
     return alias.casefold() in title.casefold()
 
 
+def _matched_project_token(title: str, proj_id: str, config: IngestConfig) -> Optional[str]:
+    """The first config token (name/alias) of the project ``proj_id`` that matches
+    ``title`` under BD-1. Used to record the rule-3 alias (§1.4 minor)."""
+    for proj in config.projects:
+        if entity_id("project", proj.name) != proj_id:
+            continue
+        for cand in (proj.name,) + tuple(proj.aliases):
+            if _alias_matches_title(cand, title):
+                return cand
+    return None
+
+
 def resolve_entity(
     type_: str,
     surface: str,
@@ -318,12 +355,16 @@ def resolve_entity(
 
     if type_ == "project":
         # rule 3: window-title match. `surface` is the window title here.
+        # An alias-table hit is a rule-2 resolution (already recorded); a config-token
+        # match with NO alias-table entry is a fresh rule-3 resolution (is_new=True) that
+        # the caller pins with an InsertAlias so the next hit is rule 2 (§1.4 minor).
         for proj in config.projects:
             candidates = (proj.name,) + tuple(proj.aliases)
             for cand in candidates:
                 if _alias_matches_title(cand, surface):
                     eid = entity_id("project", proj.name)
-                    return ResolvedEntity(eid, proj.name, True)
+                    is_new = aliases.get(cand.casefold()) != eid
+                    return ResolvedEntity(eid, proj.name, is_new)
         return ResolvedEntity("", "", False)  # no match => caller emits nothing
 
     # vocab and other keyed types: surface is the exact key
@@ -487,13 +528,22 @@ def plan_ingest(
 
     new_state = state
     session_id: Optional[str] = None
+    # session_id stored on the observation ROW. Equals session_id for session-scoped
+    # observations; for a lock it is the CLOSED session's id (minor, §1.6); None for late.
+    obs_session_id: Optional[str] = None
 
     if obs.kind == "session_lock":
         # close open session (if any); open nothing
+        # MINOR (§1.6): the lock observation carries the session_id of the session it
+        # closes (not NULL). No session-scoped facts derive from a lock.
+        obs_session_id = (
+            f"session:{state.open_session_start}"
+            if state.open_session_start is not None
+            else None
+        )
         close_ops, close_notes, new_state = _close_session(state, config)
         ops.extend(close_ops)
         notes.extend(close_notes)
-        # lock observation carries the closed session id (if there was one); no facts derive
         session_id = None
         obs_late = False
     elif is_late:
@@ -549,8 +599,12 @@ def plan_ingest(
             new_state = state
         obs_late = False
 
+    # non-lock observations store their own session_id (None for late) on the row.
+    if obs.kind != "session_lock":
+        obs_session_id = session_id
+
     # ---- record observation FIRST (so all provenance can reference it) ------
-    ops.append(InsertObservation(obs=obs, session_id=session_id, late=obs_late))
+    ops.append(InsertObservation(obs=obs, session_id=obs_session_id, late=obs_late))
     ops.extend(open_ops)
 
     # ---- session-scoped extractors (only for non-late, non-lock obs) --------
@@ -638,12 +692,17 @@ def _close_session(state: IngestState, config: IngestConfig) -> tuple[list, list
     occ_id = fact_id(session_id, "session.occurred", None, None, start, _DET)
     ops.append(CloseValidity(occ_id, close_to))
 
-    # active_project (open interval, valid_from = session_start)
+    # active_project (open interval). valid_from is session_start for the first project
+    # of the session, or the switch time after a mid-session change (C-2). Close at
+    # last-seen (+1 rule) but never zero-width vs the OPEN fact's own valid_from.
     if state.open_project_id:
+        ap_from = state.open_project_valid_from
+        if ap_from is None:
+            ap_from = start
         ap_id = fact_id(
-            session_id, "session.active_project", state.open_project_id, None, start, _DET
+            session_id, "session.active_project", state.open_project_id, None, ap_from, _DET
         )
-        ops.append(CloseValidity(ap_id, _instantaneous_valid_to(start, last)))
+        ops.append(CloseValidity(ap_id, _instantaneous_valid_to(ap_from, last)))
 
     # used_app intervals — one per app, valid_from = app first-seen
     last_map = dict(state.open_app_last_seen)
@@ -752,12 +811,39 @@ def _plan_project(
         )
     )
 
+    # MINOR (§1.4): a fresh rule-3 resolution writes an entity_aliases row for the matched
+    # config token (casefolded) so the next sighting resolves via rule 2. INSERT OR IGNORE
+    # in the adapter makes re-emission harmless.
+    if resolved.is_new:
+        matched = _matched_project_token(obs.window_title, proj_id, config)
+        if matched is not None:
+            ops.append(
+                InsertAlias(
+                    entity_id=proj_id,
+                    alias=matched.casefold(),
+                    source="deterministic",
+                    created_at=now,
+                )
+            )
+
+    # C-2 spec resolution (authoritative; resolves the m4 vs §3.1 contradiction):
+    #   * SAME project as the currently-open one  -> valid_from = session_start.
+    #     This reproduces the same deterministic fact id so rule 1 (fusion) is the
+    #     natural path (m4's intent: re-derivation corroborates, never re-opens).
+    #   * DIFFERENT project (a genuine mid-session switch) -> valid_from = observed_at.
+    #     This makes candidate.valid_from > the open fact's valid_from, so rule 2's
+    #     strict `>` fires: the old interval closes at the switch time and the new one
+    #     opens. Using session_start here would build a zero-width [x, x) era (§1.2
+    #     "never zero-width") and crash the schema CHECK — this is the C-2 fix.
+    switching = state.open_project_id is not None and state.open_project_id != proj_id
+    proj_valid_from = obs.observed_at if switching else session_start
+
     candidate = _make_fact(
         subject_id=session_id,
         predicate="session.active_project",
         object_entity_id=proj_id,
         object_value=None,
-        valid_from=session_start,  # m4: session-scoped -> session_start
+        valid_from=proj_valid_from,
         valid_to=None,
         asserted_at=now,
         confidence=PREDICATE_REGISTRY["session.active_project"].base_confidence,
@@ -767,7 +853,14 @@ def _plan_project(
     ops.extend(fuse_ops)
     notes.extend(fuse_notes)
 
-    new_state = replace(state, open_project_id=proj_id)
+    # Track the OPEN active_project fact's valid_from so _close_session can address it.
+    # On a same-project re-derivation, keep the existing open valid_from (rule-1 fused
+    # into that same era); on a switch, adopt the new candidate's valid_from.
+    if switching or state.open_project_id is None:
+        new_open_from = proj_valid_from
+    else:
+        new_open_from = state.open_project_valid_from or proj_valid_from
+    new_state = replace(state, open_project_id=proj_id, open_project_valid_from=new_open_from)
     return ops, notes, new_state
 
 
@@ -881,7 +974,21 @@ def _fuse_candidate(
         return ops, notes
 
     # single-valued
-    same = [f for f in partition if _same_object(f, candidate)]
+    # RULE 1 (C-1): duplicate support requires the same-object existing fact to be
+    # OPEN (valid_to IS NULL) or its interval to OVERLAP the candidate's prospective
+    # interval — mirroring the multi-valued branch and §1.5 rule 1. A same-object
+    # candidate that does NOT overlap a CLOSED era is a reversion (A->B->A): the world
+    # changed back, so it must fall through to rule 2 against the OPEN (different-object)
+    # fact rather than boosting the dead historical era.
+    same = [
+        f
+        for f in partition
+        if _same_object(f, candidate)
+        and (
+            f.valid_to is None
+            or _overlaps(candidate.valid_from, candidate.valid_to, f.valid_from, f.valid_to)
+        )
+    ]
     if same:
         # rule 1: duplicate support. Prefer an open fact / overlapping era.
         e = _pick_fusion_target(same, candidate)
@@ -1003,9 +1110,13 @@ def plan_purge_observation(
     source_event_id: str,
     facts_becoming_orphan: Sequence[Fact],
     now: int,
+    vector_item_ids: Sequence[str] = (),
 ) -> ChangeSet:
     """Purge one observation. Caller supplies facts whose provenance becomes
-    empty after removing this observation (adapter computes the set)."""
+    empty after removing this observation (adapter computes the set) and the
+    ``vectors.item_id``s deleted with it (M-4: cp_core is pure and cannot see
+    vector rows, so the adapter passes them in for tombstoning — §1.7 requires
+    one purge_log row per deleted item, kind in {'observation','fact','vector'})."""
     ops: list = [PurgeObservation(source_event_id)]
     ops.append(AppendPurgeLog("observation", source_event_id, now))
     for f in facts_becoming_orphan:
@@ -1013,6 +1124,8 @@ def plan_purge_observation(
             continue  # user facts have no provenance; never cascade-purged
         ops.append(PurgeFact(f.id))
         ops.append(AppendPurgeLog("fact", f.id, now))
+    for vid in vector_item_ids:
+        ops.append(AppendPurgeLog("vector", vid, now))
     return ChangeSet(ops=tuple(ops))
 
 
@@ -1096,8 +1209,11 @@ def rank_hybrid(
     observed_at_by_item = observed_at_by_item or {}
 
     fts_rank: dict[str, int] = {h.item_id: h.rank for h in fts_hits}
-    # vec leg: assign ranks by descending score (stable), 1-based
-    vec_sorted = sorted(vec_hits, key=lambda h: (-h.score,))
+    # vec leg: assign ranks by descending score, 1-based. M-5: break score ties with a
+    # DETERMINISTIC secondary key (observed_at DESC then item_id ASC) so ranks — and thus
+    # RRF scores and why.vec_rank — are a pure function of the data (Rust-port parity),
+    # not SQL scan / dict-insertion order.
+    vec_sorted = sorted(vec_hits, key=lambda h: (-h.score, -h.observed_at, h.item_id))
     vec_rank: dict[str, int] = {}
     vec_obs: dict[str, int] = {}
     for i, h in enumerate(vec_sorted, start=1):

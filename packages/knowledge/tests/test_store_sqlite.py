@@ -110,6 +110,64 @@ def test_insert_observation_plain_insert_fails_loud_on_dup() -> None:
     store.close()
 
 
+# --- C-3: ChangeSet atomicity ----------------------------------------------
+
+
+def test_changeset_atomicity_rolls_back_partial_writes() -> None:
+    """C-3: a mid-ChangeSet failure must leave ZERO rows from that set. We build a
+    ChangeSet whose first op inserts an observation and whose second op inserts a fact
+    that violates the schema CHECK (zero-width valid_to==valid_from); the whole set must
+    roll back, so neither the observation nor the fact survives. Otherwise the C2
+    pre-check would later skip a never-fully-ingested event forever."""
+    from contextpulse_knowledge.cp_core import ChangeSet, Fact, InsertFact, InsertObservation
+
+    store = _store()
+    obs = Observation(
+        source="test",
+        source_event_id="partial",
+        kind="ocr_result",
+        observed_at=1000,
+        app="Code.exe",
+        window_title="a",
+        content="x",
+    )
+    bad_fact = Fact(
+        id="f_deadbeef",
+        subject_id="session:1000",
+        predicate="session.occurred",
+        object_entity_id=None,
+        object_value=None,
+        valid_from=1000,
+        valid_to=1000,  # zero-width => schema CHECK valid_to > valid_from fails
+        asserted_at=1000,
+        retracted_at=None,
+        superseded_by=None,
+        confidence=1.0,
+        extraction="deterministic",
+    )
+    cs = ChangeSet(ops=(InsertObservation(obs=obs, session_id="session:1000"), InsertFact(bad_fact)))
+    with pytest.raises(Exception):
+        store._apply_transactional(cs)
+    # nothing from the failed set persisted
+    n_obs = store.conn.execute(
+        "SELECT COUNT(*) FROM observations WHERE source_event_id='partial'"
+    ).fetchone()[0]
+    n_fact = store.conn.execute("SELECT COUNT(*) FROM facts WHERE id='f_deadbeef'").fetchone()[0]
+    assert n_obs == 0, "partial observation survived a failed ChangeSet (C-3 broken)"
+    assert n_fact == 0
+    # a subsequent successful observe of the SAME id must NOT be skipped by the C2
+    # pre-check (the failed attempt left no observation row)
+    assert store.observe(obs) is True
+    store.close()
+
+
+def test_slugify_drops_disallowed_chars() -> None:
+    """M-2: slugify DROPS chars outside [a-z0-9._-] (no '-' replacement, no dangling
+    dash). Identity-layer byte-equality for the Rust port."""
+    assert core.slugify("notepad++") == "notepad"
+    assert core.entity_id("app", "notepad++.exe") == "app:notepad"
+
+
 # --- vector parity (numpy vs pure) -----------------------------------------
 
 
