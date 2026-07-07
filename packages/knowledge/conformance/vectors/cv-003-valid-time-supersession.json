@@ -1,0 +1,26 @@
+{"format":"cp-conformance/1","api_surface":"cp_core.v1","vector_id":"cv-003-valid-time-supersession",
+ "description":"vocab.corrects_to is single-valued: a later different correction closes the prior fact's validity (world changed; both remain believed). meta keys are the LIVE payload keys original_text/corrected_text (touch_module.py:174-182).",
+ "given":{"now":1751000000000,"config":{"session_gap_ms":900000,"corroboration_factor":0.25,"confidence_cap":0.99,"projects":[]}},
+ "ingest":[
+  {"step":"observe","observation":{"source":"test","source_event_id":"c1","kind":"correction_detected",
+    "observed_at":1751000000000,"app":"Code.exe","content":"kubernetes -> Kubernetes",
+    "meta":{"original_text":"kubernetes","corrected_text":"Kubernetes"}}},
+  {"step":"observe","observation":{"source":"test","source_event_id":"c2","kind":"correction_detected",
+    "observed_at":1751086400000,"app":"Code.exe","content":"kubernetes -> K8s",
+    "meta":{"original_text":"kubernetes","corrected_text":"K8s"}}},
+  {"step":"flush","now":1751090000000,"force":true}],
+ "expect":{
+  "facts":[
+   {"$id":"v1","subject_id":"vocab:kubernetes","predicate":"vocab.corrects_to","object_value":"Kubernetes",
+    "valid_from":1751000000000,"valid_to":1751086400000,"retracted_at":null,"superseded_by":null,
+    "extraction":"deterministic","provenance_source_event_ids":["c1"]},
+   {"$id":"v2","subject_id":"vocab:kubernetes","predicate":"vocab.corrects_to","object_value":"K8s",
+    "valid_from":1751086400000,"valid_to":null,"retracted_at":null,
+    "provenance_source_event_ids":["c2"]}],
+  "queries":[
+   {"call":"facts_about","args":{"subject":"vocab:kubernetes","predicate":"vocab.corrects_to","at":1751000001000},
+    "expect_facts":[{"object_value":"Kubernetes"}]},
+   {"call":"facts_about","args":{"subject":"vocab:kubernetes","predicate":"vocab.corrects_to","at":1751086401000},
+    "expect_facts":[{"object_value":"K8s"}]},
+   {"call":"facts_about","args":{"subject":"vocab:kubernetes","predicate":"vocab.corrects_to"},
+    "expect_facts":[{"object_value":"Kubernetes"},{"object_value":"K8s"}]}]}}

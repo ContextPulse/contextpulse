@@ -1,0 +1,27 @@
+{"format":"cp-conformance/1","api_surface":"cp_core.v1","vector_id":"cv-001-single-event-fact",
+ "description":"One OCR observation yields session.occurred, session.used_app, session.active_project; facts_about returns all three with provenance. occurred carries 1.0 (presence predicate, M4 rule).",
+ "given":{"now":1751000000000,"config":{"session_gap_ms":900000,"corroboration_factor":0.25,"confidence_cap":0.99,
+   "projects":[{"name":"ContextPulse","aliases":["CP","contextpulse"]}]}},
+ "ingest":[
+  {"step":"observe","observation":{"source":"test","source_event_id":"e1","kind":"ocr_result",
+    "observed_at":1751000000000,"app":"Code.exe","window_title":"bus.py - ContextPulse - Visual Studio Code",
+    "content":"class EventBus: def emit(self, event)"}},
+  {"step":"flush","now":1751003600000,"force":false}],
+ "expect":{
+  "entities":[{"id":"session:1751000000000","type":"session"},{"id":"app:code","type":"app"},
+              {"id":"project:contextpulse","type":"project"}],
+  "fact_count":3,
+  "facts":[
+   {"subject_id":"session:1751000000000","predicate":"session.occurred","object_entity_id":null,"object_value":null,
+    "valid_from":1751000000000,"valid_to":1751000000001,"retracted_at":null,"confidence":1.0,
+    "extraction":"deterministic","provenance_source_event_ids":["e1"]},
+   {"subject_id":"session:1751000000000","predicate":"session.used_app","object_entity_id":"app:code",
+    "valid_from":1751000000000,"valid_to":1751000000001,"confidence":0.95,"extraction":"deterministic",
+    "provenance_source_event_ids":["e1"]},
+   {"subject_id":"session:1751000000000","predicate":"session.active_project","object_entity_id":"project:contextpulse",
+    "valid_from":1751000000000,"valid_to":1751000000001,"confidence":0.85,"extraction":"deterministic",
+    "provenance_source_event_ids":["e1"]}],
+  "queries":[
+   {"call":"facts_about","args":{"subject":"session:1751000000000"},
+    "expect_facts":[{"predicate":"session.active_project"},{"predicate":"session.occurred"},
+                    {"predicate":"session.used_app"}]}]}}

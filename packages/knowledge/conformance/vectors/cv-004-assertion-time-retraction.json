@@ -1,0 +1,24 @@
+{"format":"cp-conformance/1","api_surface":"cp_core.v1","vector_id":"cv-004-assertion-time-retraction",
+ "description":"correct_fact: old fact gets retracted_at + superseded_by; replacement (extraction='user') copies valid_from AND valid_to (here NULL->NULL, open target). as_of= sees each belief era. CORRECTION (impl session 2026-07-07): the include_retracted query's expect_facts order was flipped from [Sonet,Sonnet] to [Sonnet,Sonet]. Both facts share valid_from (1751000000000) and predicate (vocab.corrects_to); the spec's stated total order for facts_about is valid_from ASC, predicate ASC, id ASC. The only tiebreaker is the sha256 fact id: Sonnet(user)=f_98e787f29c217ee0 < Sonet(det)=f_ea9c500f9242d8ce, so the deterministic order is Sonnet then Sonet. The original order assumed assertion/insertion order, which the facts_about contract does not use. Set of facts is unchanged; the two as_of-filtered queries each return a single row and are unaffected.",
+ "given":{"now":1751000000000,"config":{"session_gap_ms":900000,"corroboration_factor":0.25,"confidence_cap":0.99,"projects":[]}},
+ "ingest":[
+  {"step":"observe","observation":{"source":"test","source_event_id":"c1","kind":"correction_detected",
+    "observed_at":1751000000000,"content":"sonet -> Sonet","meta":{"original_text":"sonet","corrected_text":"Sonet"}}},
+  {"step":"flush","now":1751000600000,"force":true},
+  {"step":"correct_fact","select":{"subject_id":"vocab:sonet","predicate":"vocab.corrects_to"},
+   "new_object_value":"Sonnet","asserted_at":1751050000000}],
+ "expect":{
+  "facts":[
+   {"$id":"wrong","subject_id":"vocab:sonet","predicate":"vocab.corrects_to","object_value":"Sonet",
+    "valid_from":1751000000000,"asserted_at":1751000000000,
+    "retracted_at":1751050000000,"superseded_by":{"$ref":"right"}},
+   {"$id":"right","subject_id":"vocab:sonet","predicate":"vocab.corrects_to","object_value":"Sonnet",
+    "valid_from":1751000000000,"valid_to":null,"asserted_at":1751050000000,"retracted_at":null,
+    "extraction":"user","confidence":1.0}],
+  "queries":[
+   {"call":"facts_about","args":{"subject":"vocab:sonet","as_of":1751000001000},
+    "expect_facts":[{"object_value":"Sonet"}]},
+   {"call":"facts_about","args":{"subject":"vocab:sonet","as_of":1751050001000},
+    "expect_facts":[{"object_value":"Sonnet"}]},
+   {"call":"facts_about","args":{"subject":"vocab:sonet","include_retracted":true},
+    "expect_facts":[{"object_value":"Sonnet"},{"object_value":"Sonet"}]}]}}

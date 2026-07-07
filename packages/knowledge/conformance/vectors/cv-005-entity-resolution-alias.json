@@ -1,0 +1,21 @@
+{"format":"cp-conformance/1","api_surface":"cp_core.v1","vector_id":"cv-005-entity-resolution-alias",
+ "description":"Titles matching 'ContextPulse' and short alias 'CP' (word-boundary, BD-1) resolve to ONE project entity; a title containing 'mcp_unified.py' must NOT match alias 'CP' (substring hazard, m6). entity_count(type=project)==1; active_project fuses once (0.85 -> 0.8875) with valid_from = session_start (m4).",
+ "given":{"now":1751000000000,"config":{"session_gap_ms":900000,"corroboration_factor":0.25,"confidence_cap":0.99,
+   "projects":[{"name":"ContextPulse","aliases":["CP","contextpulse"]}]}},
+ "ingest":[
+  {"step":"observe","observation":{"source":"test","source_event_id":"e1","kind":"ocr_result",
+    "observed_at":1751000000000,"app":"Code.exe","window_title":"ContextPulse - Visual Studio Code","content":"x"}},
+  {"step":"observe","observation":{"source":"test","source_event_id":"e2","kind":"ocr_result",
+    "observed_at":1751000600000,"app":"chrome.exe","window_title":"CP - design notes","content":"design notes"}},
+  {"step":"observe","observation":{"source":"test","source_event_id":"e3","kind":"ocr_result",
+    "observed_at":1751000660000,"app":"Code.exe","window_title":"mcp_unified.py - Visual Studio Code","content":"register tools"}},
+  {"step":"flush","now":1751002000000,"force":true}],
+ "expect":{
+  "entity_count":{"type":"project","count":1},
+  "facts":[
+   {"subject_id":"session:1751000000000","predicate":"session.active_project",
+    "object_entity_id":"project:contextpulse","valid_from":1751000000000,
+    "provenance_source_event_ids":["e1","e2"],"confidence":0.8875}],
+  "queries":[
+   {"call":"facts_about","args":{"subject":"CP","predicate":"session.active_project"},
+    "expect_facts":[]}]}}
