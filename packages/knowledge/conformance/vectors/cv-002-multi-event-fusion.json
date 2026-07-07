@@ -1,0 +1,18 @@
+{"format":"cp-conformance/1","api_surface":"cp_core.v1","vector_id":"cv-002-multi-event-fusion",
+ "description":"Second sighting of the same (session, used_app, app:code) fuses: provenance grows to 2, confidence 0.95 -> 0.9625, no duplicate fact. session.occurred provenance stays the opening observation only (presence predicates never fuse).",
+ "given":{"now":1751000000000,"config":{"session_gap_ms":900000,"corroboration_factor":0.25,"confidence_cap":0.99,"projects":[]}},
+ "ingest":[
+  {"step":"observe","observation":{"source":"test","source_event_id":"e1","kind":"ocr_result",
+    "observed_at":1751000000000,"app":"Code.exe","window_title":"a.py","content":"alpha"}},
+  {"step":"observe","observation":{"source":"test","source_event_id":"e2","kind":"ocr_result",
+    "observed_at":1751000300000,"app":"Code.exe","window_title":"b.py","content":"beta"}},
+  {"step":"flush","now":1751002000000,"force":false}],
+ "expect":{
+  "fact_count":2,
+  "facts":[
+   {"subject_id":"session:1751000000000","predicate":"session.occurred",
+    "valid_from":1751000000000,"valid_to":1751000300000,"confidence":1.0,
+    "provenance_source_event_ids":["e1"]},
+   {"subject_id":"session:1751000000000","predicate":"session.used_app","object_entity_id":"app:code",
+    "valid_from":1751000000000,"valid_to":1751000300000,"confidence":0.9625,
+    "provenance_source_event_ids":["e1","e2"]}]}}

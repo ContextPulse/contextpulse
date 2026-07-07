@@ -1,0 +1,17 @@
+{"format":"cp-conformance/1","api_surface":"cp_core.v1","vector_id":"cv-010-hybrid-search-rrf",
+ "description":"Hybrid = RRF(k=60) over FTS(bm25) and vector(cosine, min 0.25). A matches both legs, B matches FTS only => A ranks first. Injected embeddings are stored verbatim, bypassing embed_min_chars and the chunker (format note 6).",
+ "given":{"now":1751000000000,"config":{"session_gap_ms":900000,"corroboration_factor":0.25,"confidence_cap":0.99,"projects":[]}},
+ "ingest":[
+  {"step":"observe","observation":{"source":"test","source_event_id":"ea","kind":"ocr_result",
+    "observed_at":1751000000000,"app":"Code.exe","window_title":"billing",
+    "content":"invoice invoice acme payment due","embedding":[1,0,0,0]}},
+  {"step":"observe","observation":{"source":"test","source_event_id":"eb","kind":"ocr_result",
+    "observed_at":1751000060000,"app":"Code.exe","window_title":"notes",
+    "content":"meeting notes mention invoice once in passing","embedding":[0,1,0,0]}},
+  {"step":"flush","now":1751002000000,"force":true}],
+ "expect":{
+  "queries":[
+   {"call":"search","args":{"query":"invoice","k":5,"mode":"hybrid","query_embedding":[1,0,0,0]},
+    "expect_hits_ordered":[{"source_event_id":"ea"},{"source_event_id":"eb"}]},
+   {"call":"search","args":{"query":"invoice","k":5,"mode":"vector","query_embedding":[1,0,0,0]},
+    "expect_hits_ordered":[{"source_event_id":"ea"}]}]}}

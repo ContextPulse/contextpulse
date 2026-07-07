@@ -1,0 +1,21 @@
+{"format":"cp-conformance/1","api_surface":"cp_core.v1","vector_id":"cv-011-replay-corroboration",
+ "description":"e2 corroborates used_app (0.95 -> 0.9625), then e2 is REPLAYED (identical source_event_id). C2 rule: replay is skipped before plan_ingest -- confidence stays exactly 0.9625, provenance stays {e1,e2}, observation_count stays 2. A re-fused implementation shows 0.971875 and fails.",
+ "given":{"now":1751000000000,"config":{"session_gap_ms":900000,"corroboration_factor":0.25,"confidence_cap":0.99,"projects":[]}},
+ "ingest":[
+  {"step":"observe","observation":{"source":"test","source_event_id":"e1","kind":"ocr_result",
+    "observed_at":1751000000000,"app":"Code.exe","window_title":"a.py","content":"alpha"}},
+  {"step":"observe","observation":{"source":"test","source_event_id":"e2","kind":"ocr_result",
+    "observed_at":1751000300000,"app":"Code.exe","window_title":"b.py","content":"beta"}},
+  {"step":"observe","observation":{"source":"test","source_event_id":"e2","kind":"ocr_result",
+    "observed_at":1751000300000,"app":"Code.exe","window_title":"b.py","content":"beta"}},
+  {"step":"flush","now":1751002000000,"force":true}],
+ "expect":{
+  "observation_count":2,
+  "fact_count":2,
+  "facts":[
+   {"subject_id":"session:1751000000000","predicate":"session.occurred",
+    "valid_from":1751000000000,"valid_to":1751000300000,"confidence":1.0,
+    "provenance_source_event_ids":["e1"]},
+   {"subject_id":"session:1751000000000","predicate":"session.used_app","object_entity_id":"app:code",
+    "valid_from":1751000000000,"valid_to":1751000300000,"confidence":0.9625,
+    "provenance_source_event_ids":["e1","e2"]}]}}

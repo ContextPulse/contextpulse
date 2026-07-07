@@ -1,0 +1,14 @@
+{"format":"cp-conformance/1","api_surface":"cp_core.v1","vector_id":"cv-008-purge-tombstone-stub",
+ "description":"purge_observation cascades to facts with empty remaining provenance; purge_log records kind+id only; FTS row removed (search returns nothing).",
+ "given":{"now":1751000000000,"config":{"session_gap_ms":900000,"corroboration_factor":0.25,"confidence_cap":0.99,"projects":[]}},
+ "ingest":[
+  {"step":"observe","observation":{"source":"test","source_event_id":"e1","kind":"ocr_result",
+    "observed_at":1751000000000,"app":"Code.exe","window_title":"secret doc","content":"very sensitive text"}},
+  {"step":"flush","now":1751002000000,"force":true},
+  {"step":"purge_observation","source_event_id":"e1","now":1751003000000}],
+ "expect":{
+  "fact_count":0,
+  "purge_log":[{"item_kind":"observation"},{"item_kind":"fact"},{"item_kind":"fact"}],
+  "queries":[
+   {"call":"facts_about","args":{"subject":"session:1751000000000"},"expect_facts":[]},
+   {"call":"search","args":{"query":"sensitive","k":5,"mode":"fts"},"expect_hits_ordered":[]}]}}

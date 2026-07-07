@@ -1,0 +1,23 @@
+{"format":"cp-conformance/1","api_surface":"cp_core.v1","vector_id":"cv-009-degenerate-and-idempotency",
+ "description":"Duplicate source_event_id is skipped ENTIRELY before plan_ingest (C2): observation_count 2, confidences pinned exactly (occurred 1.0, used_app 0.95 -- no phantom fusion). Empty-content clipboard_change with empty app yields session.occurred only; unknown subject returns [].",
+ "given":{"now":1751000000000,"config":{"session_gap_ms":900000,"corroboration_factor":0.25,"confidence_cap":0.99,"projects":[]}},
+ "ingest":[
+  {"step":"observe","observation":{"source":"test","source_event_id":"e1","kind":"clipboard_change",
+    "observed_at":1751000000000,"app":"","window_title":"","content":null}},
+  {"step":"observe","observation":{"source":"test","source_event_id":"e1","kind":"clipboard_change",
+    "observed_at":1751000000000,"app":"","window_title":"","content":null}},
+  {"step":"observe","observation":{"source":"test","source_event_id":"e2","kind":"ocr_result",
+    "observed_at":1751000060000,"app":"Code.exe","window_title":"x","content":""}},
+  {"step":"flush","now":1751002000000,"force":true}],
+ "expect":{
+  "observation_count":2,
+  "fact_count":2,
+  "facts":[
+   {"subject_id":"session:1751000000000","predicate":"session.occurred",
+    "valid_from":1751000000000,"valid_to":1751000060000,"confidence":1.0,
+    "provenance_source_event_ids":["e1"]},
+   {"subject_id":"session:1751000000000","predicate":"session.used_app","object_entity_id":"app:code",
+    "confidence":0.95,"provenance_source_event_ids":["e2"]}],
+  "queries":[
+   {"call":"facts_about","args":{"subject":"project:nonexistent"},"expect_facts":[]},
+   {"call":"facts_about","args":{"subject":"totally unknown surface form"},"expect_facts":[]}]}}
