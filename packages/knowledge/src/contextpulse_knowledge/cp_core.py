@@ -1009,6 +1009,17 @@ def _fuse_candidate(
             return ops, notes
         else:
             # rule 2b: LATE. Insert as closed historical era [cand.from, old.from)
+            if candidate.valid_from == old.valid_from:
+                # N-1: same-ms, different object on a single-valued predicate. The
+                # historical era [x, x) would be zero-width (schema CHECK violation).
+                # Two contradictory single-valued facts at the same instant can't both
+                # hold; drop the later-arriving candidate + note. (Realistic in vocab
+                # imports sharing a file timestamp.) Pinned by cv-019.
+                notes.append(
+                    f"dropped-candidate: same-ms different-object on single-valued "
+                    f"{candidate.subject_id}/{candidate.predicate}"
+                )
+                return ops, notes
             closed_to = old.valid_from
             # overlap check with existing CLOSED eras (same partition)
             for f in partition:
