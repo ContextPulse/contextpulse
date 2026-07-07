@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime
 
 import pytest
 from contextpulse_core import probe
@@ -149,6 +150,28 @@ def test_read_recent_events_extracts_ocr_transcript_text(tmp_path):
     assert texts == {"def main", "hello world", "draft"}  # e4 excluded (before cutoff)
 
 
+def test_read_recent_events_extracts_burst_and_correction_text(tmp_path):
+    # burst_text (typed) and correction_text (voice corrections) are the person's
+    # own words — the live FTS trigger misses them; the probe must not.
+    conn = _events_db(
+        tmp_path,
+        [
+            ("e1", 100.0, "touch", "burst", "Code", "x", json.dumps({"burst_text": "typed this"})),
+            (
+                "e2",
+                200.0,
+                "voice",
+                "correct",
+                "",
+                "",
+                json.dumps({"correction_text": "fixed that"}),
+            ),
+        ],
+    )
+    texts = {e["text"] for e in probe.read_recent_events(conn, since_ts=0.0)}
+    assert texts == {"typed this", "fixed that"}
+
+
 def test_read_recent_events_handles_missing_and_bad_payload(tmp_path):
     conn = _events_db(
         tmp_path,
@@ -239,3 +262,51 @@ def test_parse_facts_defaults_optional_fields():
     facts = probe.parse_facts(out)
     assert facts[0]["confidence"] == pytest.approx(0.5)
     assert facts[0]["source_event_ids"] == []
+
+
+# ── valid_from coercion (red-team M2) ───────────────────────────────
+
+
+def test_parse_facts_keeps_numeric_valid_from_as_float():
+    out = json.dumps([{"entity": "A", "fact": "b", "valid_from": 1751499000}])
+    assert probe.parse_facts(out)[0]["valid_from"] == pytest.approx(1751499000.0)
+
+
+def test_parse_facts_coerces_iso_valid_from_to_epoch():
+    # An ISO string stored as TEXT is invisible to context_at's numeric BETWEEN
+    # and sorts above REAL timestamps in facts_about — coerce to epoch.
+    out = json.dumps([{"entity": "A", "fact": "b", "valid_from": "2026-07-07T06:00:00"}])
+    vf = probe.parse_facts(out)[0]["valid_from"]
+    assert isinstance(vf, float)
+    assert vf == pytest.approx(datetime(2026, 7, 7, 6, 0, 0).timestamp())
+
+
+def test_parse_facts_downscales_millisecond_epoch():
+    out = json.dumps([{"entity": "A", "fact": "b", "valid_from": 1751499000000}])
+    assert probe.parse_facts(out)[0]["valid_from"] == pytest.approx(1751499000.0)
+
+
+def test_parse_facts_unparseable_valid_from_becomes_none():
+    out = json.dumps([{"entity": "A", "fact": "b", "valid_from": "sometime yesterday"}])
+    assert probe.parse_facts(out)[0]["valid_from"] is None
+
+
+# ── duplicate accumulation (red-team M4) ────────────────────────────
+
+
+def test_write_facts_dedupes_identical_entity_fact(tmp_path):
+    conn = probe.connect_probe(tmp_path / "probe.db")
+    probe.write_facts(conn, [_fact("A", "same fact", 1.0)])
+    probe.write_facts(conn, [_fact("A", "same fact", 2.0)])  # rerun re-extracts it
+    assert conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0] == 1
+
+
+# ── run ledger (red-team M1) ────────────────────────────────────────
+
+
+def test_record_run_appends_ledger_row(tmp_path):
+    conn = probe.connect_probe(tmp_path / "probe.db")
+    probe.record_run(conn, events=1500, facts=3, error=None)
+    probe.record_run(conn, events=0, facts=0, error="claude timeout")
+    rows = conn.execute("SELECT events, facts, error FROM probe_runs ORDER BY id").fetchall()
+    assert [tuple(r) for r in rows] == [(1500, 3, None), (0, 0, "claude timeout")]
