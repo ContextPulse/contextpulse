@@ -1,0 +1,23 @@
+{"format":"cp-conformance/1","api_surface":"cp_core.v1","vector_id":"cv-006-session-boundary-context-at",
+ "description":"Gap >= session_gap_ms opens a second session. context_at(t) returns the covering session's facts only.",
+ "given":{"now":1751000000000,"config":{"session_gap_ms":900000,"corroboration_factor":0.25,"confidence_cap":0.99,"projects":[]}},
+ "ingest":[
+  {"step":"observe","observation":{"source":"test","source_event_id":"e1","kind":"ocr_result",
+    "observed_at":1751000000000,"app":"Code.exe","window_title":"a","content":"first session text"}},
+  {"step":"observe","observation":{"source":"test","source_event_id":"e2","kind":"ocr_result",
+    "observed_at":1751000960000,"app":"chrome.exe","window_title":"b","content":"second session text"}},
+  {"step":"flush","now":1751003000000,"force":true}],
+ "expect":{
+  "entities":[{"id":"session:1751000000000","type":"session"},{"id":"session:1751000960000","type":"session"}],
+  "facts":[
+   {"subject_id":"session:1751000000000","predicate":"session.occurred",
+    "valid_from":1751000000000,"valid_to":1751000000001},
+   {"subject_id":"session:1751000960000","predicate":"session.occurred",
+    "valid_from":1751000960000,"valid_to":1751000960001}],
+  "queries":[
+   {"call":"context_at","args":{"t":1751000000000},
+    "expect":{"session_id":"session:1751000000000",
+              "apps":[{"object_entity_id":"app:code"}],"project":null}},
+   {"call":"context_at","args":{"t":1751000960000},
+    "expect":{"session_id":"session:1751000960000",
+              "apps":[{"object_entity_id":"app:chrome"}],"project":null}}]}}

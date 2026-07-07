@@ -1,0 +1,29 @@
+{"format":"cp-conformance/1","api_surface":"cp_core.v1","vector_id":"cv-012-superseded-then-retracted",
+ "description":"cv-003 ingest (two vocab eras), then correct_fact against the CLOSED first era (select disambiguated by object_value). Replacement copies valid_from AND valid_to (M1) -- it is closed at the same boundary; the open successor 'K8s' is untouched. An open replacement (valid_to null) would overlap the successor era and fails this vector.",
+ "given":{"now":1751000000000,"config":{"session_gap_ms":900000,"corroboration_factor":0.25,"confidence_cap":0.99,"projects":[]}},
+ "ingest":[
+  {"step":"observe","observation":{"source":"test","source_event_id":"c1","kind":"correction_detected",
+    "observed_at":1751000000000,"content":"kubernetes -> Kubernetes",
+    "meta":{"original_text":"kubernetes","corrected_text":"Kubernetes"}}},
+  {"step":"observe","observation":{"source":"test","source_event_id":"c2","kind":"correction_detected",
+    "observed_at":1751086400000,"content":"kubernetes -> K8s",
+    "meta":{"original_text":"kubernetes","corrected_text":"K8s"}}},
+  {"step":"flush","now":1751090000000,"force":true},
+  {"step":"correct_fact","select":{"subject_id":"vocab:kubernetes","predicate":"vocab.corrects_to",
+    "object_value":"Kubernetes"},
+   "new_object_value":"Kube","asserted_at":1751172800000}],
+ "expect":{
+  "facts":[
+   {"$id":"old","subject_id":"vocab:kubernetes","predicate":"vocab.corrects_to","object_value":"Kubernetes",
+    "valid_from":1751000000000,"valid_to":1751086400000,
+    "retracted_at":1751172800000,"superseded_by":{"$ref":"new"}},
+   {"$id":"new","subject_id":"vocab:kubernetes","predicate":"vocab.corrects_to","object_value":"Kube",
+    "valid_from":1751000000000,"valid_to":1751086400000,"asserted_at":1751172800000,
+    "retracted_at":null,"extraction":"user","confidence":1.0},
+   {"$id":"successor","subject_id":"vocab:kubernetes","predicate":"vocab.corrects_to","object_value":"K8s",
+    "valid_from":1751086400000,"valid_to":null,"retracted_at":null,"superseded_by":null}],
+  "queries":[
+   {"call":"facts_about","args":{"subject":"vocab:kubernetes","predicate":"vocab.corrects_to","at":1751000001000},
+    "expect_facts":[{"object_value":"Kube"}]},
+   {"call":"facts_about","args":{"subject":"vocab:kubernetes","predicate":"vocab.corrects_to","at":1751086401000},
+    "expect_facts":[{"object_value":"K8s"}]}]}}

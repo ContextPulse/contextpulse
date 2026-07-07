@@ -1,0 +1,26 @@
+{"format":"cp-conformance/1","api_surface":"cp_core.v1","vector_id":"cv-014-late-candidate-historical-insert",
+ "description":"c1 at T0+1h opens the store's belief ('K8s', open). c2 arrives LATE (observed_at T0 < open_session_start): rule 2b inserts 'Kubernetes' as a CLOSED historical era [T0, T0+1h) without mutating the open fact; the late observation joins no session (only one session entity exists). Timeline shows both eras in order.",
+ "given":{"now":1751000000000,"config":{"session_gap_ms":900000,"corroboration_factor":0.25,"confidence_cap":0.99,"projects":[]}},
+ "ingest":[
+  {"step":"observe","observation":{"source":"test","source_event_id":"c1","kind":"correction_detected",
+    "observed_at":1751003600000,"content":"kubernetes -> K8s",
+    "meta":{"original_text":"kubernetes","corrected_text":"K8s"}}},
+  {"step":"observe","observation":{"source":"test","source_event_id":"c2","kind":"correction_detected",
+    "observed_at":1751000000000,"content":"kubernetes -> Kubernetes",
+    "meta":{"original_text":"kubernetes","corrected_text":"Kubernetes"}}},
+  {"step":"flush","now":1751010000000,"force":true}],
+ "expect":{
+  "entity_count":{"type":"session","count":1},
+  "fact_count":3,
+  "facts":[
+   {"subject_id":"vocab:kubernetes","predicate":"vocab.corrects_to","object_value":"Kubernetes",
+    "valid_from":1751000000000,"valid_to":1751003600000,"retracted_at":null,
+    "provenance_source_event_ids":["c2"]},
+   {"subject_id":"vocab:kubernetes","predicate":"vocab.corrects_to","object_value":"K8s",
+    "valid_from":1751003600000,"valid_to":null,"retracted_at":null,
+    "provenance_source_event_ids":["c1"]},
+   {"subject_id":"session:1751003600000","predicate":"session.occurred",
+    "valid_from":1751003600000,"valid_to":1751003600001}],
+  "queries":[
+   {"call":"timeline","args":{"subject":"vocab:kubernetes"},
+    "expect_facts":[{"object_value":"Kubernetes"},{"object_value":"K8s"}]}]}}

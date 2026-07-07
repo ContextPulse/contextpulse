@@ -1,0 +1,24 @@
+{"format":"cp-conformance/1","api_surface":"cp_core.v1","vector_id":"cv-013-user-fact-durability",
+ "description":"Deterministic 'Sonet' fact installed, user corrects to 'Sonnet' (det fact retracted). A LATER deterministic re-sighting of 'Sonet' hits rule 0 (user-fact guard) and is dropped entirely: no new det fact, no CloseValidity on the user fact, which stays open and unretracted at 1.0. An implementation applying rule 2 across partitions would close the user fact and re-assert 'Sonet' at 0.90 -- it fails fact_count and the open-user-fact matcher.",
+ "given":{"now":1751000000000,"config":{"session_gap_ms":900000,"corroboration_factor":0.25,"confidence_cap":0.99,"projects":[]}},
+ "ingest":[
+  {"step":"observe","observation":{"source":"test","source_event_id":"c1","kind":"correction_detected",
+    "observed_at":1751000000000,"content":"sonet -> Sonet","meta":{"original_text":"sonet","corrected_text":"Sonet"}}},
+  {"step":"correct_fact","select":{"subject_id":"vocab:sonet","predicate":"vocab.corrects_to"},
+   "new_object_value":"Sonnet","asserted_at":1751003600000},
+  {"step":"observe","observation":{"source":"test","source_event_id":"c2","kind":"correction_detected",
+    "observed_at":1751007200000,"content":"sonet -> Sonet","meta":{"original_text":"sonet","corrected_text":"Sonet"}}},
+  {"step":"flush","now":1751010000000,"force":true}],
+ "expect":{
+  "observation_count":2,
+  "fact_count":4,
+  "facts":[
+   {"$id":"det","subject_id":"vocab:sonet","predicate":"vocab.corrects_to","object_value":"Sonet",
+    "extraction":"deterministic","retracted_at":1751003600000,"superseded_by":{"$ref":"usr"}},
+   {"$id":"usr","subject_id":"vocab:sonet","predicate":"vocab.corrects_to","object_value":"Sonnet",
+    "extraction":"user","valid_from":1751000000000,"valid_to":null,"retracted_at":null,"confidence":1.0},
+   {"subject_id":"session:1751000000000","predicate":"session.occurred"},
+   {"subject_id":"session:1751007200000","predicate":"session.occurred"}],
+  "queries":[
+   {"call":"facts_about","args":{"subject":"vocab:sonet","predicate":"vocab.corrects_to"},
+    "expect_facts":[{"object_value":"Sonnet","extraction":"user"}]}]}}

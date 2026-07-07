@@ -1,0 +1,19 @@
+{"format":"cp-conformance/1","api_surface":"cp_core.v1","vector_id":"cv-007-timeline",
+ "description":"timeline(subject) returns validity intervals ordered by valid_from; until/since bounds filter by interval overlap. Live payload keys.",
+ "given":{"now":1751000000000,"config":{"session_gap_ms":900000,"corroboration_factor":0.25,"confidence_cap":0.99,"projects":[]}},
+ "ingest":[
+  {"step":"observe","observation":{"source":"test","source_event_id":"c1","kind":"correction_detected",
+    "observed_at":1751000000000,"content":"pdvc -> PDVC","meta":{"original_text":"pdvc","corrected_text":"PDVC"}}},
+  {"step":"observe","observation":{"source":"test","source_event_id":"c2","kind":"correction_detected",
+    "observed_at":1751086400000,"content":"pdvc -> Premier DVC","meta":{"original_text":"pdvc","corrected_text":"Premier DVC"}}},
+  {"step":"flush","now":1751090000000,"force":true}],
+ "expect":{
+  "queries":[
+   {"call":"timeline","args":{"subject":"vocab:pdvc"},
+    "expect_facts":[
+      {"object_value":"PDVC","valid_from":1751000000000,"valid_to":1751086400000},
+      {"object_value":"Premier DVC","valid_from":1751086400000,"valid_to":null}]},
+   {"call":"timeline","args":{"subject":"vocab:pdvc","until":1751080000000},
+    "expect_facts":[{"object_value":"PDVC"}]},
+   {"call":"timeline","args":{"subject":"vocab:pdvc","since":1751086400000},
+    "expect_facts":[{"object_value":"Premier DVC"}]}]}}
