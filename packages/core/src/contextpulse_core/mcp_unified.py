@@ -93,6 +93,12 @@ def _register_memory_tools():
     _import_tools(memory_app, "Memory")
 
 
+def _register_probe_tools():
+    # THROWAWAY — Phase 0 wedge probe (facts_about / context_at). Remove at Phase 1.
+    from contextpulse_core.probe_mcp import mcp_app as probe_app
+    _import_tools(probe_app, "Probe")
+
+
 def _register_all():
     """Import and register tools from all packages.
 
@@ -107,6 +113,7 @@ def _register_all():
         ("voice", _register_voice_tools),
         ("touch", _register_touch_tools),
         ("memory", _register_memory_tools),
+        ("probe", _register_probe_tools),
     ]:
         try:
             register_fn()
