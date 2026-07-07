@@ -1,0 +1,13 @@
+{"format":"cp-conformance/1","api_surface":"cp_core.v1","vector_id":"cv-018-purge-vector-tombstone",
+ "description":"M-4 pin: purging an observation that has a vectors row MUST append a purge_log tombstone with item_kind='vector', exactly as it does for the deleted observation and its cascade-orphaned facts (§1.7: one purge_log row per deleted item; schema enumerates 'observation'|'fact'|'vector'). One OCR observation derives session.occurred + session.used_app (both sole-provenance, non-user => cascade-purged) and carries one injected observation vector. cv-008 could not see this defect because its content is under embed_min_chars so no vector row exists; here an injected vector (bypasses embed_min_chars AND chunker, format note 6) forces the vector delete path. Before the fix the adapter deleted the vectors row silently with no tombstone (purge_log kinds were [observation,fact,fact]), losing the deletion for the P6 replication-tombstone ordering this table exists for. Expected purge_log kinds: observation, fact, fact, vector. Also exercises M-2 slugify: the notepad++ window title is unused for entity ids here, but the app 'Code.exe' slugs to app:code. After purge: 0 observations, 0 facts (all cascade-purged; user facts would survive but there are none).",
+ "given":{"now":1751000000000,"config":{"session_gap_ms":900000,"corroboration_factor":0.25,"confidence_cap":0.99,"projects":[]}},
+ "ingest":[
+  {"step":"observe","observation":{"source":"test","source_event_id":"e1","kind":"ocr_result",
+    "observed_at":1751000000000,"app":"Code.exe","window_title":"editing file","content":"alpha alpha alpha",
+    "embedding":[1.0,0.0,0.0,0.0]}},
+  {"step":"flush","now":1751003600000,"force":true},
+  {"step":"purge_observation","source_event_id":"e1","now":1751007200000}],
+ "expect":{
+  "fact_count":0,
+  "observation_count":0,
+  "purge_log":[{"item_kind":"observation"},{"item_kind":"fact"},{"item_kind":"fact"},{"item_kind":"vector"}]}}

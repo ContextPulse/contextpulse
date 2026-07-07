@@ -138,6 +138,7 @@ class KnowledgeStore:
             open_app_first_seen=tuple(tuple(x) for x in d.get("open_app_first_seen", [])),
             open_app_last_seen=tuple(tuple(x) for x in d.get("open_app_last_seen", [])),
             open_project_id=d.get("open_project_id"),
+            open_project_valid_from=d.get("open_project_valid_from"),
         )
 
     def _save_state(self, state: IngestState) -> None:
@@ -147,6 +148,7 @@ class KnowledgeStore:
             "open_app_first_seen": [list(x) for x in state.open_app_first_seen],
             "open_app_last_seen": [list(x) for x in state.open_app_last_seen],
             "open_project_id": state.open_project_id,
+            "open_project_valid_from": state.open_project_valid_from,
         }
         self.conn.execute(
             "INSERT INTO ingest_state(key, value) VALUES('sessionizer', ?) "
@@ -203,18 +205,18 @@ class KnowledgeStore:
         existing = self._fetch_existing(keys)
         aliases = self._aliases_for_type("project")  # only project uses alias table in P1
         changeset, new_state = core.plan_ingest(obs, state, existing, aliases, self.config, now)
-        self._apply(changeset)
-        self._save_state(new_state)
-        self.conn.commit()
-        self._enqueue_embeddings(obs, now)
+        # C-3: the ChangeSet + state write are ONE all-or-nothing transaction. A failure
+        # (e.g. schema CHECK violation) rolls back the whole set so no partial observation
+        # survives — otherwise the C2 pre-check would later skip a never-fully-ingested
+        # event forever. Fail loud: re-raise after rollback.
+        self._apply_transactional(changeset, new_state)
+        self._enqueue_embeddings(obs, now)  # best-effort, post-commit; never rolls back ingest
         return True
 
     def flush(self, now: int, force: bool = False) -> None:
         state = self._load_state()
         changeset, new_state = core.plan_flush(state, now, self.config, force=force)
-        self._apply(changeset)
-        self._save_state(new_state)
-        self.conn.commit()
+        self._apply_transactional(changeset, new_state)  # C-3: atomic
 
     def correct_fact(
         self,
@@ -253,8 +255,7 @@ class KnowledgeStore:
         changeset = core.plan_correct_fact(
             target, new_object_entity_id, new_object_value, asserted_at
         )
-        self._apply(changeset)
-        self.conn.commit()
+        self._apply_transactional(changeset)  # C-3: atomic
 
     def purge_observation(self, source_event_id: str, now: int) -> None:
         row = self.conn.execute(
@@ -275,9 +276,11 @@ class KnowledgeStore:
             (obs_id, obs_id),
         ).fetchall()
         orphans = [_row_to_fact(r) for r in fact_rows]
-        changeset = core.plan_purge_observation(source_event_id, orphans, now)
-        self._apply(changeset)
-        self.conn.commit()
+        vector_ids = self._observation_vector_ids(obs_id)
+        changeset = core.plan_purge_observation(
+            source_event_id, orphans, now, vector_item_ids=vector_ids
+        )
+        self._apply_transactional(changeset)  # C-3: atomic
 
     # ======================================================================
     # ChangeSet application (transactional; list order)
@@ -287,12 +290,48 @@ class KnowledgeStore:
         for op in changeset.ops:
             self._apply_op(op)
 
+    def _apply_transactional(
+        self, changeset: ChangeSet, new_state: Optional[IngestState] = None
+    ) -> None:
+        """C-3: apply a ChangeSet (+ optional state write) as ONE atomic transaction.
+
+        BEGIN IMMEDIATE / COMMIT; on ANY exception ROLLBACK and re-raise (fail loud —
+        never a bare-except swallow). A partial ChangeSet must leave zero rows so the
+        C2 idempotency pre-check cannot later skip a never-fully-ingested event.
+        """
+        # Close any implicit transaction sqlite3 may have opened from prior reads so
+        # our explicit BEGIN is the sole outer transaction.
+        if self.conn.in_transaction:
+            self.conn.commit()
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            self._apply(changeset)
+            if new_state is not None:
+                self._save_state(new_state)
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+
     def _obs_id(self, source_event_id: str) -> Optional[int]:
         row = self.conn.execute(
             "SELECT id FROM observations WHERE source_event_id=?",
             (source_event_id,),
         ).fetchone()
         return row["id"] if row else None
+
+    def _observation_vector_ids(self, obs_id: int) -> list[str]:
+        """M-4: the vectors.item_id values that PurgeObservation will delete for this
+        observation (its single 'observation' vector + any 'obs_chunk' vectors), so the
+        purge can tombstone each one (§1.7 kind='vector')."""
+        rows = self.conn.execute(
+            "SELECT item_id FROM vectors "
+            "WHERE (item_kind='observation' AND item_id=?) "
+            "OR (item_kind='obs_chunk' AND item_id LIKE ?) "
+            "ORDER BY item_id ASC",
+            (str(obs_id), f"{obs_id}#%"),
+        ).fetchall()
+        return [r["item_id"] for r in rows]
 
     def _apply_op(self, op) -> None:
         if isinstance(op, InsertObservation):
@@ -506,12 +545,19 @@ class KnowledgeStore:
         if predicate is not None:
             q += " AND predicate=?"
             args.append(predicate)
+        # M-3: `as_of` is an assertion-time filter that applies REGARDLESS of
+        # `include_retracted` (§1.2 believed-as-of is asserted_at <= t). `include_retracted`
+        # only lifts the retracted-exclusion clause — it must not leak facts asserted
+        # AFTER as_of (a time-travel leak in the audit view).
+        if as_of is not None:
+            q += " AND asserted_at<=?"
+            args.append(as_of)
         if not include_retracted:
             if as_of is None:
                 q += " AND retracted_at IS NULL"
             else:
-                q += " AND asserted_at<=? AND (retracted_at IS NULL OR retracted_at>?)"
-                args.extend([as_of, as_of])
+                q += " AND (retracted_at IS NULL OR retracted_at>?)"
+                args.append(as_of)
         if at is not None:
             q += " AND valid_from<=? AND (valid_to IS NULL OR valid_to>?)"
             args.extend([at, at])
@@ -644,7 +690,10 @@ class KnowledgeStore:
             rows = self.conn.execute(
                 "SELECT o.id, o.source_event_id, o.observed_at, o.content "
                 "FROM obs_fts f JOIN observations o ON o.id = f.rowid "
-                "WHERE obs_fts MATCH ?" + tc + " ORDER BY bm25(obs_fts) ASC LIMIT 50",
+                "WHERE obs_fts MATCH ?" + tc
+                # M-5: secondary key o.id makes bm25 ties a deterministic function of the
+                # data (not FTS scan order) before the top-50 rank assignment.
+                + " ORDER BY bm25(obs_fts) ASC, o.id ASC LIMIT 50",
                 [query] + ta,
             ).fetchall()
             for rank, r in enumerate(rows, start=1):
@@ -690,7 +739,13 @@ class KnowledgeStore:
                     },
                 )
                 observed_at_by_item[sid] = r["observed_at"]
-            vec_hits = list(best.values())
+            # M-1 + M-5: apply the spec's TOP-50 candidate cut (§1.8) BEFORE RRF, ordering
+            # deterministically by (-score, observed_at DESC, item_id) so the cut and the
+            # subsequent rank assignment are a pure function of the data.
+            vec_hits = sorted(
+                best.values(),
+                key=lambda h: (-h.score, -h.observed_at, h.item_id),
+            )[:50]
 
         if mode == "fts":
             vec_hits = []
