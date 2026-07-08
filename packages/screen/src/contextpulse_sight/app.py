@@ -254,7 +254,7 @@ class ContextPulseSightApp:
                         self._ocr_worker.enqueue(
                             frame_path, row_id, app_name,
                             window_title=window_title,
-                            native_img=img,
+                            native_img=native_img,
                         )
                     else:
                         logger.debug(
