@@ -139,10 +139,15 @@ class ContextPulseDaemon:
         self._sight_app = None
         self._voice_module = None
         self._touch_module = None
+        # Phase-1 knowledge graph — stays None unless knowledge_enabled (see
+        # _init_knowledge); None keeps the capture path byte-identical (AT-4).
+        self._knowledge_store = None
+        self._knowledge_ingestor = None
 
         self._init_sight()
         self._init_voice()
         self._init_touch()
+        self._init_knowledge()
 
     # ── Properties for tray integration (used by tray_macos) ────────
 
@@ -208,6 +213,37 @@ class ContextPulseDaemon:
             self._touch_module = None
             logger.exception("Touch module failed to initialize: %s", exc)
 
+    def _init_knowledge(self) -> None:
+        """Initialize the Phase-1 knowledge-graph ingestor (gated on knowledge_enabled).
+
+        Default false -> a no-op: no store, no ingest thread, no knowledge.db, so the
+        capture path is byte-identical to a build without the KG (AT-4). Fail-soft:
+        any error is recorded and swallowed so KG problems never impact capture. The
+        ingestor is a passive, enqueue-only EventBus listener; EventBus.emit already
+        isolates listener exceptions from the capture write path.
+        """
+        from contextpulse_core import config
+        if not config.get("knowledge_enabled", False):
+            return
+        try:
+            from contextpulse_knowledge.bridge import KnowledgeIngestor, default_knowledge_db
+            from contextpulse_knowledge.store_sqlite import KnowledgeStore
+
+            store = KnowledgeStore(default_knowledge_db())
+            # WAL so the separate MCP server process can read knowledge.db while
+            # this daemon writes it (reader/writer concurrency without lock churn).
+            store.conn.execute("PRAGMA journal_mode=WAL")
+            ingestor = KnowledgeIngestor(store, activity_db=str(ACTIVITY_DB_PATH))
+            ingestor.attach(self._event_bus)
+            self._knowledge_store = store
+            self._knowledge_ingestor = ingestor
+            logger.info("Knowledge ingestor initialized (knowledge_enabled=true)")
+        except Exception as exc:
+            self._module_errors["knowledge"] = str(exc)
+            self._knowledge_store = None
+            self._knowledge_ingestor = None
+            logger.exception("Knowledge ingestor failed to initialize: %s", exc)
+
     # ── Module Lifecycle ──────────────────────────────────────────
 
     def _start_modules(self) -> None:
@@ -263,6 +299,33 @@ class ContextPulseDaemon:
                 self._module_errors["touch"] = str(exc)
                 logger.exception("Touch module failed to start: %s", exc)
 
+        # Knowledge graph — start the ingest thread (no-op when disabled)
+        self._start_knowledge()
+
+    def _start_knowledge(self) -> None:
+        """Start the KG ingest thread if the ingestor was initialized. Fail-soft."""
+        if not self._knowledge_ingestor:
+            return
+        try:
+            self._knowledge_ingestor.start()
+            logger.info("Knowledge ingestor started (live event-bus ingest)")
+        except Exception as exc:
+            self._module_errors["knowledge"] = str(exc)
+            logger.exception("Knowledge ingestor failed to start: %s", exc)
+
+    def _stop_knowledge(self) -> None:
+        """Stop the KG ingest thread and close its store, if running. Fail-soft."""
+        if self._knowledge_ingestor:
+            try:
+                self._knowledge_ingestor.stop()
+            except Exception:
+                logger.exception("Knowledge ingestor stop failed")
+        if self._knowledge_store:
+            try:
+                self._knowledge_store.close()
+            except Exception:
+                logger.exception("Knowledge store close failed")
+
     def _start_voice_with_progress(self) -> None:
         """Start Voice module with model download progress handling."""
         try:
@@ -313,6 +376,9 @@ class ContextPulseDaemon:
 
         if self._touch_module:
             self._touch_module.stop()
+
+        # Stop KG ingest + close its store before the shared bus closes.
+        self._stop_knowledge()
 
         self._event_bus.close()
         logger.info("All modules stopped")
