@@ -22,6 +22,7 @@ import hashlib
 import json
 import sqlite3
 import struct
+import threading
 from typing import Iterable, Literal, Optional, Sequence
 
 from . import cp_core as core
@@ -116,9 +117,14 @@ MODEL_ID = "all-MiniLM-L6-v2@10244843"
 
 class KnowledgeStore:
     def __init__(self, path: str = ":memory:", config: Optional[IngestConfig] = None):
-        self.conn = sqlite3.connect(path)
+        # check_same_thread=False: the bridge hands one store to a background ingest
+        # thread (KnowledgeIngestor) while the daemon/backfill runs the catch-up on the
+        # main thread. The _lock below serializes the write path so those never overlap
+        # on the connection (SQLite requires the caller to serialize a shared connection).
+        self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
+        self._lock = threading.RLock()
         migrate(self.conn)
         self.config = config or IngestConfig()
 
@@ -156,6 +162,26 @@ class KnowledgeStore:
             (json.dumps(d),),
         )
 
+    # -- generic ingest_state accessors (bridge watermark, etc.) ------------
+
+    def get_ingest_state(self, key: str) -> Optional[dict]:
+        """Read a JSON ingest_state row by key (e.g. 'bridge_watermark'). None if absent."""
+        with self._lock:
+            row = self.conn.execute("SELECT value FROM ingest_state WHERE key=?", (key,)).fetchone()
+            return json.loads(row["value"]) if row else None
+
+    def set_ingest_state(self, key: str, value: dict) -> None:
+        """Upsert a JSON ingest_state row. Autocommits (call outside an open txn)."""
+        with self._lock:
+            if self.conn.in_transaction:
+                self.conn.commit()
+            self.conn.execute(
+                "INSERT INTO ingest_state(key, value) VALUES(?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, json.dumps(value)),
+            )
+            self.conn.commit()
+
     # -- alias snapshot for a type -----------------------------------------
 
     def _aliases_for_type(self, type_: str) -> dict[str, str]:
@@ -192,31 +218,36 @@ class KnowledgeStore:
         """
         if now is None:
             now = obs.observed_at
-        # ---- C2 pre-check (before plan_ingest) ---------------------------
-        exists = self.conn.execute(
-            "SELECT 1 FROM observations WHERE source_event_id=? LIMIT 1",
-            (obs.source_event_id,),
-        ).fetchone()
-        if exists:
-            return False
+        # The C2 pre-check and the apply must be ONE atomic critical section: with a
+        # concurrent ingest thread, a check-then-act gap would let the same event slip
+        # past the pre-check twice and hit the ux_obs_event unique index. RLock serializes.
+        with self._lock:
+            # ---- C2 pre-check (before plan_ingest) -----------------------
+            exists = self.conn.execute(
+                "SELECT 1 FROM observations WHERE source_event_id=? LIMIT 1",
+                (obs.source_event_id,),
+            ).fetchone()
+            if exists:
+                return False
 
-        state = self._load_state()
-        keys = core.derive_fusion_keys(obs, state, self.config)
-        existing = self._fetch_existing(keys)
-        aliases = self._aliases_for_type("project")  # only project uses alias table in P1
-        changeset, new_state = core.plan_ingest(obs, state, existing, aliases, self.config, now)
-        # C-3: the ChangeSet + state write are ONE all-or-nothing transaction. A failure
-        # (e.g. schema CHECK violation) rolls back the whole set so no partial observation
-        # survives — otherwise the C2 pre-check would later skip a never-fully-ingested
-        # event forever. Fail loud: re-raise after rollback.
-        self._apply_transactional(changeset, new_state)
-        self._enqueue_embeddings(obs, now)  # best-effort, post-commit; never rolls back ingest
-        return True
+            state = self._load_state()
+            keys = core.derive_fusion_keys(obs, state, self.config)
+            existing = self._fetch_existing(keys)
+            aliases = self._aliases_for_type("project")  # only project uses alias table in P1
+            changeset, new_state = core.plan_ingest(obs, state, existing, aliases, self.config, now)
+            # C-3: the ChangeSet + state write are ONE all-or-nothing transaction. A failure
+            # (e.g. schema CHECK violation) rolls back the whole set so no partial observation
+            # survives — otherwise the C2 pre-check would later skip a never-fully-ingested
+            # event forever. Fail loud: re-raise after rollback.
+            self._apply_transactional(changeset, new_state)
+            self._enqueue_embeddings(obs, now)  # best-effort; never rolls back ingest
+            return True
 
     def flush(self, now: int, force: bool = False) -> None:
-        state = self._load_state()
-        changeset, new_state = core.plan_flush(state, now, self.config, force=force)
-        self._apply_transactional(changeset, new_state)  # C-3: atomic
+        with self._lock:
+            state = self._load_state()
+            changeset, new_state = core.plan_flush(state, now, self.config, force=force)
+            self._apply_transactional(changeset, new_state)  # C-3: atomic
 
     def correct_fact(
         self,
@@ -300,18 +331,21 @@ class KnowledgeStore:
         C2 idempotency pre-check cannot later skip a never-fully-ingested event.
         """
         # Close any implicit transaction sqlite3 may have opened from prior reads so
-        # our explicit BEGIN is the sole outer transaction.
-        if self.conn.in_transaction:
-            self.conn.commit()
-        self.conn.execute("BEGIN IMMEDIATE")
-        try:
-            self._apply(changeset)
-            if new_state is not None:
-                self._save_state(new_state)
-            self.conn.commit()
-        except Exception:
-            self.conn.rollback()
-            raise
+        # our explicit BEGIN is the sole outer transaction. The lock (reentrant — the
+        # observe/flush callers already hold it) serializes every write path across the
+        # main and ingest threads that share this connection.
+        with self._lock:
+            if self.conn.in_transaction:
+                self.conn.commit()
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._apply(changeset)
+                if new_state is not None:
+                    self._save_state(new_state)
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
 
     def _obs_id(self, source_event_id: str) -> Optional[int]:
         row = self.conn.execute(
@@ -690,7 +724,8 @@ class KnowledgeStore:
             rows = self.conn.execute(
                 "SELECT o.id, o.source_event_id, o.observed_at, o.content "
                 "FROM obs_fts f JOIN observations o ON o.id = f.rowid "
-                "WHERE obs_fts MATCH ?" + tc
+                "WHERE obs_fts MATCH ?"
+                + tc
                 # M-5: secondary key o.id makes bm25 ties a deterministic function of the
                 # data (not FTS scan order) before the top-50 rank assignment.
                 + " ORDER BY bm25(obs_fts) ASC, o.id ASC LIMIT 50",
