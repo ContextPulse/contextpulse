@@ -94,9 +94,17 @@ def _register_memory_tools():
 
 
 def _register_probe_tools():
-    # THROWAWAY — Phase 0 wedge probe (facts_about / context_at). Remove at Phase 1.
+    # THROWAWAY — Phase 0 wedge probe (facts_about / context_at). Retired at the
+    # Phase-1 save-gated cut-over, superseded by the knowledge tools below.
     from contextpulse_core.probe_mcp import mcp_app as probe_app
     _import_tools(probe_app, "Probe")
+
+
+def _register_knowledge_tools():
+    # Phase 1 knowledge graph (facts_about / context_at / kg_timeline /
+    # search_knowledge). Replaces the probe tools when knowledge_enabled.
+    from contextpulse_knowledge.mcp_tools import mcp_app as knowledge_app
+    _import_tools(knowledge_app, "Knowledge")
 
 
 def _register_all():
@@ -105,7 +113,18 @@ def _register_all():
     Each package's mcp_server.py defines tools on its own FastMCP instance.
     We copy the tool registrations into the unified app so all tools are
     served from a single HTTP endpoint.
+
+    The knowledge graph and the Phase-0 probe both define facts_about /
+    context_at, so exactly one is registered: the KG when knowledge_enabled,
+    otherwise the probe (default). Registering both would collide on tool names.
     """
+    from contextpulse_core import config
+
+    if config.get("knowledge_enabled", False):
+        recall_tools = ("knowledge", _register_knowledge_tools)
+    else:
+        recall_tools = ("probe", _register_probe_tools)
+
     errors = []
     for name, register_fn in [
         ("sight", _register_sight_tools),
@@ -113,7 +132,7 @@ def _register_all():
         ("voice", _register_voice_tools),
         ("touch", _register_touch_tools),
         ("memory", _register_memory_tools),
-        ("probe", _register_probe_tools),
+        recall_tools,
     ]:
         try:
             register_fn()

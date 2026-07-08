@@ -91,6 +91,11 @@ _DEFAULTS: dict = {
     "memory_enabled": False,
     "memory_tier": "",            # "" | "starter" | "pro"
 
+    # Knowledge graph (Phase 1) — when true, the KG MCP tools replace the
+    # throwaway Phase-0 probe tools (facts_about / context_at). Default false
+    # keeps the probe as the live provider until the save-gated cut-over.
+    "knowledge_enabled": False,
+
     # Voice — dictation settings
     "voice_hotkey": "ctrl+space",
     "voice_fix_hotkey": "ctrl+shift+space",
@@ -121,6 +126,7 @@ _ENV_MAP: dict[str, str] = {
     "voice_fix_hotkey": "CONTEXTPULSE_VOICE_FIX_HOTKEY",
     "voice_whisper_model": "CONTEXTPULSE_VOICE_MODEL",
     "voice_always_use_llm": "CONTEXTPULSE_VOICE_ALWAYS_LLM",
+    "knowledge_enabled": "CONTEXTPULSE_KNOWLEDGE_ENABLED",
 }
 
 
