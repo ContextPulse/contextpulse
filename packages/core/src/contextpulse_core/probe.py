@@ -90,6 +90,30 @@ def default_probe_db() -> Path:
     return Path(env) if env else default_activity_db().parent / "probe.db"
 
 
+# Auth-source env vars that make `claude -p` bypass the claude.ai login and bill
+# a Console/API wallet instead. The consolidator is designed to run FREE on the
+# founder's Max subscription (see module docstring / consolidator §9); a User-
+# scope ANTHROPIC_API_KEY leaking into the scheduled task both mis-bills every
+# 6h run to the credit-card wallet AND took the task down for two runs when that
+# path had a transient failure (claude exited 1: "connectors are disabled
+# because ANTHROPIC_API_KEY ... takes precedence over your claude.ai login").
+# Stripping them forces the deterministic, zero-marginal-cost Max login.
+_CLAUDE_AUTH_OVERRIDE_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+
+
+def claude_cli_env() -> dict[str, str]:
+    """Return the process env with auth-override vars stripped.
+
+    Pass to ``subprocess.run(..., env=...)`` when invoking the Claude CLI so it
+    always uses the claude.ai Max login rather than whatever API key happens to
+    be exported into the task's environment.
+    """
+    env = dict(os.environ)
+    for var in _CLAUDE_AUTH_OVERRIDE_VARS:
+        env.pop(var, None)
+    return env
+
+
 # Cap on events fed to one extraction pass — keeps the prompt within a sane
 # token budget. Phase 0 is a probe, not a backfill; 24h of events is small.
 _MAX_EVENTS = 1500

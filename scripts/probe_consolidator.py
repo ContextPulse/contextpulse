@@ -62,6 +62,10 @@ def call_claude(prompt: str, timeout: int = 600) -> str:
         encoding="utf-8",
         errors="replace",
         timeout=timeout,
+        # Strip ANTHROPIC_API_KEY/AUTH_TOKEN so the CLI uses the founder's
+        # claude.ai Max login (free) instead of billing/failing on a Console
+        # API key that leaked in from the User-scope environment.
+        env=probe.claude_cli_env(),
     )
     if proc.returncode != 0:
         raise RuntimeError(f"claude CLI exited {proc.returncode}: {proc.stderr[:500].strip()}")
