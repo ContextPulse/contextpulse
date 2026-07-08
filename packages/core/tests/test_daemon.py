@@ -410,3 +410,63 @@ class TestRunTrayLoop:
     def test_run_with_zombies_does_not_raise(self, tmp_path):
         daemon, mock_tray = self._run_once(tmp_path, zombies=[99999])
         mock_tray.run.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Phase-1 knowledge-graph integration (gated on knowledge_enabled)
+# ---------------------------------------------------------------------------
+
+class TestKnowledgeIntegration:
+    def test_disabled_by_default_is_byte_identical(self, tmp_path):
+        # Default flag false -> no store, no ingestor (AT-4 byte-identical path).
+        daemon, _ = _make_daemon(tmp_path)
+        assert daemon._knowledge_ingestor is None
+        assert daemon._knowledge_store is None
+
+    def test_enabled_creates_and_attaches_ingestor(self, tmp_path, monkeypatch):
+        import contextpulse_core.config as cfg
+        import contextpulse_knowledge.bridge as bridgemod
+        monkeypatch.setattr(cfg, "get", lambda k, d=None: True if k == "knowledge_enabled" else d)
+        monkeypatch.setattr(bridgemod, "default_knowledge_db", lambda: str(tmp_path / "knowledge.db"))
+        daemon, mocks = _make_daemon(tmp_path)
+        try:
+            assert daemon._knowledge_ingestor is not None
+            assert daemon._knowledge_store is not None
+            # attached as a listener on the (mocked) shared EventBus
+            mocks["event_bus"].on.assert_called_once()
+        finally:
+            daemon._stop_knowledge()
+
+    def test_init_is_fail_soft(self, tmp_path, monkeypatch):
+        # A KG init failure must never break the daemon or capture.
+        import contextpulse_core.config as cfg
+        import contextpulse_knowledge.store_sqlite as ss
+        monkeypatch.setattr(cfg, "get", lambda k, d=None: True if k == "knowledge_enabled" else d)
+
+        def _boom(*a, **k):
+            raise RuntimeError("kg boom")
+
+        monkeypatch.setattr(ss, "KnowledgeStore", _boom)
+        daemon, _ = _make_daemon(tmp_path)  # must not raise
+        assert daemon._knowledge_ingestor is None
+        assert daemon._knowledge_store is None
+        assert "knowledge" in daemon._module_errors
+
+    def test_start_knowledge_delegates(self, tmp_path):
+        daemon, _ = _make_daemon(tmp_path)
+        daemon._knowledge_ingestor = MagicMock()
+        daemon._start_knowledge()
+        daemon._knowledge_ingestor.start.assert_called_once()
+
+    def test_start_knowledge_noop_when_absent(self, tmp_path):
+        daemon, _ = _make_daemon(tmp_path)
+        daemon._knowledge_ingestor = None
+        daemon._start_knowledge()  # must not raise
+
+    def test_stop_knowledge_stops_thread_and_closes_store(self, tmp_path):
+        daemon, _ = _make_daemon(tmp_path)
+        daemon._knowledge_ingestor = MagicMock()
+        daemon._knowledge_store = MagicMock()
+        daemon._stop_knowledge()
+        daemon._knowledge_ingestor.stop.assert_called_once()
+        daemon._knowledge_store.close.assert_called_once()
