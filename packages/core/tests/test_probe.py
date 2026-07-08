@@ -301,6 +301,28 @@ def test_write_facts_dedupes_identical_entity_fact(tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0] == 1
 
 
+# ── claude CLI env sanitizing (auth-source leak) ────────────────────
+
+
+def test_claude_cli_env_strips_api_key(monkeypatch):
+    # A User-scope ANTHROPIC_API_KEY leaking into the scheduled task made
+    # `claude -p` bill/fail on the Console wallet instead of the free Max login.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-leaked")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "sk-ant-oat01-leaked")
+    monkeypatch.setenv("PATH", "keep-me")
+    env = probe.claude_cli_env()
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "ANTHROPIC_AUTH_TOKEN" not in env
+    assert env["PATH"] == "keep-me"  # unrelated vars pass through
+
+
+def test_claude_cli_env_is_noop_when_key_absent(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    env = probe.claude_cli_env()
+    assert "ANTHROPIC_API_KEY" not in env
+
+
 # ── run ledger (red-team M1) ────────────────────────────────────────
 
 
