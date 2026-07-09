@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # --- Backend abstraction ---
 
 _backend: str | None = None  # "dxcam" or "mss", set on first use
-_dxcam_cameras: dict[int, object] = {}  # output_idx -> dxcam camera instance
+_dxcam_cameras: dict[int, object | None] = {}  # output_idx -> camera (None = unavailable)
 
 
 def _get_backend() -> str:
@@ -50,12 +50,24 @@ def _get_backend() -> str:
     return _backend
 
 
-def _get_dxcam_camera(output_idx: int = 0) -> object:
-    """Get or create a DXcam camera for the given monitor output index."""
+def _get_dxcam_camera(output_idx: int = 0) -> object | None:
+    """Get or create a DXcam camera for the given monitor output index.
+
+    Returns None when dxcam cannot create a camera for this output (e.g.,
+    output_idx beyond the adapter's output list raises IndexError). The
+    None is cached so subsequent captures skip dxcam straight to mss
+    without spamming warnings.
+    """
     if output_idx not in _dxcam_cameras:
         import dxcam
-        camera = dxcam.create(output_idx=output_idx, output_color="BGR")
-        _dxcam_cameras[output_idx] = camera
+        try:
+            _dxcam_cameras[output_idx] = dxcam.create(output_idx=output_idx, output_color="BGR")
+        except Exception as exc:
+            logger.info(
+                "DXcam output_idx=%d unavailable (%s) — caching None, mss will handle",
+                output_idx, exc,
+            )
+            _dxcam_cameras[output_idx] = None
     return _dxcam_cameras[output_idx]
 
 
@@ -120,14 +132,15 @@ def capture_active_monitor() -> tuple[int, Image.Image]:
         idx, mon = find_monitor_at_cursor(sct)
 
     if _get_backend() == "dxcam":
-        try:
-            camera = _get_dxcam_camera(idx)
-            frame = camera.grab()
-            if frame is not None:
-                return idx, _downscale(_dxcam_to_pil(frame))
-            logger.debug("DXcam returned None for monitor %d, falling back to mss", idx)
-        except Exception as exc:
-            logger.warning("DXcam capture failed for monitor %d: %s — falling back to mss", idx, exc)
+        camera = _get_dxcam_camera(idx)
+        if camera is not None:
+            try:
+                frame = camera.grab()
+                if frame is not None:
+                    return idx, _downscale(_dxcam_to_pil(frame))
+                logger.debug("DXcam returned None for monitor %d, falling back to mss", idx)
+            except Exception as exc:
+                logger.warning("DXcam capture failed for monitor %d: %s — falling back to mss", idx, exc)
 
     # Fallback to mss
     with mss.mss() as sct:
@@ -148,14 +161,15 @@ def capture_single_monitor(index: int) -> Image.Image:
             )
 
     if _get_backend() == "dxcam":
-        try:
-            camera = _get_dxcam_camera(index)
-            frame = camera.grab()
-            if frame is not None:
-                return _downscale(_dxcam_to_pil(frame))
-            logger.debug("DXcam returned None for monitor %d, falling back to mss", index)
-        except Exception as exc:
-            logger.warning("DXcam capture failed for monitor %d: %s — falling back to mss", index, exc)
+        camera = _get_dxcam_camera(index)
+        if camera is not None:
+            try:
+                frame = camera.grab()
+                if frame is not None:
+                    return _downscale(_dxcam_to_pil(frame))
+                logger.debug("DXcam returned None for monitor %d, falling back to mss", index)
+            except Exception as exc:
+                logger.warning("DXcam capture failed for monitor %d: %s — falling back to mss", index, exc)
 
     # Fallback to mss
     with mss.mss() as sct:
@@ -187,20 +201,21 @@ def capture_all_monitors(
         try:
             native = None
             if use_dxcam:
-                try:
-                    camera = _get_dxcam_camera(i)
-                    frame = camera.grab()
-                    if frame is not None:
-                        native = _dxcam_to_pil(frame)
-                        scaled = _downscale(native.copy())
-                        if keep_native:
-                            results.append((i, scaled, native))
-                        else:
-                            results.append((i, scaled))
-                        continue
-                    logger.debug("DXcam returned None for monitor %d, trying mss", i)
-                except Exception as exc:
-                    logger.warning("DXcam failed for monitor %d: %s — trying mss", i, exc)
+                camera = _get_dxcam_camera(i)
+                if camera is not None:
+                    try:
+                        frame = camera.grab()
+                        if frame is not None:
+                            native = _dxcam_to_pil(frame)
+                            scaled = _downscale(native.copy())
+                            if keep_native:
+                                results.append((i, scaled, native))
+                            else:
+                                results.append((i, scaled))
+                            continue
+                        logger.debug("DXcam returned None for monitor %d, trying mss", i)
+                    except Exception as exc:
+                        logger.warning("DXcam failed for monitor %d: %s — trying mss", i, exc)
 
             # mss fallback for this monitor
             with mss.mss() as sct:

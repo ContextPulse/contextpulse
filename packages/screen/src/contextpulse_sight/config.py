@@ -30,10 +30,27 @@ JPEG_QUALITY = max(1, min(100, int(_env("CONTEXTPULSE_JPEG_QUALITY", "90"))))
 # Auto-capture interval in seconds (default 5s, 0 = disabled)
 AUTO_INTERVAL = max(0, int(_env("CONTEXTPULSE_AUTO_INTERVAL", "5")))
 
+# Adaptive idle interval: when no event has fired (window switch / cursor
+# activity) for AUTO_IDLE_THRESHOLD seconds, the capture loop stretches the
+# interval to AUTO_INTERVAL_IDLE. Snaps back to AUTO_INTERVAL on the next
+# event. This drops idle CPU from ~30% to ~5% on a multi-monitor setup.
+AUTO_INTERVAL_IDLE = max(1, int(_env("CONTEXTPULSE_AUTO_INTERVAL_IDLE", "30")))
+AUTO_IDLE_THRESHOLD = max(1, int(_env("CONTEXTPULSE_AUTO_IDLE_THRESHOLD", "60")))
+
 # Rolling buffer settings
 BUFFER_DIR = OUTPUT_DIR / "buffer"
 BUFFER_MAX_AGE = max(0, int(_env("CONTEXTPULSE_BUFFER_MAX_AGE", "1800")))  # seconds (30 min)
 CHANGE_THRESHOLD = max(0.0, float(_env("CONTEXTPULSE_CHANGE_THRESHOLD", "0.5")))  # % pixel diff
+
+# OCR-skip threshold — frames stored in the buffer below this diff %
+# are NOT enqueued for OCR. Idle screens with cursor blinks / clock ticks
+# usually produce 0.5%-3% diffs, which is enough to update the visual
+# buffer but not worth a 0.2-0.7s OCR pass. Real content changes (window
+# switch, scroll, edit) produce >5% diffs. Set to 0 to disable the gate
+# (fall back to prior behavior of always OCR'ing every stored frame).
+OCR_DIFF_THRESHOLD = max(
+    0.0, float(_env("CONTEXTPULSE_OCR_DIFF_THRESHOLD", "5.0"))
+)  # % pixel diff
 
 # Storage mode: "smart" (text-only when text-heavy, image otherwise),
 #               "visual" (always save image, never text-only),
