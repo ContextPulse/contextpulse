@@ -24,11 +24,14 @@ from contextpulse_sight.activity import ActivityDB
 from contextpulse_sight.buffer import RollingBuffer
 from contextpulse_sight.clipboard import ClipboardMonitor
 from contextpulse_sight.config import (
+    AUTO_IDLE_THRESHOLD,
     AUTO_INTERVAL,
+    AUTO_INTERVAL_IDLE,
     BUFFER_MAX_AGE,
     CHANGE_THRESHOLD,
     FILE_LATEST,
     FILE_REGION,
+    OCR_DIFF_THRESHOLD,
     OUTPUT_DIR,
 )
 from contextpulse_sight.events import EventDetector
@@ -43,6 +46,56 @@ from contextpulse_sight.privacy import (
 from contextpulse_sight.sight_module import SightModule
 
 _WARNING_COLOR = _COLORS.get("dark", {}).get("warning", "#F0B429")
+
+
+def should_run_ocr(diff_pct: float, force_ocr: bool, threshold: float) -> bool:
+    """Return True if a stored frame should be enqueued for OCR.
+
+    The capture loop stores any frame above the buffer ``CHANGE_THRESHOLD``
+    (default 0.5%). On idle screens that includes cursor blinks and clock
+    ticks — frames that match the previous one almost everywhere. OCR'ing
+    each one costs 0.2-0.7s of CPU per monitor per cycle, which sustained
+    20-40% of one core. This gate skips OCR for those near-identical
+    frames; the visual buffer still records them for replay.
+
+    The ``force_ocr`` flag lets event-driven captures (window switch, app
+    focus change) bypass the gate so meaningful UI transitions are always
+    indexed even if the pixel diff happens to be small.
+
+    Setting ``threshold`` to 0 disables the gate (always OCR), restoring
+    pre-2026-04-29 behavior.
+    """
+    if force_ocr:
+        return True
+    return diff_pct >= threshold
+
+
+def effective_interval(
+    now: float,
+    last_active_time: float,
+    base_interval: float,
+    idle_interval: float,
+    idle_threshold: float,
+) -> float:
+    """Return the capture interval to use given recent activity.
+
+    When events fired recently (within ``idle_threshold`` seconds), use
+    ``base_interval`` for snappy response. When the user has been quiet
+    longer than ``idle_threshold``, stretch to ``idle_interval`` to drop
+    background CPU. The next event fires an immediate capture (the loop
+    sets ``last_active_time = now`` on every event), so snap-back is one
+    cycle of latency rather than an idle-interval wait.
+
+    Defensive: if a misconfigured ``idle_interval`` is *lower* than
+    ``base_interval``, fall back to ``base_interval`` — extending the
+    interval is the only direction that makes sense here.
+    """
+    effective_idle = max(base_interval, idle_interval)
+    idle_secs = now - last_active_time
+    if idle_secs >= idle_threshold:
+        return effective_idle
+    return base_interval
+
 
 _LOG_FILE = OUTPUT_DIR / "contextpulse_sight.log"
 
@@ -144,8 +197,15 @@ class ContextPulseSightApp:
 
     # -- Auto-capture loop -------------------------------------------------
 
-    def _do_auto_capture(self):
-        """Capture all monitors, store in buffer, record activity. Returns True on success."""
+    def _do_auto_capture(self, force_ocr: bool = False):
+        """Capture all monitors, store in buffer, record activity. Returns True on success.
+
+        Args:
+            force_ocr: When True, every stored frame is OCR'd regardless of
+                diff_pct. Set by the auto-capture loop on event-driven runs
+                (window switch, app focus change) so meaningful UI changes
+                are always indexed even when their pixel diff is small.
+        """
         monitors = capture.capture_all_monitors(keep_native=True)
         cursor_idx = monitors[0][0] if monitors else 0
         try:
@@ -185,13 +245,22 @@ class ContextPulseSightApp:
                     diff_score=diff_pct,
                 )
                 # Queue for background OCR — pass native-res image for
-                # higher OCR accuracy (buffer stores downscaled JPEG)
+                # higher OCR accuracy (buffer stores downscaled JPEG).
+                # Skip OCR on near-identical frames (cursor blinks, clock
+                # ticks) per OCR_DIFF_THRESHOLD; force_ocr=True bypasses
+                # the gate for event-driven captures.
                 if frame_path and isinstance(frame_path, Path):
-                    self._ocr_worker.enqueue(
-                        frame_path, row_id, app_name,
-                        window_title=window_title,
-                        native_img=img,
-                    )
+                    if should_run_ocr(diff_pct, force_ocr, OCR_DIFF_THRESHOLD):
+                        self._ocr_worker.enqueue(
+                            frame_path, row_id, app_name,
+                            window_title=window_title,
+                            native_img=native_img,
+                        )
+                    else:
+                        logger.debug(
+                            "OCR skipped m%d (diff=%.1f%% < %.1f%%)",
+                            idx, diff_pct, OCR_DIFF_THRESHOLD,
+                        )
 
                 if idx == cursor_idx:
                     capture.save_image(img, FILE_LATEST, fmt="JPEG")
@@ -205,9 +274,14 @@ class ContextPulseSightApp:
         return True
 
     def _auto_capture_loop(self):
-        logger.info("Auto-capture started (interval=%ds)", AUTO_INTERVAL)
+        logger.info(
+            "Auto-capture started (active=%ds, idle=%ds after %ds quiet)",
+            AUTO_INTERVAL, AUTO_INTERVAL_IDLE, AUTO_IDLE_THRESHOLD,
+        )
         consecutive_errors = 0
         last_capture_time = 0.0
+        last_active_time = time.time()  # any event resets this
+        last_logged_mode = "active"  # debounce mode-transition logs
         _last_paused_log = 0.0  # debounce "paused" log messages
         while not self.stop_event.is_set():
             if self._should_skip_quiet():
@@ -221,7 +295,25 @@ class ContextPulseSightApp:
                 continue
             now = time.time()
             event_fired = self._event_detector.has_pending_event()
-            timer_expired = (now - last_capture_time) >= AUTO_INTERVAL
+
+            # Adaptive interval: stretch to AUTO_INTERVAL_IDLE after
+            # AUTO_IDLE_THRESHOLD seconds of no events; snap back to
+            # AUTO_INTERVAL on any event. (Phase A3, 2026-04-29.)
+            current_interval = effective_interval(
+                now=now,
+                last_active_time=last_active_time,
+                base_interval=AUTO_INTERVAL,
+                idle_interval=AUTO_INTERVAL_IDLE,
+                idle_threshold=AUTO_IDLE_THRESHOLD,
+            )
+            mode = "idle" if current_interval > AUTO_INTERVAL else "active"
+            if mode != last_logged_mode:
+                logger.info(
+                    "Auto-capture mode -> %s (interval=%.0fs)", mode, current_interval,
+                )
+                last_logged_mode = mode
+
+            timer_expired = (now - last_capture_time) >= current_interval
 
             if event_fired or timer_expired:
                 try:
@@ -229,8 +321,12 @@ class ContextPulseSightApp:
                         reason = self._event_detector.get_pending_reason()
                         logger.debug("Event-driven capture: %s", reason)
                         self._event_detector.clear_pending()
+                        last_active_time = now  # reset idle timer
 
-                    self._do_auto_capture()
+                    # Event-driven captures always OCR (window switch / app
+                    # focus change is meaningful even with small pixel diff).
+                    # Timer-driven captures rely on the OCR_DIFF_THRESHOLD gate.
+                    self._do_auto_capture(force_ocr=event_fired)
                     last_capture_time = time.time()
                     consecutive_errors = 0
                 except MemoryError:
