@@ -142,9 +142,9 @@ class TestCaptureBackend:
         mock_dxcam.create.return_value = MagicMock()
 
         with patch.dict("sys.modules", {"dxcam": mock_dxcam}):
-            from contextpulse_sight.capture import _get_backend
             # Clear cached backend to force re-detection
             import contextpulse_sight.capture as cap
+            from contextpulse_sight.capture import _get_backend
             cap._backend = None
             cap._dxcam_cameras = {}
             backend = _get_backend()
@@ -154,8 +154,8 @@ class TestCaptureBackend:
         from unittest.mock import patch
 
         with patch.dict("sys.modules", {"dxcam": None}):
-            from contextpulse_sight.capture import _get_backend
             import contextpulse_sight.capture as cap
+            from contextpulse_sight.capture import _get_backend
             cap._backend = None
             cap._dxcam_cameras = {}
             backend = _get_backend()
@@ -238,6 +238,7 @@ class TestActiveWindowRect:
 
     def test_returns_none_on_non_windows(self):
         from unittest.mock import patch
+
         from contextpulse_sight.capture import get_active_window_rect
 
         with patch("contextpulse_sight.capture.sys") as mock_sys:
@@ -247,6 +248,7 @@ class TestActiveWindowRect:
 
     def test_returns_none_when_no_foreground_window(self):
         from unittest.mock import MagicMock, patch
+
         from contextpulse_sight.capture import get_active_window_rect
 
         with patch("contextpulse_sight.capture.sys") as mock_sys:
@@ -260,6 +262,7 @@ class TestActiveWindowRect:
 
     def test_returns_rect_on_success(self):
         from unittest.mock import MagicMock, patch
+
         from contextpulse_sight.capture import get_active_window_rect
 
         with patch("contextpulse_sight.capture.sys") as mock_sys:
@@ -289,6 +292,7 @@ class TestActiveWindowRect:
 
     def test_handles_exception_gracefully(self):
         from unittest.mock import patch
+
         from contextpulse_sight.capture import get_active_window_rect
 
         with patch("contextpulse_sight.capture.sys") as mock_sys:
@@ -305,6 +309,7 @@ class TestAdaptiveRegion:
 
     def test_auto_size_uses_active_window(self):
         from unittest.mock import MagicMock, patch
+
         from contextpulse_sight.capture import capture_region
 
         # Mock get_active_window_rect to return a window at (100, 200, 800, 600)
@@ -330,6 +335,7 @@ class TestAdaptiveRegion:
 
     def test_fallback_to_cursor_centered(self):
         from unittest.mock import MagicMock, patch
+
         from contextpulse_sight.capture import capture_region
 
         # No active window
@@ -348,11 +354,12 @@ class TestAdaptiveRegion:
             with patch("contextpulse_sight.capture.mss.mss", return_value=mock_sct):
                 mock_sct.__enter__ = MagicMock(return_value=mock_sct)
                 mock_sct.__exit__ = MagicMock(return_value=False)
-                img = capture_region()
+                capture_region()
                 mock_sct.grab.assert_called_once()
 
     def test_explicit_size_bypasses_auto_detect(self):
         from unittest.mock import MagicMock, patch
+
         from contextpulse_sight.capture import capture_region
 
         with patch("contextpulse_sight.capture.get_active_window_rect") as mock_rect, \
@@ -370,7 +377,7 @@ class TestAdaptiveRegion:
             with patch("contextpulse_sight.capture.mss.mss", return_value=mock_sct):
                 mock_sct.__enter__ = MagicMock(return_value=mock_sct)
                 mock_sct.__exit__ = MagicMock(return_value=False)
-                img = capture_region(width=400, height=300)
+                capture_region(width=400, height=300)
                 # Should NOT have called get_active_window_rect
                 mock_rect.assert_not_called()
 
