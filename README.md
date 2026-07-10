@@ -188,13 +188,17 @@ Add to `~/.claude.json`:
 | `search_clipboard` | Search clipboard by text content |
 | `get_agent_stats` | Which MCP clients are consuming context, and how often |
 
-### Voice (3 free tools)
+### Voice (7 free tools)
 
 | Tool | What it does |
 |------|-------------|
 | `get_recent_transcriptions` | Recent voice dictation history (raw + cleaned) |
 | `get_voice_stats` | Dictation count, duration, accuracy stats |
 | `get_vocabulary` | Current word correction entries |
+| `learn_from_session` | Analyze dictation history to auto-learn vocabulary corrections (patterns seen 2+ times) |
+| `rebuild_context_vocabulary` | Rebuild vocabulary from `PROJECT_CONTEXT.md` files (project names + domain terms) |
+| `consolidate_learning` | Run the full cross-modal vocabulary consolidation pipeline (the core learning loop) |
+| `check_corrections` | Detect repeated voice corrections that should become permanent vocabulary |
 
 ### Touch (3 free tools)
 
@@ -239,7 +243,7 @@ Memory uses a 3-tier hot/warm/cold architecture: in-memory LRU cache → SQLite 
 | `search_all_events` | Cross-modal full-text search across screen, voice, clipboard, keys |
 | `get_event_timeline` | Temporal view of all events across all modalities |
 
-**Free forever:** 27 tools (Sight × 11, Voice × 3, Touch × 3, Project × 5, Memory × 5)
+**Free forever:** 31 tools (Sight × 11, Voice × 7, Touch × 3, Project × 5, Memory × 5)
 **Pro:** adds 4 search tools: semantic memory search plus cross-modal event queries
 **Trial:** 30-day Pro trial on first use, no credit card required
 
