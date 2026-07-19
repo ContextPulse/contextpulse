@@ -7,6 +7,7 @@ Clipboard paste automation.
 
 import hashlib
 import logging
+import sys
 import threading
 import time
 
@@ -18,6 +19,43 @@ import pyperclip
 pyautogui.FAILSAFE = False
 
 logger = logging.getLogger(__name__)
+
+# Terminal emulators do NOT treat Ctrl+V as paste (there it is a literal /
+# no-op); their paste chord is Ctrl+Shift+V. Dictating into a terminal — e.g. a
+# Claude Code prompt — therefore silently drops the text unless we send the
+# terminal chord. We detect the focused window by its Win32 class name.
+_TERMINAL_WINDOW_CLASSES = frozenset({
+    "ConsoleWindowClass",             # legacy conhost: cmd.exe, powershell.exe
+    "CASCADIA_HOSTING_WINDOW_CLASS",  # Windows Terminal
+    "PseudoConsoleWindow",            # ConPTY host
+    "mintty",                         # Git Bash / MSYS2 (see note in paste_text)
+    "org.wezfurlong.wezterm",         # WezTerm
+    "Alacritty",                      # Alacritty
+})
+
+
+def _foreground_window_class() -> str | None:
+    """Win32 class name of the focused window, or None (non-Windows / failure)."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return None
+        buf = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(hwnd, buf, 256)
+        return buf.value or None
+    except Exception:  # never let focus detection crash the paste path
+        logger.debug("Foreground window class lookup failed", exc_info=True)
+        return None
+
+
+def _focused_is_terminal() -> bool:
+    """True when the focused window is a known terminal emulator."""
+    return _foreground_window_class() in _TERMINAL_WINDOW_CLASSES
 
 _paste_lock = threading.Lock()
 _last_paste_time = 0.0
@@ -66,7 +104,14 @@ def paste_text(text: str) -> tuple[float, str]:
 
         pyperclip.copy(text)
         time.sleep(0.15)
-        pyautogui.hotkey("ctrl", "v")
+        # Ctrl+V pastes in normal apps but is inert in terminals, where paste is
+        # Ctrl+Shift+V. (mintty/Git Bash defaults to Shift+Insert and needs the
+        # user to map Ctrl+Shift+V to paste; conhost/Windows Terminal/WezTerm all
+        # accept Ctrl+Shift+V out of the box.)
+        if _focused_is_terminal():
+            pyautogui.hotkey("ctrl", "shift", "v")
+        else:
+            pyautogui.hotkey("ctrl", "v")
         _last_paste_time = time.time()
         _last_paste_hash = text_hash
         logger.info("Pasted %d characters (hash=%s)", len(text), text_hash)
