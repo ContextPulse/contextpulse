@@ -17,6 +17,31 @@ class POINT(ctypes.Structure):
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
 
+# -- Clipboard prototypes ---------------------------------------------------
+# ctypes defaults an undeclared restype to c_int (32-bit signed). GetClipboardData
+# returns an HGLOBAL and GlobalLock returns a raw memory pointer — both 64-bit on
+# Win64. Leaving them undeclared truncates the high bits and sign-extends the
+# result (a real 0x267C6C5ED40 came back as 0xFFFFFFFFA803D660), so wstring_at
+# then faulted with an access violation. Declare the widths explicitly.
+_u32 = ctypes.windll.user32
+_k32 = ctypes.windll.kernel32
+
+_u32.OpenClipboard.argtypes = [ctypes.wintypes.HWND]
+_u32.OpenClipboard.restype = ctypes.wintypes.BOOL
+_u32.CloseClipboard.argtypes = []
+_u32.CloseClipboard.restype = ctypes.wintypes.BOOL
+_u32.IsClipboardFormatAvailable.argtypes = [ctypes.wintypes.UINT]
+_u32.IsClipboardFormatAvailable.restype = ctypes.wintypes.BOOL
+_u32.GetClipboardData.argtypes = [ctypes.wintypes.UINT]
+_u32.GetClipboardData.restype = ctypes.wintypes.HANDLE
+_u32.GetClipboardSequenceNumber.argtypes = []
+_u32.GetClipboardSequenceNumber.restype = ctypes.wintypes.DWORD
+_k32.GlobalLock.argtypes = [ctypes.wintypes.HGLOBAL]
+_k32.GlobalLock.restype = ctypes.wintypes.LPVOID
+_k32.GlobalUnlock.argtypes = [ctypes.wintypes.HGLOBAL]
+_k32.GlobalUnlock.restype = ctypes.wintypes.BOOL
+
+
 class WindowsPlatformProvider(PlatformProvider):
     """Win32 implementation of all platform-specific operations."""
 
@@ -25,33 +50,51 @@ class WindowsPlatformProvider(PlatformProvider):
     def get_clipboard_sequence(self) -> int:
         """Return the Win32 clipboard sequence number."""
         try:
-            return ctypes.windll.user32.GetClipboardSequenceNumber()
+            return _u32.GetClipboardSequenceNumber()
         except Exception:
+            logger.warning("GetClipboardSequenceNumber failed", exc_info=True)
             return 0
 
     def get_clipboard_text(self) -> str | None:
-        """Read text from the Windows clipboard using Win32 API."""
+        """Read text from the Windows clipboard using Win32 API.
+
+        Returns None when the clipboard holds no text (a normal, quiet case).
+        A genuine API failure is logged rather than swallowed — this read is on
+        a 1s poll loop, so the log is rate-limited to one warning per distinct
+        error to surface breakage without flooding the daemon log.
+        """
         CF_UNICODETEXT = 13
         try:
-            if not ctypes.windll.user32.OpenClipboard(0):
+            if not _u32.OpenClipboard(None):
                 return None
             try:
-                if not ctypes.windll.user32.IsClipboardFormatAvailable(CF_UNICODETEXT):
+                if not _u32.IsClipboardFormatAvailable(CF_UNICODETEXT):
                     return None
-                handle = ctypes.windll.user32.GetClipboardData(CF_UNICODETEXT)
+                handle = _u32.GetClipboardData(CF_UNICODETEXT)
                 if not handle:
                     return None
-                ptr = ctypes.windll.kernel32.GlobalLock(handle)
+                ptr = _k32.GlobalLock(handle)
                 if not ptr:
                     return None
                 try:
                     return ctypes.wstring_at(ptr)
                 finally:
-                    ctypes.windll.kernel32.GlobalUnlock(handle)
+                    _k32.GlobalUnlock(handle)
             finally:
-                ctypes.windll.user32.CloseClipboard()
-        except Exception:
+                _u32.CloseClipboard()
+        except Exception as exc:
+            self._warn_once("clipboard_read", exc)
             return None
+
+    _warned_errors: set = set()
+
+    def _warn_once(self, key: str, exc: BaseException) -> None:
+        """Log a warning the first time each distinct error signature appears."""
+        sig = (key, type(exc).__name__, str(exc)[:200])
+        if sig in self._warned_errors:
+            return
+        self._warned_errors.add(sig)
+        logger.warning("Clipboard read failed (%s): %r", key, exc, exc_info=True)
 
     # -- Window info -------------------------------------------------------
 
