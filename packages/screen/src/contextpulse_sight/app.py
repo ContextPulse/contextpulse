@@ -14,6 +14,7 @@ import pystray
 # Core productization imports (settings, first-run, licensing)
 from contextpulse_core.first_run import is_first_run, show_welcome_dialog
 from contextpulse_core.license_dialog import show_nag_dialog
+from contextpulse_core.log_rotation import rotating_file_handler
 from contextpulse_core.platform import get_platform_provider
 from contextpulse_core.settings import show_settings
 from contextpulse_core.spine import EventBus
@@ -104,7 +105,7 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
     datefmt="%H:%M:%S",
     handlers=[
-        logging.FileHandler(_LOG_FILE, encoding="utf-8"),
+        rotating_file_handler(_LOG_FILE),
         logging.StreamHandler(),
     ],
 )

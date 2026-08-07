@@ -40,6 +40,7 @@ else:
 from contextpulse_core.config import OUTPUT_DIR as _cfg_output_dir
 from contextpulse_core.first_run import is_first_run, show_welcome_dialog
 from contextpulse_core.license_dialog import show_nag_dialog
+from contextpulse_core.log_rotation import rotate_if_oversized, rotating_file_handler
 from contextpulse_core.platform import get_platform_provider
 from contextpulse_core.settings import show_settings
 from contextpulse_core.spine import EventBus
@@ -113,7 +114,7 @@ def _setup_logging() -> None:
         format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
         datefmt="%H:%M:%S",
         handlers=[
-            logging.FileHandler(LOG_FILE, encoding="utf-8"),
+            rotating_file_handler(LOG_FILE),
             logging.StreamHandler(),
         ],
     )
@@ -522,6 +523,7 @@ class ContextPulseDaemon:
     def _log_crash(self, module_name: str, exc: Exception):
         """Write crash details to crash log file."""
         try:
+            rotate_if_oversized(CRASH_LOG)
             with open(CRASH_LOG, "a", encoding="utf-8") as f:
                 f.write(f"\n{'='*60}\n")
                 f.write(f"Module: {module_name}\n")
