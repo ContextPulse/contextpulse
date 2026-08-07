@@ -5,16 +5,29 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from unittest.mock import patch
 
+import pytest
 from contextpulse_core import _thread_caps
+
+
+@pytest.fixture(autouse=True)
+def clean_cap_env() -> Iterator[None]:
+    """Isolate every test from an ambient CONTEXTPULSE_CPU_THREADS.
+
+    David's user environment sets CONTEXTPULSE_CPU_THREADS=8, which made
+    get_cap() return 8 and broke the two tests that assert the default cap
+    of 2. Tests that want an override set it explicitly via patch.dict.
+    """
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("CONTEXTPULSE_CPU_THREADS", None)
+        yield
 
 
 class TestGetCap:
     def test_default_cap_is_2(self):
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("CONTEXTPULSE_CPU_THREADS", None)
-            assert _thread_caps.get_cap() == 2
+        assert _thread_caps.get_cap() == 2
 
     def test_override_via_env_var(self):
         with patch.dict(os.environ, {"CONTEXTPULSE_CPU_THREADS": "4"}):
