@@ -54,7 +54,7 @@ memory = ["contextpulse-memory>=0.1.0"]
 macos = [
     "pyobjc-framework-Cocoa>=12.1",
     "pyobjc-framework-Quartz>=10.0",
-    "pyobjc-framework-ApplicationServices>=10.0",
+    "pyobjc-framework-ApplicationServices>=12.1",
     "pyobjc-framework-Vision>=10.0",
     "rumps>=0.4",
     "mlx-whisper>=0.4.3",
