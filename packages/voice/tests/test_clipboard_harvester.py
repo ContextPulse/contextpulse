@@ -9,7 +9,6 @@ import time
 from pathlib import Path
 
 import pytest
-
 from contextpulse_voice.clipboard_harvester import harvest_clipboard_terms
 
 
@@ -108,3 +107,44 @@ class TestClipboardHarvester:
         results = harvest_clipboard_terms(db_path=db, hours=1)
         terms = [r["term"] for r in results]
         assert "ScreenContext" not in terms
+
+
+class TestClipboardPersistence:
+    """Regression: harvest_clipboard_terms ignored dry_run and never persisted.
+
+    The consolidator reported a clipboard_harvested count every night for terms
+    that were never written anywhere — a phantom metric.
+    """
+
+    @pytest.fixture
+    def vocab_file(self, tmp_path, monkeypatch):
+        path = tmp_path / "vocabulary_context.json"
+        monkeypatch.setattr(
+            "contextpulse_voice.context_vocab.CONTEXT_VOCAB_FILE", path,
+        )
+        monkeypatch.setattr(
+            "contextpulse_voice.context_vocab.VOICE_DATA_DIR", tmp_path,
+        )
+        return path
+
+    def test_applied_run_writes_terms_to_context_vocab(self, tmp_path, vocab_file):
+        db = _make_db(tmp_path, [
+            {"payload": {"text": "SwingPulse rollout"}},
+        ])
+
+        results = harvest_clipboard_terms(db_path=db, hours=1, dry_run=False)
+
+        assert results, "expected at least one harvested term"
+        assert vocab_file.exists(), "applied run must persist harvested terms"
+        data = json.loads(vocab_file.read_text(encoding="utf-8"))
+        assert data["swing pulse"] == "SwingPulse"
+
+    def test_dry_run_writes_nothing(self, tmp_path, vocab_file):
+        db = _make_db(tmp_path, [
+            {"payload": {"text": "SwingPulse rollout"}},
+        ])
+
+        results = harvest_clipboard_terms(db_path=db, hours=1, dry_run=True)
+
+        assert results, "dry run still reports findings"
+        assert not vocab_file.exists(), "dry_run must not write"
