@@ -9,8 +9,6 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from contextpulse_voice.consolidator import (
     _backup_vocab_files,
     _cross_modal_correction_mining,
@@ -74,6 +72,39 @@ class TestConsolidateVocabulary:
             db_path=tmp_path / "missing.db", dry_run=True,
         )
         assert summary["session_learned"] == 0
+
+    def test_rebuild_runs_before_harvesters(self, tmp_path):
+        """Regression: the rebuild used to run last and clobber harvested terms.
+
+        The rebuild and both harvesters all write vocabulary_context.json, so
+        ordering is load-bearing, not cosmetic.
+        """
+        db = _make_db(tmp_path)
+        calls: list[str] = []
+
+        with (
+            patch(
+                "contextpulse_voice.context_vocab.rebuild_context_vocabulary",
+                side_effect=lambda *a, **k: calls.append("rebuild") or 0,
+            ),
+            patch(
+                "contextpulse_voice.ocr_harvester.harvest_ocr_terms",
+                side_effect=lambda *a, **k: calls.append("ocr") or [],
+            ),
+            patch(
+                "contextpulse_voice.clipboard_harvester.harvest_clipboard_terms",
+                side_effect=lambda *a, **k: calls.append("clipboard") or [],
+            ),
+            patch("contextpulse_voice.consolidator._backup_vocab_files"),
+            patch(
+                "contextpulse_voice.consolidator._deduplicate_vocab_layers",
+                return_value=0,
+            ),
+        ):
+            consolidate_vocabulary(db_path=db, dry_run=False)
+
+        assert calls.index("rebuild") < calls.index("ocr")
+        assert calls.index("rebuild") < calls.index("clipboard")
 
 
 class TestCrossModalMining:

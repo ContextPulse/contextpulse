@@ -174,12 +174,65 @@ def build_context_vocabulary(
     return vocab
 
 
-def rebuild_context_vocabulary(projects_root: Path | None = None) -> int:
+def merge_terms_to_context_vocab(terms: list[dict]) -> int:
+    """Merge harvested terms into the context vocabulary file (additive only).
+
+    Args:
+        terms: Dicts carrying at least ``phrase`` (the key) and ``term``
+               (the correct spelling), as produced by the OCR and clipboard
+               harvesters.
+
+    Returns:
+        Number of entries newly added.
+    """
+    VOICE_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    existing = get_context_entries()
+
+    added = 0
+    for item in terms:
+        key = item.get("phrase")
+        value = item.get("term")
+        if not key or not value or key in existing:
+            continue
+        existing[key] = value
+        added += 1
+
+    if added:
+        CONTEXT_VOCAB_FILE.write_text(
+            json.dumps(existing, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    return added
+
+
+def rebuild_context_vocabulary(
+    projects_root: Path | None = None,
+    preserve_existing: bool = True,
+) -> int:
     """Rebuild and write the context vocabulary file.
 
-    Returns the number of entries written.
+    Args:
+        projects_root: Root directory containing project folders.
+        preserve_existing: If True (default), entries already in the file that
+            the directory scan did not produce are kept. Harvested terms (OCR,
+            clipboard) live in this same file, so a non-preserving rebuild
+            silently discards every term harvested since the last rebuild.
+            Scanned entries win on key collisions, so renames still propagate.
+
+    Returns:
+        The number of entries written.
     """
     vocab = build_context_vocabulary(projects_root)
+
+    if preserve_existing:
+        merged = get_context_entries()
+        kept = len(set(merged) - set(vocab))
+        merged.update(vocab)
+        vocab = merged
+        logger.info("Context vocab rebuild preserved %d non-scanned entries", kept)
+
     VOICE_DATA_DIR.mkdir(parents=True, exist_ok=True)
     CONTEXT_VOCAB_FILE.write_text(
         json.dumps(vocab, indent=2, ensure_ascii=False),

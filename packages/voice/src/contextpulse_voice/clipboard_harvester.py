@@ -103,6 +103,12 @@ def harvest_clipboard_terms(
             "source": "clipboard",
         })
 
+    if not dry_run and results:
+        from contextpulse_voice.context_vocab import merge_terms_to_context_vocab
+        added = merge_terms_to_context_vocab(results)
+        if added:
+            logger.info("Clipboard harvest: added %d new context vocab entries", added)
+
     logger.info(
         "Clipboard harvest: scanned %d events, found %d terms (%s)",
         len(rows), len(results), "dry_run" if dry_run else "applied",

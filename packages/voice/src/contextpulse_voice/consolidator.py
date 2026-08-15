@@ -36,12 +36,16 @@ def consolidate_vocabulary(
         1. Backup vocab files
         2. Session learning (transcript patterns)
         3. Cross-modal correction mining (the unique value)
-        4. OCR term harvesting
-        5. Clipboard term harvesting
-        6. Repeated correction escalation
-        7. Context vocabulary rebuild
+        4. Context vocabulary rebuild (project scan)
+        5. OCR term harvesting
+        6. Clipboard term harvesting
+        7. Repeated correction escalation
         8. Deduplicate vocab layers
         9. Emit audit event
+
+    The rebuild runs BEFORE the harvesters: both write vocabulary_context.json,
+    and harvested terms must land on top of a fresh project scan rather than be
+    overwritten by it.
 
     Args:
         db_path: Path to activity.db. Defaults to standard location.
@@ -89,7 +93,16 @@ def consolidate_vocabulary(
     except Exception:
         logger.exception("Cross-modal mining failed")
 
-    # Step 4: OCR harvesting
+    # Step 4: Context vocabulary rebuild — must precede the harvesters, which
+    # merge into the same file.
+    if not dry_run:
+        try:
+            from contextpulse_voice.context_vocab import rebuild_context_vocabulary
+            summary["context_rebuilt"] = rebuild_context_vocabulary()
+        except Exception:
+            logger.exception("Context vocab rebuild failed")
+
+    # Step 5: OCR harvesting
     try:
         from contextpulse_voice.ocr_harvester import harvest_ocr_terms
         results = harvest_ocr_terms(db_path=db_path, hours=24, dry_run=dry_run)
@@ -97,7 +110,7 @@ def consolidate_vocabulary(
     except Exception:
         logger.exception("OCR harvesting failed")
 
-    # Step 5: Clipboard harvesting
+    # Step 6: Clipboard harvesting
     try:
         from contextpulse_voice.clipboard_harvester import harvest_clipboard_terms
         results = harvest_clipboard_terms(db_path=db_path, hours=24, dry_run=dry_run)
@@ -105,7 +118,7 @@ def consolidate_vocabulary(
     except Exception:
         logger.exception("Clipboard harvesting failed")
 
-    # Step 6: Escalation
+    # Step 7: Escalation
     try:
         from contextpulse_voice.escalation import check_repeated_corrections
         results = check_repeated_corrections(
@@ -114,15 +127,6 @@ def consolidate_vocabulary(
         summary["escalated"] = len(results)
     except Exception:
         logger.exception("Escalation check failed")
-
-    # Step 7: Context vocabulary rebuild
-    if not dry_run:
-        try:
-            from contextpulse_voice.context_vocab import rebuild_context_vocabulary
-            count = rebuild_context_vocabulary()
-            summary["context_rebuilt"] = count
-        except Exception:
-            logger.exception("Context vocab rebuild failed")
 
     # Step 8: Deduplicate
     if not dry_run:

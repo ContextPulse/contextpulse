@@ -12,6 +12,7 @@ from contextpulse_voice.context_vocab import (
     build_context_vocabulary,
     get_context_entries,
     get_known_proper_nouns,
+    merge_terms_to_context_vocab,
     rebuild_context_vocabulary,
 )
 
@@ -158,6 +159,100 @@ class TestRebuildAndGet:
         assert vocab_file.exists()
         data = json.loads(vocab_file.read_text())
         assert "context pulse" in data
+
+    def test_rebuild_preserves_harvested_entries(self, tmp_path, monkeypatch):
+        """Regression: the rebuild used to clobber OCR/clipboard-harvested terms.
+
+        Both the project scan and the harvesters write vocabulary_context.json;
+        build_context_vocabulary() starts from an empty dict, so a non-preserving
+        write silently discarded every harvested term (55 OCR terms harvested on
+        2026-08-14 while the file stayed at exactly 98 entries).
+        """
+        vocab_file = tmp_path / "vocabulary_context.json"
+        monkeypatch.setattr(
+            "contextpulse_voice.context_vocab.CONTEXT_VOCAB_FILE", vocab_file,
+        )
+        monkeypatch.setattr(
+            "contextpulse_voice.context_vocab.VOICE_DATA_DIR", tmp_path,
+        )
+        vocab_file.write_text(
+            json.dumps({"harvested term": "HarvestedTerm"}), encoding="utf-8",
+        )
+
+        projects = tmp_path / "projects"
+        projects.mkdir()
+        (projects / "ContextPulse").mkdir()
+
+        rebuild_context_vocabulary(projects)
+
+        data = json.loads(vocab_file.read_text())
+        assert data["harvested term"] == "HarvestedTerm"
+        assert "context pulse" in data
+
+    def test_rebuild_scan_wins_over_stale_existing_value(self, tmp_path, monkeypatch):
+        """A renamed project must propagate — preservation is not a freeze."""
+        vocab_file = tmp_path / "vocabulary_context.json"
+        monkeypatch.setattr(
+            "contextpulse_voice.context_vocab.CONTEXT_VOCAB_FILE", vocab_file,
+        )
+        monkeypatch.setattr(
+            "contextpulse_voice.context_vocab.VOICE_DATA_DIR", tmp_path,
+        )
+        vocab_file.write_text(
+            json.dumps({"context pulse": "ContextPulseOld"}), encoding="utf-8",
+        )
+
+        projects = tmp_path / "projects"
+        projects.mkdir()
+        (projects / "ContextPulse").mkdir()
+
+        rebuild_context_vocabulary(projects)
+
+        data = json.loads(vocab_file.read_text())
+        assert data["context pulse"] == "ContextPulse"
+
+    def test_rebuild_without_preserve_drops_existing(self, tmp_path, monkeypatch):
+        vocab_file = tmp_path / "vocabulary_context.json"
+        monkeypatch.setattr(
+            "contextpulse_voice.context_vocab.CONTEXT_VOCAB_FILE", vocab_file,
+        )
+        monkeypatch.setattr(
+            "contextpulse_voice.context_vocab.VOICE_DATA_DIR", tmp_path,
+        )
+        vocab_file.write_text(
+            json.dumps({"harvested term": "HarvestedTerm"}), encoding="utf-8",
+        )
+
+        projects = tmp_path / "projects"
+        projects.mkdir()
+        (projects / "ContextPulse").mkdir()
+
+        rebuild_context_vocabulary(projects, preserve_existing=False)
+
+        data = json.loads(vocab_file.read_text())
+        assert "harvested term" not in data
+
+    def test_merge_terms_adds_only_new_keys(self, tmp_path, monkeypatch):
+        vocab_file = tmp_path / "vocabulary_context.json"
+        monkeypatch.setattr(
+            "contextpulse_voice.context_vocab.CONTEXT_VOCAB_FILE", vocab_file,
+        )
+        monkeypatch.setattr(
+            "contextpulse_voice.context_vocab.VOICE_DATA_DIR", tmp_path,
+        )
+        vocab_file.write_text(
+            json.dumps({"context pulse": "ContextPulse"}), encoding="utf-8",
+        )
+
+        added = merge_terms_to_context_vocab([
+            {"phrase": "context pulse", "term": "ContextPulseX"},
+            {"phrase": "swing pulse", "term": "SwingPulse"},
+        ])
+
+        assert added == 1
+        data = json.loads(vocab_file.read_text())
+        assert data["context pulse"] == "ContextPulse"
+        assert data["swing pulse"] == "SwingPulse"
 
     def test_get_context_entries_empty(self, monkeypatch, tmp_path):
         monkeypatch.setattr(

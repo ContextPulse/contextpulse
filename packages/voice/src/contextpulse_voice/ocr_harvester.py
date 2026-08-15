@@ -15,8 +15,11 @@ import sqlite3
 import time
 from pathlib import Path
 
-from contextpulse_voice.config import CONTEXT_VOCAB_FILE, VOICE_DATA_DIR
-from contextpulse_voice.context_vocab import _COMMON_PHRASES, _split_camel_to_phrase
+from contextpulse_voice.context_vocab import (
+    _COMMON_PHRASES,
+    _split_camel_to_phrase,
+    merge_terms_to_context_vocab,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -123,27 +126,6 @@ def harvest_ocr_terms(
 
 def _merge_to_context_vocab(terms: list[dict]) -> None:
     """Merge new terms into vocabulary_context.json (additive only)."""
-    VOICE_DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-    existing: dict[str, str] = {}
-    if CONTEXT_VOCAB_FILE.exists():
-        try:
-            existing = json.loads(CONTEXT_VOCAB_FILE.read_text(encoding="utf-8"))
-            if not isinstance(existing, dict):
-                existing = {}
-        except (json.JSONDecodeError, OSError):
-            existing = {}
-
-    added = 0
-    for item in terms:
-        key = item["phrase"]
-        if key not in existing:
-            existing[key] = item["term"]
-            added += 1
-
+    added = merge_terms_to_context_vocab(terms)
     if added:
-        CONTEXT_VOCAB_FILE.write_text(
-            json.dumps(existing, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
         logger.info("OCR harvest: added %d new context vocab entries", added)
