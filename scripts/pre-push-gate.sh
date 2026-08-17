@@ -5,7 +5,18 @@
 #   - PII (emails), secrets (gitleaks), internal project refs, AWS IDs,
 #     hardcoded user paths, license issues, deleted-file leaks.
 #
-# HIGH/MEDIUM/LOW findings print a warning but do NOT block.
+# HIGH/MEDIUM/LOW findings print a warning but do NOT block — EXCEPT the
+# content-leak class below, which blocks regardless of declared severity.
+#
+# Why (2026-08-17): a merge audit of phase1-kg-spine found an internal handoff
+# doc referencing a DIFFERENT private venture (CryptoTrader) and 12 files with
+# hardcoded C:\Users\david paths. Both are HIGH, not BLOCKER, so this gate would
+# have printed a warning and let the push through to a PUBLIC repo. Severity
+# tuned for "release quality" is the wrong axis for "must never be published":
+# a lint warning is not the same kind of thing as another project's name.
+#
+# Deliberately NOT blocking on all HIGH — ruff/bandit/pip-audit noise would
+# train the reflex to reach for --no-verify, which is strictly worse.
 #
 # Bypass only in a true emergency: git push --no-verify
 # (CI still runs security.yml, so the leak gets caught post-push — fix fast.)
@@ -53,6 +64,13 @@ except Exception as e:
     print(f"PARSE_ERROR: {e}")
     raise SystemExit(0)
 
+# Checks whose whole purpose is "this must never be published." Any non-DONE
+# result here blocks the push regardless of the check's declared severity.
+#   24 PII · 26 hardcoded user paths · 66 business-strategy docs
+#   67 internal project refs · 68 infrastructure IDs · 69 patent/trademark
+#   70 marketing/launch materials · 71 agent/AI config files
+LEAK_CLASS_IDS = {24, 26, 66, 67, 68, 69, 70, 71}
+
 real_blockers = []
 high_count = 0
 high_sample = []
@@ -60,10 +78,20 @@ for r in data.get("results", []):
     sev = r.get("severity")
     status = r.get("status")
     detail = r.get("detail", "")
+    try:
+        cid = int(r.get("id"))
+    except (TypeError, ValueError):
+        cid = None
     if sev == "BLOCKER" and status != "DONE":
         if "SKIPPED" in detail or "--skip-history" in detail:
             continue
         real_blockers.append(f"  [{r.get('id')}] {r.get('name')}: {detail}")
+    elif cid in LEAK_CLASS_IDS and status != "DONE":
+        if "SKIPPED" in detail or "--skip-history" in detail:
+            continue
+        real_blockers.append(
+            f"  [{r.get('id')}] {r.get('name')} (leak-class {sev}): {detail}"
+        )
     elif sev == "HIGH" and status != "DONE":
         high_count += 1
         if len(high_sample) < 5:
