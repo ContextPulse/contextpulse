@@ -130,7 +130,15 @@ AI coding assistants are powerful but blind. They can't see your screen, hear yo
 ```bash
 git clone https://github.com/ContextPulse/contextpulse
 cd contextpulse
+# Windows
 pip install -e packages/core -e packages/screen -e packages/voice -e packages/touch -e packages/project
+
+# macOS — the [macos] extras are REQUIRED, not optional niceties. They pull in
+# pyobjc (clipboard, window, caret, session monitor), rumps (menu bar) and
+# mlx-whisper (Apple Silicon transcription). Without them the install succeeds
+# and then fails at runtime.
+pip install -e "packages/core[macos]" -e "packages/screen[macos]" -e "packages/voice[macos]" \
+            -e packages/touch -e packages/project
 
 # Optional: persistent memory + semantic search
 pip install -e packages/memory
