@@ -83,12 +83,39 @@ contextpulse_pipeline/examples/ep-*/
 HANDOFF_*.md
 RESUMPTION_*.md
 
-# NOTE (2026-08-17): the rule above only ignores contextpulse_pipeline/examples/,
-# NOT the package. 64 files under contextpulse_pipeline/ are currently TRACKED —
-# they were first committed 2026-04-26, eight days BEFORE the 2026-05-04 rule
-# was added, and .gitignore never untracks what is already tracked. Adding a
-# broader pattern here would be theatre. Untracking is a content decision (where
-# should that pipeline live?), tracked as an open action rather than done silently.
+# Podcast / multi-source audio pipeline — LOCAL ONLY (David, 2026-08-17).
+# Untracked from git on 2026-08-17; the files remain on disk. This is personal
+# recording work (DJI mics, named participants, listen-test labels) and is not
+# part of the open-core product. May move to a private repo later.
+#
+# History: the 2026-05-04 rule above only covered contextpulse_pipeline/examples/,
+# while the package itself had been tracked since 2026-04-26 — eight days earlier —
+# and .gitignore never untracks what is already tracked. That gap is why a merge
+# audit found 12 files carrying hardcoded C:\Users\david paths bound for a public
+# repo. The rules below only hold because the files were untracked first.
+contextpulse_pipeline/
+
+# Pipeline scripts (same effort, live in scripts/ alongside legitimate tooling,
+# so they must be listed explicitly rather than by pattern).
+scripts/calibrate_rms_parallel.py
+scripts/calibrate_single_channel_thresholds.py
+scripts/extract_cluster_audit_snippets.py
+scripts/extract_mic_audit_extra.py
+scripts/extract_mic_audit_snippets.py
+scripts/extract_uningested_audit.py
+scripts/patch_raw_sources_add_tx01.py
+scripts/phase3_v0_1_acceptance_test.py
+scripts/recluster_dji_only.py
+scripts/rms_attribute.py
+scripts/run_a2_josh_hike.py
+scripts/run_local_pipeline_finish.py
+scripts/run_path_a_pipeline.py
+scripts/run_phase1_5_fingerprint_gpu.py
+scripts/run_phase1_transcribe_gpu.py
+scripts/run_voice_isolation_gpu.py
+scripts/validate_rms_against_labels.py
+scripts/validate_single_channel_against_labels.py
+scripts/validate_voice_separability.py
 
 # Voice profile / fingerprint artifacts (use S3, not git)
 *.npz
