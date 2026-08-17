@@ -39,7 +39,7 @@ This installs:
 - **pre-commit** (gitleaks) — blocks commits containing secrets
 - **pre-push** (pre-publish.py gate) — blocks pushes with BLOCKER-severity issues
 
-If `pre-publish.py` from the AgentConfig toolkit isn't available, the pre-push hook skips silently. Contributors without the internal toolkit can still push; GitHub Actions (`security.yml`) runs equivalent checks on every push.
+If `pre-publish.py` (a maintainer-side tool) isn't available, the pre-push hook skips silently. Contributors without it can still push; GitHub Actions (`security.yml`) runs equivalent checks on every push.
 
 Emergency bypass (use sparingly, never on main): `git push --no-verify`
 

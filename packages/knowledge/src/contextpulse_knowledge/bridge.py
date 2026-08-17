@@ -64,7 +64,24 @@ _TEXT_KEYS = ("ocr_text", "transcript", "text", "burst_text", "correction_text")
 
 
 def default_activity_db() -> str:
-    return os.environ.get("CONTEXTPULSE_ACTIVITY_DB", r"C:\Users\david\screenshots\activity.db")
+    """Path to the activity DB, honouring CONTEXTPULSE_ACTIVITY_DB.
+
+    Mirrors contextpulse_core.config's output_dir convention -- ~/screenshots,
+    or ~/Pictures/ContextPulse on macOS. The previous default was an absolute
+    path under a specific developer's Windows home directory, which both shipped
+    a personal path in a public repo and handed every non-Windows user a broken
+    default. Caught by pre-publish check 26 on 2026-08-17.
+    """
+    env = os.environ.get("CONTEXTPULSE_ACTIVITY_DB")
+    if env:
+        return env
+    home = os.path.expanduser("~")
+    base = (
+        os.path.join(home, "Pictures", "ContextPulse")
+        if sys.platform == "darwin"
+        else os.path.join(home, "screenshots")
+    )
+    return os.path.join(base, "activity.db")
 
 
 def default_knowledge_db() -> str:
