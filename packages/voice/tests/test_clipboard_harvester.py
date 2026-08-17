@@ -129,7 +129,7 @@ class TestClipboardPersistence:
 
     def test_applied_run_writes_terms_to_context_vocab(self, tmp_path, vocab_file):
         db = _make_db(tmp_path, [
-            {"payload": {"text": "SwingPulse rollout"}},
+            {"payload": {"text": "NimbusFlow rollout"}},
         ])
 
         results = harvest_clipboard_terms(db_path=db, hours=1, dry_run=False)
@@ -137,11 +137,11 @@ class TestClipboardPersistence:
         assert results, "expected at least one harvested term"
         assert vocab_file.exists(), "applied run must persist harvested terms"
         data = json.loads(vocab_file.read_text(encoding="utf-8"))
-        assert data["swing pulse"] == "SwingPulse"
+        assert data["nimbus flow"] == "NimbusFlow"
 
     def test_dry_run_writes_nothing(self, tmp_path, vocab_file):
         db = _make_db(tmp_path, [
-            {"payload": {"text": "SwingPulse rollout"}},
+            {"payload": {"text": "NimbusFlow rollout"}},
         ])
 
         results = harvest_clipboard_terms(db_path=db, hours=1, dry_run=True)

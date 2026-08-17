@@ -50,7 +50,7 @@ def _fact(entity, fact, valid_from, ids=("e1",), conf=0.9):
 
 def test_write_facts_returns_count_and_persists(tmp_path):
     conn = probe.connect_probe(tmp_path / "probe.db")
-    n = probe.write_facts(conn, [_fact("StockTrader", "swing bot is disabled", 1000.0)])
+    n = probe.write_facts(conn, [_fact("AcmeTrader", "swing bot is disabled", 1000.0)])
     assert n == 1
     assert conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0] == 1
 

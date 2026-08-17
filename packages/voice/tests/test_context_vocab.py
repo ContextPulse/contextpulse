@@ -246,13 +246,13 @@ class TestRebuildAndGet:
 
         added = merge_terms_to_context_vocab([
             {"phrase": "context pulse", "term": "ContextPulseX"},
-            {"phrase": "swing pulse", "term": "SwingPulse"},
+            {"phrase": "nimbus flow", "term": "NimbusFlow"},
         ])
 
         assert added == 1
         data = json.loads(vocab_file.read_text())
         assert data["context pulse"] == "ContextPulse"
-        assert data["swing pulse"] == "SwingPulse"
+        assert data["nimbus flow"] == "NimbusFlow"
 
     def test_get_context_entries_empty(self, monkeypatch, tmp_path):
         monkeypatch.setattr(
