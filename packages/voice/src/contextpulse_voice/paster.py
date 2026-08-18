@@ -7,6 +7,7 @@ Clipboard paste automation.
 
 import hashlib
 import logging
+import sys
 import threading
 import time
 
@@ -66,7 +67,12 @@ def paste_text(text: str) -> tuple[float, str]:
 
         pyperclip.copy(text)
         time.sleep(0.15)
-        pyautogui.hotkey("ctrl", "v")
+        # macOS pastes with Cmd+V everywhere, including terminals — Ctrl+V is
+        # inert there, so dictation silently produced nothing on a Mac.
+        if sys.platform == "darwin":
+            pyautogui.hotkey("command", "v")
+        else:
+            pyautogui.hotkey("ctrl", "v")
         _last_paste_time = time.time()
         _last_paste_hash = text_hash
         logger.info("Pasted %d characters (hash=%s)", len(text), text_hash)
