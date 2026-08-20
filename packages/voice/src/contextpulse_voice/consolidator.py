@@ -68,6 +68,12 @@ def consolidate_vocabulary(
         "deduped": 0,
         "dry_run": dry_run,
         "timestamp": datetime.now().isoformat(),
+        # Populated with {step_name: error_message} for any step that raised.
+        # A step failing still allows later steps to run (nightly-job
+        # resilience), but the caller MUST be able to tell "0 results" apart
+        # from "this step never ran" — an empty dict here is the only signal
+        # that every step that attempted to run actually succeeded.
+        "errors": {},
     }
 
     # Step 1: Backup
@@ -81,8 +87,9 @@ def consolidate_vocabulary(
             db_path=db_path, hours=24, dry_run=dry_run,
         )
         summary["session_learned"] = len(results)
-    except Exception:
+    except Exception as exc:
         logger.exception("Session learning failed")
+        summary["errors"]["session_learning"] = str(exc)
 
     # Step 3: Cross-modal correction mining
     try:
@@ -90,8 +97,9 @@ def consolidate_vocabulary(
             db_path=db_path, hours=24, dry_run=dry_run,
         )
         summary["cross_modal"] = len(cross_modal)
-    except Exception:
+    except Exception as exc:
         logger.exception("Cross-modal mining failed")
+        summary["errors"]["cross_modal"] = str(exc)
 
     # Step 4: Context vocabulary rebuild — must precede the harvesters, which
     # merge into the same file.
@@ -99,24 +107,27 @@ def consolidate_vocabulary(
         try:
             from contextpulse_voice.context_vocab import rebuild_context_vocabulary
             summary["context_rebuilt"] = rebuild_context_vocabulary()
-        except Exception:
+        except Exception as exc:
             logger.exception("Context vocab rebuild failed")
+            summary["errors"]["context_rebuild"] = str(exc)
 
     # Step 5: OCR harvesting
     try:
         from contextpulse_voice.ocr_harvester import harvest_ocr_terms
         results = harvest_ocr_terms(db_path=db_path, hours=24, dry_run=dry_run)
         summary["ocr_harvested"] = len(results)
-    except Exception:
+    except Exception as exc:
         logger.exception("OCR harvesting failed")
+        summary["errors"]["ocr_harvesting"] = str(exc)
 
     # Step 6: Clipboard harvesting
     try:
         from contextpulse_voice.clipboard_harvester import harvest_clipboard_terms
         results = harvest_clipboard_terms(db_path=db_path, hours=24, dry_run=dry_run)
         summary["clipboard_harvested"] = len(results)
-    except Exception:
+    except Exception as exc:
         logger.exception("Clipboard harvesting failed")
+        summary["errors"]["clipboard_harvesting"] = str(exc)
 
     # Step 7: Escalation
     try:
@@ -125,23 +136,33 @@ def consolidate_vocabulary(
             db_path=db_path, hours=72, dry_run=dry_run,
         )
         summary["escalated"] = len(results)
-    except Exception:
+    except Exception as exc:
         logger.exception("Escalation check failed")
+        summary["errors"]["escalation"] = str(exc)
 
     # Step 8: Deduplicate
     if not dry_run:
         try:
             summary["deduped"] = _deduplicate_vocab_layers()
-        except Exception:
+        except Exception as exc:
             logger.exception("Vocab deduplication failed")
+            summary["errors"]["deduplication"] = str(exc)
 
-    # Step 9: Emit audit event
+    # Step 9: Emit audit event — best-effort telemetry about the run that
+    # just happened; its own failure doesn't invalidate any step's data, so
+    # it is intentionally excluded from summary["errors"].
     try:
         _emit_consolidation_event(summary)
     except Exception:
         logger.debug("Failed to emit consolidation event", exc_info=True)
 
-    logger.info("Consolidation complete: %s", summary)
+    if summary["errors"]:
+        logger.error(
+            "Consolidation completed with %d failed step(s): %s. Full summary: %s",
+            len(summary["errors"]), sorted(summary["errors"]), summary,
+        )
+    else:
+        logger.info("Consolidation complete: %s", summary)
     return summary
 
 
