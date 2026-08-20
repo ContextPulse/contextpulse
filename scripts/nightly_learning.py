@@ -71,8 +71,10 @@ def main() -> int:
         "context": _vocab_size(CONTEXT_VOCAB_FILE),
     }
 
+    step_errors = summary.get("errors", {})
+
     result = {
-        "status": "success",
+        "status": "partial_failure" if step_errors else "success",
         "consolidation": {
             "session_learned": summary.get("session_learned", 0),
             "cross_modal": summary.get("cross_modal", 0),
@@ -85,9 +87,15 @@ def main() -> int:
         "vocab_before": vocab_before,
         "vocab_after": vocab_after,
     }
+    if step_errors:
+        result["errors"] = step_errors
 
     print(json.dumps(result, indent=2))
-    return 0
+    # Module docstring promises exit 1 for "partial failure (some modules
+    # errored)" — this is what actually makes that contract true. Before
+    # this fix, every step swallowed its own exception and this function
+    # always returned 0 regardless of how many steps had failed.
+    return 1 if step_errors else 0
 
 
 if __name__ == "__main__":

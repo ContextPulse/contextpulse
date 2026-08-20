@@ -73,6 +73,66 @@ class TestConsolidateVocabulary:
         )
         assert summary["session_learned"] == 0
 
+    def test_no_errors_on_clean_run(self, tmp_path):
+        db = _make_db(tmp_path)
+        summary = consolidate_vocabulary(db_path=db, dry_run=True)
+        assert summary["errors"] == {}
+
+    def test_step_failure_recorded_in_errors_not_swallowed(self, tmp_path):
+        """Regression: a raising step used to be indistinguishable from a
+        step that legitimately found nothing (cp-consolidator-silent-step-failures).
+
+        A caller reading only the count fields cannot tell "0 results" apart
+        from "this step blew up" — summary["errors"] is what makes that
+        distinguishable, and it must name the failing step.
+        """
+        db = _make_db(tmp_path)
+        with patch(
+            "contextpulse_voice.session_learner.learn_from_transcription_history",
+            side_effect=RuntimeError("boom"),
+        ):
+            summary = consolidate_vocabulary(db_path=db, dry_run=True)
+
+        assert summary["session_learned"] == 0  # unchanged default, not a lie
+        assert "session_learning" in summary["errors"]
+        assert "boom" in summary["errors"]["session_learning"]
+
+    def test_one_step_failure_does_not_block_other_steps(self, tmp_path):
+        """Resilience must survive the fix: one bad step still lets the rest run."""
+        t = time.time()
+        events = [
+            {
+                "modality": "voice", "event_type": "transcription", "timestamp": t,
+                "payload": {"transcript": "test", "raw_transcript": "test"},
+            },
+        ]
+        db = _make_db(tmp_path, events)
+        with patch(
+            "contextpulse_voice.session_learner.learn_from_transcription_history",
+            side_effect=RuntimeError("boom"),
+        ):
+            summary = consolidate_vocabulary(db_path=db, dry_run=True)
+
+        assert "session_learning" in summary["errors"]
+        # cross_modal step still executed and is absent from errors.
+        assert "cross_modal" not in summary["errors"]
+
+    def test_multiple_step_failures_all_recorded(self, tmp_path):
+        db = _make_db(tmp_path)
+        with (
+            patch(
+                "contextpulse_voice.session_learner.learn_from_transcription_history",
+                side_effect=RuntimeError("session boom"),
+            ),
+            patch(
+                "contextpulse_voice.ocr_harvester.harvest_ocr_terms",
+                side_effect=RuntimeError("ocr boom"),
+            ),
+        ):
+            summary = consolidate_vocabulary(db_path=db, dry_run=True)
+
+        assert set(summary["errors"]) == {"session_learning", "ocr_harvesting"}
+
     def test_rebuild_runs_before_harvesters(self, tmp_path):
         """Regression: the rebuild used to run last and clobber harvested terms.
 
@@ -105,6 +165,25 @@ class TestConsolidateVocabulary:
 
         assert calls.index("rebuild") < calls.index("ocr")
         assert calls.index("rebuild") < calls.index("clipboard")
+
+    def test_dedup_failure_recorded_and_does_not_crash_run(self, tmp_path):
+        db = _make_db(tmp_path)
+        with (
+            patch("contextpulse_voice.consolidator._backup_vocab_files"),
+            patch(
+                "contextpulse_voice.consolidator._deduplicate_vocab_layers",
+                side_effect=RuntimeError("dedup boom"),
+            ),
+            patch(
+                "contextpulse_voice.context_vocab.rebuild_context_vocabulary",
+                return_value=0,
+            ),
+        ):
+            summary = consolidate_vocabulary(db_path=db, dry_run=False)
+
+        assert summary["deduped"] == 0
+        assert "deduplication" in summary["errors"]
+        assert "dedup boom" in summary["errors"]["deduplication"]
 
 
 class TestCrossModalMining:
