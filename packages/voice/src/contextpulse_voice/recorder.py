@@ -7,6 +7,7 @@ Audio recording via sounddevice.
 
 import io
 import logging
+import threading
 import time
 import wave
 from typing import Optional
@@ -36,17 +37,76 @@ class Recorder:
         self.channels = channels
         self._frames: list[np.ndarray] = []
         self._stream: Optional[sd.InputStream] = None
+        # Guards _stream/_frames mutation across threads: the pynput listener
+        # thread (start()), the background stop/transcribe thread (stop(),
+        # stop_after_silence()), and PortAudio's own native callback thread
+        # (_callback) can all touch this state concurrently.
+        self._lock = threading.Lock()
+        # Bumped every time a stream is opened. _callback captures the token
+        # of ITS stream via closure and only appends when that token still
+        # matches self._stream_token. Without this, a stream orphaned by a
+        # re-entrant start() (see start()'s docstring) keeps its native
+        # callback thread alive, and that thread would otherwise keep
+        # appending into self._frames after start() has reassigned it to a
+        # new recording -- a data race in native memory that surfaced as an
+        # access violation (0xc0000005) in python314.dll.
+        self._stream_token = 0
+
+    def _close_active_stream(self) -> None:
+        """Stop + close self._stream if one is open. Never raises.
+
+        Atomically swaps self._stream to None under the lock first, so if
+        this races with another thread doing the same thing (e.g. a
+        re-entrant start() racing the background stop/transcribe thread's
+        teardown), only one of them actually calls stop()/close() on the
+        real stream -- the other sees None and returns immediately. This is
+        what prevents a double-close and what guarantees "every opened
+        stream is closed exactly once."
+        """
+        with self._lock:
+            stream = self._stream
+            self._stream = None
+        if stream is None:
+            return
+        try:
+            stream.stop()
+            stream.close()
+        except Exception:
+            logger.warning("Error closing prior audio stream (continuing)", exc_info=True)
 
     def start(self) -> None:
-        """Start recording audio."""
-        self._frames = []
-        self._stream = sd.InputStream(
+        """Start recording audio.
+
+        Defensively closes any stream left open by a prior start() before
+        opening a new one. This is the fix for the overlapping-PortAudio-
+        stream crash: a re-entrant start() (the hotkey re-pressed while a
+        prior recording's background stop/transcribe thread is still
+        tearing down) used to silently overwrite self._stream without
+        closing the old one. The orphaned stream's native callback thread
+        stayed alive and kept appending into self._frames concurrently with
+        this method reassigning it -> a data race that crashed the process.
+        """
+        if self._stream is not None:
+            logger.warning(
+                "Recorder.start() called with a stream already open -- "
+                "closing it before opening a new one"
+            )
+        self._close_active_stream()
+
+        with self._lock:
+            self._frames = []
+            self._stream_token += 1
+            token = self._stream_token
+
+        stream = sd.InputStream(
             samplerate=self.sample_rate,
             channels=self.channels,
             dtype=DTYPE,
-            callback=self._callback,
+            callback=lambda *args: self._callback(*args, token=token),
         )
-        self._stream.start()
+        stream.start()
+        with self._lock:
+            self._stream = stream
         logger.info("Recording started")
 
     def warm_start(self) -> None:
@@ -61,16 +121,21 @@ class Recorder:
         start() returns immediately.
         """
         try:
+            # token=-1 never matches a real recording's token (start()
+            # begins numbering at 1), so even if the warm-up callback fired
+            # late (after stop()/close() below returned) it would be a
+            # dropped no-op rather than polluting a real recording's buffer.
             stream = sd.InputStream(
                 samplerate=self.sample_rate,
                 channels=self.channels,
                 dtype=DTYPE,
-                callback=self._callback,
+                callback=lambda *args: self._callback(*args, token=-1),
             )
             stream.start()
             stream.stop()
             stream.close()
-            self._frames = []  # discard anything captured during warm-up
+            with self._lock:
+                self._frames = []  # discard anything captured during warm-up
             logger.info("Audio device warmed up")
         except Exception:
             logger.debug("Recorder warm_start failed (non-fatal)", exc_info=True)
@@ -82,14 +147,12 @@ class Recorder:
         to prevent memory accumulation across dictation cycles.
         """
         try:
-            if self._stream is not None:
-                self._stream.stop()
-                self._stream.close()
-                self._stream = None
+            self._close_active_stream()
             logger.info("Recording stopped — %d frames captured", len(self._frames))
             return self._to_wav()
         finally:
-            self._frames = []
+            with self._lock:
+                self._frames = []
 
     def stop_after_silence(self) -> bytes:
         """Keep recording until silence is detected, then stop.
@@ -114,9 +177,14 @@ class Recorder:
                     )
                     break
 
-                # Check energy of most recent frames
-                if self._frames:
-                    recent = self._frames[-1]
+                # Check energy of most recent frames. Snapshot under the
+                # lock so a concurrent start() reassigning self._frames
+                # can't be observed mid-read (worst case without this was a
+                # benign but avoidable race on the list reference).
+                with self._lock:
+                    recent = self._frames[-1] if self._frames else None
+
+                if recent is not None:
                     rms = np.sqrt(np.mean(recent.astype(np.float64) ** 2))
 
                     if rms < _SILENCE_THRESHOLD_RMS:
@@ -133,21 +201,32 @@ class Recorder:
 
                 time.sleep(0.05)  # check every 50ms
 
-            if self._stream is not None:
-                self._stream.stop()
-                self._stream.close()
-                self._stream = None
+            self._close_active_stream()
             logger.info("Recording stopped — %d frames captured", len(self._frames))
             return self._to_wav()
         finally:
-            self._frames = []
+            with self._lock:
+                self._frames = []
 
     def _callback(
-        self, indata: np.ndarray, frames: int, time_info: object, status: sd.CallbackFlags
+        self,
+        indata: np.ndarray,
+        frames: int,
+        time_info: object,
+        status: sd.CallbackFlags,
+        token: int = 0,
     ) -> None:
         if status:
             logger.warning("Audio callback status: %s", status)
-        self._frames.append(indata.copy())
+        with self._lock:
+            if token != self._stream_token:
+                # This callback belongs to a stream that has since been
+                # superseded (orphaned) by a newer start() -- e.g. a
+                # re-entrant start() raced this callback's own teardown.
+                # Drop the frame instead of writing into a buffer that now
+                # belongs to a different recording.
+                return
+            self._frames.append(indata.copy())
 
     def _to_wav(self) -> bytes:
         """Convert captured frames to WAV bytes."""

@@ -78,6 +78,18 @@ class VoiceModule(ModalityModule):
         self._overlay = None  # Recording overlay (lazy init)
 
         self._recording = False
+        # True from the moment we decide to open the recorder's stream
+        # until the background stop/transcribe thread has actually closed
+        # it (i.e. stop_after_silence() has returned) -- NOT just until key
+        # release. _recording alone used to gate a new start(), but it goes
+        # False on key release while the stream is still open (tail-buffer
+        # sleep + silence detection can hold it open for up to
+        # _TAIL_BUFFER_MS + _MAX_TAIL_S more). A hotkey re-press inside that
+        # window passed the old guard and opened a second overlapping
+        # PortAudio stream -- see Recorder.start()'s docstring for the
+        # resulting crash. Recorder.start() now also defends against this
+        # independently; this flag is what prevents it from ever having to.
+        self._recorder_busy = False
         self._fixing = False
         self._pressed_keys: set = set()
         self._last_wav_bytes: bytes | None = None
@@ -237,10 +249,21 @@ class VoiceModule(ModalityModule):
             self._hotkey_keys.issubset(self._pressed_keys)
             and not self._fix_hotkey_keys.issubset(self._pressed_keys)
             and not self._recording
+            and not self._recorder_busy
         ):
             self._recording = True
+            self._recorder_busy = True
             app_name, window_title = self._get_foreground_info()
-            self._recorder.start()
+            try:
+                self._recorder.start()
+            except Exception:
+                # Roll back both flags so a start() failure (e.g. audio
+                # device disconnected) doesn't permanently lock out future
+                # dictation attempts.
+                self._recording = False
+                self._recorder_busy = False
+                logger.exception("Recorder.start() failed — aborting recording")
+                return
             if self._overlay:
                 self._overlay.show_recording()
             self._emit(ContextEvent(
@@ -322,7 +345,17 @@ class VoiceModule(ModalityModule):
             # Brief minimum delay, then let silence detection decide when to stop
             if self._TAIL_BUFFER_MS > 0:
                 time.sleep(self._TAIL_BUFFER_MS / 1000)
-            wav_bytes = self._recorder.stop_after_silence()
+            try:
+                wav_bytes = self._recorder.stop_after_silence()
+            finally:
+                # The recorder's stream is now closed (or was never opened).
+                # This MUST be released here -- not on key release -- or a
+                # hotkey re-press during the tail-buffer sleep / silence
+                # wait above would pass _on_press_inner's not-busy guard
+                # while this stream is still open, opening a second
+                # overlapping PortAudio stream (see Recorder.start()'s
+                # docstring for the crash this caused).
+                self._recorder_busy = False
 
             if not wav_bytes:
                 logger.warning("No audio captured")
@@ -335,6 +368,7 @@ class VoiceModule(ModalityModule):
             logger.exception("stop_and_transcribe failed")
             if self._overlay:
                 self._overlay.hide()
+            self._recorder_busy = False  # defensive — should already be cleared above
 
     def _transcribe_and_paste(
         self, wav_bytes: bytes, app_name: str, window_title: str
