@@ -769,6 +769,31 @@ class ContextPulseDaemon:
                     sys.exit(1)
 
 
+def _write_fatal_crash_log(header: str) -> None:
+    """Append a fatal top-level crash entry to CRASH_LOG, rotating first.
+
+    Mirrors ``ContextPulseDaemon._log_crash``'s format and rotation behavior
+    but is standalone at module level: a fatal MemoryError/Exception in
+    ``main()`` can occur before (or instead of) a ``ContextPulseDaemon``
+    instance ever existing, so there is no ``self`` to call ``_log_crash``
+    on. Without the ``rotate_if_oversized`` call, a crash loop on this path
+    can regrow ``contextpulse_crash.log`` without bound — this is exactly
+    the path that caused the original 431MB/339MB unrotated logs (see
+    ``log_rotation.py`` module docstring). Never raises: this runs on the
+    process-death path, where a logging failure must not mask the original
+    crash.
+    """
+    try:
+        rotate_if_oversized(CRASH_LOG)
+        with open(CRASH_LOG, "a", encoding="utf-8") as f:
+            f.write(f"\n{'='*60}\n")
+            f.write(f"{header}: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(traceback.format_exc())
+            f.write(f"\n{'='*60}\n")
+    except Exception:
+        pass
+
+
 def main() -> None:
     """Entry point for contextpulse CLI command."""
     _setup_logging()
@@ -807,26 +832,12 @@ def main() -> None:
         logger.error("Fatal MemoryError — forcing GC and writing crash log")
         import gc
         gc.collect()
-        try:
-            with open(CRASH_LOG, "a", encoding="utf-8") as f:
-                f.write(f"\n{'='*60}\n")
-                f.write(f"FATAL MemoryError: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(traceback.format_exc())
-                f.write(f"\n{'='*60}\n")
-        except Exception:
-            pass
+        _write_fatal_crash_log("FATAL MemoryError")
         raise
     except Exception:
         logger.exception("Fatal error — daemon crashed")
         # Write crash to separate file for easy discovery
-        try:
-            with open(CRASH_LOG, "a", encoding="utf-8") as f:
-                f.write(f"\n{'='*60}\n")
-                f.write(f"FATAL DAEMON CRASH: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(traceback.format_exc())
-                f.write(f"\n{'='*60}\n")
-        except Exception:
-            pass
+        _write_fatal_crash_log("FATAL DAEMON CRASH")
         raise
 
 

@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 # ---------------------------------------------------------------------------
 # Import daemon module (conftest.py ensures tkinter + pystray are mocked)
 # ---------------------------------------------------------------------------
-from contextpulse_core.daemon import ContextPulseDaemon
+from contextpulse_core.daemon import ContextPulseDaemon, _write_fatal_crash_log
 
 # ---------------------------------------------------------------------------
 # Factory: build a daemon instance without triggering real __init__ side-effects
@@ -237,6 +237,64 @@ class TestLogCrash:
         daemon_mod.CRASH_LOG = tmp_path  # directory, not file — open() will fail
         try:
             daemon._log_crash("voice", RuntimeError("silent"))  # must not raise
+        finally:
+            daemon_mod.CRASH_LOG = original
+
+
+# ---------------------------------------------------------------------------
+# _write_fatal_crash_log — the standalone helper main() uses for
+# MemoryError/fatal-exception crash reporting (no ContextPulseDaemon
+# instance required, unlike _log_crash above).
+# ---------------------------------------------------------------------------
+
+class TestWriteFatalCrashLog:
+    def _write(self, crash_log, header):
+        """Helper to call _write_fatal_crash_log with CRASH_LOG patched."""
+        import contextpulse_core.daemon as daemon_mod
+        original = daemon_mod.CRASH_LOG
+        daemon_mod.CRASH_LOG = crash_log
+        try:
+            try:
+                raise RuntimeError("boom")
+            except RuntimeError:
+                _write_fatal_crash_log(header)
+        finally:
+            daemon_mod.CRASH_LOG = original
+
+    def test_creates_crash_log_file(self, tmp_path):
+        crash_log = tmp_path / "contextpulse_crash.log"
+        self._write(crash_log, "FATAL DAEMON CRASH")
+        assert crash_log.exists()
+
+    def test_crash_log_contains_header_and_traceback(self, tmp_path):
+        crash_log = tmp_path / "crash.log"
+        self._write(crash_log, "FATAL MemoryError")
+        content = crash_log.read_text(encoding="utf-8")
+        assert "FATAL MemoryError" in content
+        assert "RuntimeError" in content
+        assert "boom" in content
+
+    def test_rotates_when_oversized(self, tmp_path):
+        """Regression test: main()'s fatal-crash paths bypassed rotation
+        before this fix, letting a crash loop regrow the log without bound
+        (the original 2026-08-07 incident: 431MB + 339MB unrotated logs)."""
+        crash_log = tmp_path / "contextpulse_crash.log"
+        crash_log.write_text("x" * (11 * 1024 * 1024), encoding="utf-8")  # > default 10MiB
+        self._write(crash_log, "FATAL DAEMON CRASH")
+        rotated = crash_log.with_name(f"{crash_log.name}.1")
+        assert rotated.exists(), "oversized crash log was not rotated before append"
+        # The active log is now small again — only this run's entry.
+        assert crash_log.stat().st_size < 11 * 1024 * 1024
+
+    def test_silent_on_unwritable_path(self, tmp_path):
+        import contextpulse_core.daemon as daemon_mod
+        original = daemon_mod.CRASH_LOG
+        daemon_mod.CRASH_LOG = tmp_path  # directory, not file — open() will fail
+        try:
+            try:
+                raise RuntimeError("boom")
+            except RuntimeError:
+                _write_fatal_crash_log("FATAL DAEMON CRASH")  # must not raise
         finally:
             daemon_mod.CRASH_LOG = original
 
