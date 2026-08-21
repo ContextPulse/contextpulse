@@ -5,7 +5,6 @@ directly with pynput key objects. Does NOT use pynput.keyboard.Controller
 (unreliable for cross-process hooks on Windows).
 """
 
-import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -83,31 +82,51 @@ class TestDictationHotkey:
         voice_module._recorder.start.assert_called_once()
 
 
-class TestDebounce:
-    """Duplicate release event protection."""
+class TestDuplicateReleaseDelivery:
+    """Duplicate release event protection.
 
-    def test_rapid_release_debounced(self, voice_module):
-        """Two releases within 1s should only trigger one stop."""
-        # First release
-        voice_module._recording = True
-        voice_module._pressed_keys = {kb.Key.ctrl_l, kb.Key.space}
-        voice_module._last_stop_time = 0
-        voice_module._on_release_inner(kb.Key.space)
-        assert not voice_module._recording
+    A wall-clock ("ignore a second release within 1s") debounce used to sit
+    in _on_release_inner. It was removed 2026-08-21: it also fired on a
+    genuine new press+release inside that 1s window -- David's normal rapid
+    burst-dictation pattern -- and since only that code path spawns the
+    background thread that clears _recorder_busy and closes the recorder's
+    stream, a debounced release permanently stranded the stream open and
+    locked out every future hotkey press until the daemon was restarted.
 
-        # Second release within 1s — should be debounced
-        voice_module._recording = True
-        voice_module._pressed_keys = {kb.Key.ctrl_l, kb.Key.space}
-        voice_module._on_release_inner(kb.Key.space)
-        # Recording should be False but no additional transcription spawned
+    The `if self._recording` guard that remains is sufficient on its own: a
+    duplicate delivery of the SAME physical key-up (the actual Windows/
+    pynput quirk this code defends against) is delivered on the same
+    serialized listener thread, so the first delivery already sets
+    self._recording = False before a second delivery of the same event can
+    be processed.
+    """
 
-    def test_release_after_debounce_window_works(self, voice_module):
-        """Release after >1s should work normally."""
-        voice_module._recording = True
-        voice_module._pressed_keys = {kb.Key.ctrl_l, kb.Key.space}
-        voice_module._last_stop_time = time.time() - 2.0  # 2 seconds ago
-        voice_module._on_release_inner(kb.Key.space)
-        assert not voice_module._recording
+    def test_duplicate_release_of_same_event_is_a_no_op(self, voice_module):
+        """Two back-to-back _on_release_inner calls for the SAME key-up
+        (no re-press in between) must only spawn one stop/transcribe
+        thread -- the second call finds _recording already False."""
+        voice_module._on_press_inner(kb.Key.ctrl_l)
+        voice_module._on_press_inner(kb.Key.space)
+        assert voice_module._recording
+
+        with patch(
+            "contextpulse_voice.voice_module.threading.Thread"
+        ) as mock_thread:
+            voice_module._on_release_inner(kb.Key.space)  # real delivery
+            assert not voice_module._recording
+            voice_module._on_release_inner(kb.Key.space)  # duplicate delivery
+
+        assert mock_thread.call_count == 1, (
+            "a duplicate delivery of the same key-up must not spawn a "
+            "second stop/transcribe thread"
+        )
+
+    # See test_voice_module.py::TestVoiceModuleOverlappingRecordingGuard::
+    # test_rapid_burst_dictation_never_strands_recorder_busy for the real-
+    # thread regression covering a genuine rapid re-press -- that requires
+    # waiting for the real background stop/transcribe thread to clear
+    # _recorder_busy, which needs real timing, not the synchronous mocks
+    # this fixture's `voice_module._recorder = MagicMock()` provides.
 
 
 class TestFixLastHotkey:

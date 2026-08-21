@@ -93,7 +93,6 @@ class VoiceModule(ModalityModule):
         self._fixing = False
         self._pressed_keys: set = set()
         self._last_wav_bytes: bytes | None = None
-        self._last_stop_time: float = 0.0  # debounce: prevent double stop-recording
 
         # Config
         cfg = get_voice_config()
@@ -293,19 +292,27 @@ class VoiceModule(ModalityModule):
             self._fixing = False
 
         if self._recording and not self._hotkey_keys.issubset(self._pressed_keys):
-            # Debounce: on Windows, multiple pynput keyboard hooks (Voice,
-            # Touch, Sight) can cause duplicate release events for the same
-            # physical key release.  Guard against firing twice within 1s.
-            now = time.time()
-            if now - self._last_stop_time < 1.0:
-                logger.warning(
-                    "Duplicate stop-recording within %.2fs — ignoring",
-                    now - self._last_stop_time,
-                )
-                self._recording = False
-                return
-            self._last_stop_time = now
-
+            # A duplicate delivery of the SAME physical key-up (a documented
+            # Windows/pynput low-level-hook quirk) is naturally absorbed by
+            # this `if self._recording` check alone: pynput serializes calls
+            # to a single Listener's callback on one thread, so the first
+            # delivery already sets self._recording = False (below) and
+            # returns before a second delivery of the same event can be
+            # processed -- the second call finds self._recording False and
+            # the whole block is skipped.
+            #
+            # A wall-clock debounce used to sit here instead ("ignore a
+            # second release within 1s"). It was WRONG: it also fires on a
+            # genuine new press+release inside that 1s window -- David's
+            # normal rapid burst-dictation pattern -- and since only this
+            # block spawns the background thread that clears
+            # self._recorder_busy (see _stop_and_transcribe), a debounced
+            # release permanently stranded the recorder's stream open and
+            # locked out every future hotkey press until the daemon was
+            # restarted. Removed rather than patched: the state this block
+            # already tracks (_recording during the key-hold, _recorder_busy
+            # during stream teardown) is a precise signal: a 1-second wall
+            # clock was an imprecise proxy for it.
             self._recording = False
             if self._overlay:
                 self._overlay.show_transcribing()
@@ -322,11 +329,30 @@ class VoiceModule(ModalityModule):
             # stream so trailing speech is captured — this MUST NOT
             # happen on the pynput listener thread or it blocks key
             # event processing and causes runaway recording loops.
-            threading.Thread(
-                target=self._stop_and_transcribe,
-                args=(app_name, window_title),
-                daemon=True,
-            ).start()
+            try:
+                threading.Thread(
+                    target=self._stop_and_transcribe,
+                    args=(app_name, window_title),
+                    daemon=True,
+                ).start()
+            except Exception:
+                # _stop_and_transcribe is the only thing that clears
+                # _recorder_busy and closes the stream. If the thread
+                # itself never started, do both directly here so a
+                # failure to spawn can't strand the recorder open and
+                # lock out every future hotkey press.
+                logger.exception(
+                    "Failed to spawn stop/transcribe thread — closing "
+                    "recorder directly"
+                )
+                self._recorder_busy = False
+                try:
+                    self._recorder.stop()
+                except Exception:
+                    logger.exception(
+                        "Recorder.stop() also failed during thread-spawn "
+                        "failure recovery"
+                    )
 
     # ── Transcription Pipeline ───────────────────────────────────────
 

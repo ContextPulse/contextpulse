@@ -315,3 +315,40 @@ class TestVoiceModuleOverlappingRecordingGuard:
         assert module._recorder.start.call_count == 2
         assert module._recording is True
         assert module._recorder_busy is True
+
+    def test_rapid_burst_dictation_never_strands_recorder_busy(self, module):
+        """Regression for the debounce-strands-recorder_busy bug found in
+        independent review (2026-08-21): a wall-clock "ignore a second
+        release within 1s" debounce used to sit in _on_release_inner. It
+        fired on a GENUINE new press+release inside that window (David's
+        normal rapid burst-dictation pattern -- 3 recordings in 2s and a
+        re-press during an in-flight transcription are both in the crash
+        evidence) and returned without spawning the background thread that
+        clears _recorder_busy and closes the stream -- permanently
+        stranding both. It has been removed; this proves the replacement
+        (_recording-only guard, unconditional thread spawn) survives three
+        rapid press/release cycles with no stranding, using the REAL
+        background thread each time (no thread mocking) so the actual
+        _recorder_busy-clearing path executes.
+        """
+        module._recorder.stop_after_silence.return_value = b""  # fast, empty clip
+
+        def _wait_until_not_busy(timeout: float = 5.0) -> None:
+            deadline = time.time() + timeout
+            while time.time() < deadline and module._recorder_busy:
+                time.sleep(0.01)
+            assert not module._recorder_busy, "recorder_busy never cleared"
+
+        for cycle in range(1, 4):
+            self._press_hotkey(module)
+            assert module._recording is True, (
+                f"cycle {cycle}: press must start a new recording -- "
+                f"recorder_busy must not be permanently stranded"
+            )
+            assert module._recorder.start.call_count == cycle
+            self._release_hotkey(module)
+            _wait_until_not_busy()
+
+        # Every started stream must have been torn down exactly once --
+        # nothing orphaned or left open.
+        assert module._recorder.stop_after_silence.call_count == 3
