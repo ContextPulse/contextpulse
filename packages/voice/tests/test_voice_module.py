@@ -1,5 +1,6 @@
 """Tests for VoiceModule — ModalityModule lifecycle and event emission."""
 
+import threading
 import time
 from unittest.mock import MagicMock, patch
 
@@ -184,3 +185,133 @@ class TestVoiceModuleTranscription:
         module._transcriber.transcribe.return_value = "a"
         module._transcribe_and_paste(b"fake_wav", "code.exe", "test.py")
         assert len(received) == 0
+
+
+class TestVoiceModuleOverlappingRecordingGuard:
+    """Regression tests for the overlapping-PortAudio-stream crash.
+
+    _recording used to be the ONLY guard against a re-entrant hotkey press
+    starting a second recording, and it goes False on key release -- before
+    the background stop/transcribe thread has actually closed the
+    recorder's stream (tail-buffer sleep + silence detection can hold it
+    open for up to ~2.7s more). A hotkey re-press inside that window opened
+    a second overlapping stream and crashed the daemon with an access
+    violation. _recorder_busy is the fix: it stays True until the stream is
+    actually closed.
+    """
+
+    @pytest.fixture
+    def module(self):
+        with patch("contextpulse_voice.voice_module.get_voice_config") as mock_cfg:
+            mock_cfg.return_value = {
+                "hotkey": "ctrl+space",
+                "fix_hotkey": "ctrl+shift+space",
+                "whisper_model": "base",
+                "always_use_llm": False,
+                "anthropic_api_key": "",
+            }
+            from contextpulse_voice.voice_module import VoiceModule
+            m = VoiceModule(model_size="base")
+            m._recorder = MagicMock()
+            m._overlay = None
+            m.register(MagicMock())
+            m._running = True
+            yield m
+
+    def _press_hotkey(self, module):
+        from pynput import keyboard as kb
+        module._on_press_inner(kb.Key.ctrl_l)
+        module._on_press_inner(kb.Key.space)
+
+    def _release_hotkey(self, module):
+        from pynput import keyboard as kb
+        module._on_release_inner(kb.Key.space)
+
+    def test_press_starts_recorder_and_sets_busy(self, module):
+        self._press_hotkey(module)
+        module._recorder.start.assert_called_once()
+        assert module._recording is True
+        assert module._recorder_busy is True
+
+    def test_reentrant_press_after_release_but_before_stream_closed_is_blocked(
+        self, module
+    ):
+        """Key released (recording flag goes False) but the background
+        stop/transcribe thread hasn't run yet -- recorder is still open.
+        A second press in this window must NOT call recorder.start() again.
+        """
+        self._press_hotkey(module)
+        assert module._recorder.start.call_count == 1
+
+        # Simulate release: _on_release_inner spawns a background thread for
+        # the real stop/transcribe, but we don't let it run here -- we want
+        # to observe the window BEFORE that thread clears _recorder_busy.
+        with patch("contextpulse_voice.voice_module.threading.Thread") as mock_thread:
+            self._release_hotkey(module)
+            assert mock_thread.called, "release must spawn the stop/transcribe thread"
+
+        assert module._recording is False  # release flag clears immediately
+        assert module._recorder_busy is True  # but the stream is still open
+
+        # Re-press while the stream is still open — must be blocked.
+        self._press_hotkey(module)
+        assert module._recorder.start.call_count == 1, (
+            "a re-press before the recorder stream is closed must not open "
+            "a second overlapping PortAudio stream"
+        )
+
+    def test_recorder_busy_cleared_only_after_stream_actually_closes(self, module):
+        """_recorder_busy must go False as soon as stop_after_silence()
+        returns (the stream is closed) -- not merely on key release."""
+        release_started = threading.Event()
+        allow_stop_to_finish = threading.Event()
+
+        def _blocking_stop_after_silence():
+            release_started.set()
+            allow_stop_to_finish.wait(timeout=5)
+            return b"fake_wav_bytes"
+
+        module._recorder.stop_after_silence.side_effect = _blocking_stop_after_silence
+        module._transcriber = MagicMock()
+        module._transcriber.transcribe.return_value = "hello"
+
+        self._press_hotkey(module)
+        self._release_hotkey(module)  # spawns real background thread
+
+        assert release_started.wait(timeout=5), "background thread never called stop_after_silence"
+        # Stream teardown is still in flight — busy flag must still be True,
+        # and a re-press must still be blocked.
+        assert module._recorder_busy is True
+        self._press_hotkey(module)
+        assert module._recorder.start.call_count == 1, "re-press blocked while stream open"
+
+        # Let the background thread finish tearing down the stream.
+        allow_stop_to_finish.set()
+
+        # Poll for the busy flag to clear (bounded wait — no sleep loops).
+        deadline = time.time() + 5
+        while time.time() < deadline and module._recorder_busy:
+            time.sleep(0.01)
+        assert module._recorder_busy is False, (
+            "_recorder_busy must clear once stop_after_silence() returns"
+        )
+
+        # Now a fresh press must be allowed to open a new stream.
+        self._press_hotkey(module)
+        assert module._recorder.start.call_count == 2
+
+    def test_recorder_start_failure_rolls_back_flags(self, module):
+        """A Recorder.start() failure (e.g. audio device disconnected) must
+        not permanently strand _recording/_recorder_busy at True — that
+        would lock out all future dictation until daemon restart."""
+        module._recorder.start.side_effect = OSError("no audio device")
+        self._press_hotkey(module)
+        assert module._recording is False
+        assert module._recorder_busy is False
+
+        # A subsequent press with a healthy recorder must succeed.
+        module._recorder.start.side_effect = None
+        self._press_hotkey(module)
+        assert module._recorder.start.call_count == 2
+        assert module._recording is True
+        assert module._recorder_busy is True
