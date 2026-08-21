@@ -6,12 +6,11 @@ and that changing models doesn't silently degrade transcription quality.
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from contextpulse_voice.transcriber import (
-    LocalTranscriber,
     _DEFAULT_THRESHOLDS,
     _MODEL_THRESHOLDS,
+    LocalTranscriber,
+    _segment_is_degenerate,
 )
 
 
@@ -133,6 +132,7 @@ class TestTranscribeUsesThresholds:
         # Simulate Whisper returning one segment
         mock_seg = MagicMock()
         mock_seg.text = "Hello world"
+        mock_seg.compression_ratio = 1.0  # realistic value — see TestDegenerateOutputGuard
         mock_info = MagicMock()
         mock_info.duration = 1.5
         mock_info.language = "en"
@@ -252,3 +252,238 @@ class TestTailBuffer:
         assert elapsed < 2.0, (
             f"Should detect silence quickly, took {elapsed:.1f}s"
         )
+
+
+def _mock_segment(
+    text: str,
+    start: float = 0.0,
+    end: float = 1.0,
+    avg_logprob: float = -0.3,
+    no_speech_prob: float = 0.05,
+    compression_ratio: float = 1.0,
+):
+    seg = MagicMock()
+    seg.text = text
+    seg.start = start
+    seg.end = end
+    seg.avg_logprob = avg_logprob
+    seg.no_speech_prob = no_speech_prob
+    seg.compression_ratio = compression_ratio
+    return seg
+
+
+class TestDegenerateOutputGuard:
+    """Post-transcription guard that drops individual degenerate
+    (repetition-runaway) segments while keeping legitimate ones.
+
+    Whisper's own log_prob/compression_ratio filters stay disabled during
+    transcribe() -- this guard runs AFTER each segment is produced and
+    filters PER-SEGMENT, not the whole transcript: a live repro showed a
+    degenerate segment arriving MIXED WITH legitimate speech in the same
+    43.7s clip, so an all-or-nothing reject would have discarded real
+    speech -- exactly the truncation failure the disabled Whisper filters
+    exist to avoid.
+
+    Real log data (2026-08-21, C:\\Users\\david\\screenshots\\contextpulse.log):
+      06:18:43 [0.0-30.0s]  logprob=-0.06 no_speech=0.41 cr=18.6
+               'Order, Sales, Shading, Shading, Shading, Shading, ...'
+      06:18:44 [30.0-35.0s] logprob=-0.21 no_speech=0.01 cr=1.1
+               'exactly where the price currently is.'
+      06:18:44 [35.9-40.9s] logprob=-0.21 no_speech=0.01 cr=1.1
+               'And then also another one of those for where BWAP is.'
+      05:57:23 single 2.5s segment, cr=19.5, "GIF, GIF, GIF, GIF..."
+      06:17:46 full-session high-water mark for legitimate speech: cr=1.5
+
+    log_prob is explicitly NOT used as a signal: the 06:18:43 degenerate
+    segment had the BEST confidence (-0.06) of the whole session while
+    genuinely repeating -- Whisper is highly confident in its own
+    repetition loops. compression_ratio is the discriminator, using the
+    existing per-model profile threshold directly (no separate constant).
+    """
+
+    def test_rejects_degenerate_ratio_from_shading_incident(self):
+        assert _segment_is_degenerate(18.6, 5.0) is True
+
+    def test_rejects_degenerate_ratio_from_gif_incident(self):
+        assert _segment_is_degenerate(19.5, 5.0) is True
+
+    def test_accepts_session_high_water_mark_for_legitimate_speech(self):
+        assert _segment_is_degenerate(1.5, 5.0) is False
+
+    def test_boundary_exactly_at_threshold_is_not_rejected(self):
+        """The bar is a strict '>', not '>=' -- landing exactly on the
+        profile threshold must not discard real speech."""
+        assert _segment_is_degenerate(5.0, 5.0) is False
+        assert _segment_is_degenerate(5.01, 5.0) is True
+
+    def test_zero_ratio_never_rejected(self):
+        assert _segment_is_degenerate(0.0, 5.0) is False
+
+    @patch("contextpulse_voice.transcriber.sys")
+    @patch("contextpulse_voice.model_manager.get_model_path", return_value="fake")
+    @patch("faster_whisper.WhisperModel")
+    def test_mixed_clip_drops_only_the_degenerate_segment(
+        self, MockModel, mock_path, mock_sys
+    ):
+        """Real repro shape (2026-08-21 06:18:43): one degenerate segment
+        followed by two legitimate ones in the SAME 43.7s clip. Only the
+        degenerate segment is dropped; the legitimate two survive, joined
+        in order."""
+        mock_sys.platform = "linux"
+        mock_instance = MagicMock()
+        segs = [
+            _mock_segment(
+                "Order, Sales, Shading, Shading, Shading, Shading, Shading, S",
+                start=0.0, end=30.0, avg_logprob=-0.06, no_speech_prob=0.41,
+                compression_ratio=18.6,
+            ),
+            _mock_segment(
+                "exactly where the price currently is.",
+                start=30.0, end=35.0, avg_logprob=-0.21, no_speech_prob=0.01,
+                compression_ratio=1.1,
+            ),
+            _mock_segment(
+                "And then also another one of those for where BWAP is.",
+                start=35.9, end=40.9, avg_logprob=-0.21, no_speech_prob=0.01,
+                compression_ratio=1.1,
+            ),
+        ]
+        mock_info = MagicMock(duration=43.7, language="en")
+        mock_instance.transcribe.return_value = (segs, mock_info)
+        MockModel.return_value = mock_instance
+
+        t = LocalTranscriber(model_size="small")
+        result = t.transcribe(b"fake_wav_bytes")
+
+        assert "Shading" not in result, "degenerate segment must be dropped"
+        assert result == (
+            "exactly where the price currently is. "
+            "And then also another one of those for where BWAP is."
+        ), "legitimate segments must survive and stay in order"
+
+    @patch("contextpulse_voice.transcriber.sys")
+    @patch("contextpulse_voice.model_manager.get_model_path", return_value="fake")
+    @patch("faster_whisper.WhisperModel")
+    def test_all_degenerate_clip_returns_empty_nothing_to_paste(
+        self, MockModel, mock_path, mock_sys
+    ):
+        """Real repro shape (2026-08-21 05:57:23): a single 2.5s segment,
+        entirely degenerate. Result must be empty so VoiceModule's existing
+        empty-transcript check (raw_text or len < 2) short-circuits before
+        paste_text() is ever called -- nothing reaches the paster."""
+        mock_sys.platform = "linux"
+        mock_instance = MagicMock()
+        seg = _mock_segment(
+            "GIF, GIF, GIF, GIF, GIF, GIF.",
+            start=0.0, end=2.5, avg_logprob=-0.4, no_speech_prob=0.52,
+            compression_ratio=19.5,
+        )
+        mock_info = MagicMock(duration=2.5, language="nn")
+        mock_instance.transcribe.return_value = ([seg], mock_info)
+        MockModel.return_value = mock_instance
+
+        t = LocalTranscriber(model_size="small")
+        result = t.transcribe(b"fake_wav_bytes")
+
+        assert result == "", "all-degenerate clip must return empty, not the repetition"
+
+    @patch("contextpulse_voice.transcriber.sys")
+    @patch("contextpulse_voice.model_manager.get_model_path", return_value="fake")
+    @patch("faster_whisper.WhisperModel")
+    def test_ordinary_multi_sentence_dictation_passes_through_untouched(
+        self, MockModel, mock_path, mock_sys
+    ):
+        """No degenerate segments at all -- every segment must reach the
+        caller byte-for-byte, in order."""
+        mock_sys.platform = "linux"
+        mock_instance = MagicMock()
+        segs = [
+            _mock_segment(
+                "I'm looking at the futures this morning.", compression_ratio=1.3
+            ),
+            _mock_segment(
+                "Price action is choppy heading into the open.",
+                compression_ratio=1.4,
+            ),
+        ]
+        mock_info = MagicMock(duration=31.5, language="en")
+        mock_instance.transcribe.return_value = (segs, mock_info)
+        MockModel.return_value = mock_instance
+
+        t = LocalTranscriber(model_size="small")
+        result = t.transcribe(b"fake_wav_bytes")
+
+        assert result == (
+            "I'm looking at the futures this morning. "
+            "Price action is choppy heading into the open."
+        )
+
+    @patch("contextpulse_voice.transcriber.sys")
+    @patch("contextpulse_voice.model_manager.get_model_path", return_value="fake")
+    @patch("faster_whisper.WhisperModel")
+    def test_empty_segments_never_rejected(self, MockModel, mock_path, mock_sys):
+        """No segments (e.g. pure silence) must not trip the guard."""
+        mock_sys.platform = "linux"
+        mock_instance = MagicMock()
+        mock_info = MagicMock(duration=0.5, language="en")
+        mock_instance.transcribe.return_value = ([], mock_info)
+        MockModel.return_value = mock_instance
+
+        t = LocalTranscriber(model_size="small")
+        result = t.transcribe(b"fake_wav_bytes")
+
+        assert result == ""
+
+    @patch("contextpulse_voice.transcriber.sys")
+    @patch("contextpulse_voice.model_manager.get_model_path", return_value="fake")
+    @patch("faster_whisper.WhisperModel")
+    def test_dropped_segment_is_logged_loudly_not_swallowed(
+        self, MockModel, mock_path, mock_sys, caplog
+    ):
+        """A dropped segment must be visible in the log at WARNING with its
+        compression ratio, timespan, and a preview -- never a silent drop."""
+        import logging
+
+        mock_sys.platform = "linux"
+        mock_instance = MagicMock()
+        seg = _mock_segment(
+            "Shading, Shading, Shading.",
+            start=0.0, end=30.0, compression_ratio=18.6,
+        )
+        mock_info = MagicMock(duration=30.0, language="en")
+        mock_instance.transcribe.return_value = ([seg], mock_info)
+        MockModel.return_value = mock_instance
+
+        t = LocalTranscriber(model_size="small")
+        with caplog.at_level(logging.WARNING, logger="contextpulse_voice.transcriber"):
+            t.transcribe(b"fake_wav_bytes")
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert warnings, "a dropped segment must emit a WARNING log record"
+        combined = " ".join(r.getMessage() for r in warnings)
+        assert "18.6" in combined
+        assert "Shading" in combined
+
+    @patch("contextpulse_voice.transcriber.sys")
+    @patch("contextpulse_voice.model_manager.get_model_path", return_value="fake")
+    @patch("faster_whisper.WhisperModel")
+    def test_startup_log_does_not_advertise_unenforced_log_prob_filter(
+        self, MockModel, mock_path, mock_sys, caplog
+    ):
+        """log_prob is not passed to Whisper's own filter and is not used
+        by the post-hoc guard either (it is not a usable signal — see
+        class docstring) -- the startup log must not claim it is enforced
+        at the literal profile value."""
+        import logging
+
+        mock_sys.platform = "linux"
+        MockModel.return_value = MagicMock()
+
+        with caplog.at_level(logging.INFO, logger="contextpulse_voice.transcriber"):
+            LocalTranscriber(model_size="small")
+
+        messages = " ".join(r.message for r in caplog.records)
+        assert "log_prob=-3.0" not in messages
+        assert "disabled" in messages.lower()
+        assert "compression_ratio_threshold=5.0" in messages
+        assert "per-segment" in messages.lower()

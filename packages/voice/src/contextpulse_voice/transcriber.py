@@ -28,7 +28,10 @@ class Transcriber(ABC):
 
 # Quality filters are DISABLED for dictation — they silently drop segments
 # and cause sentence truncation.  Only no_speech_threshold is kept at 0.95
-# to filter out pure silence.  These profiles are retained for logging only.
+# to filter out pure silence.  log_prob_threshold is retained for logging
+# only (see below for why it is not a usable signal).  compression_ratio_
+# threshold IS enforced, but post-transcription and per-segment rather than
+# inside Whisper (see _segment_is_degenerate and its call sites).
 #
 # Each profile is: (log_prob_threshold, no_speech_threshold, compression_ratio_threshold)
 _MODEL_THRESHOLDS: dict[str, tuple[float, float, float]] = {
@@ -39,6 +42,31 @@ _MODEL_THRESHOLDS: dict[str, tuple[float, float, float]] = {
     "large-v3":  (-3.5, 0.98, 6.0),
 }
 _DEFAULT_THRESHOLDS = (-3.0, 0.95, 5.0)
+
+
+def _segment_is_degenerate(compression_ratio: float, compression_ratio_threshold: float) -> bool:
+    """True if a single segment's compression_ratio marks it as a
+    repetition-runaway (Whisper hallucinating a repeated token/phrase)
+    rather than real speech.
+
+    Filtering is per-segment, not whole-transcript: real dictation can
+    contain one degenerate segment alongside entirely legitimate ones in
+    the same clip (evidence below), so an all-or-nothing reject would
+    discard real speech -- exactly the truncation failure the disabled
+    Whisper-internal filters exist to avoid.
+
+    log_prob is NOT used as a signal here: a 2026-08-21 incident segment
+    logged avg_logprob=-0.06 (the HIGHEST confidence of the whole session)
+    while genuinely repeating "Shading, Shading, Shading, ...".  Whisper is
+    highly confident in its own repetition loops. compression_ratio is the
+    only discriminator with a clean separation in observed data:
+      - Degenerate segments: cr=18.6, cr=19.5 ("GIF, GIF, GIF...",
+        "Shading, Shading, Shading...")
+      - Legitimate dictation, full sessions: cr in ~0.6-1.5
+    The existing per-model profile threshold (5.0 for 'small') sits
+    comfortably in that gap, so no separate constant is needed.
+    """
+    return compression_ratio > compression_ratio_threshold
 
 
 class LocalTranscriber(Transcriber):
@@ -54,9 +82,14 @@ class LocalTranscriber(Transcriber):
     def __init__(self, model_size: str = "base", device: str = "cpu") -> None:
         self._model_size = model_size
         self._thresholds = _MODEL_THRESHOLDS.get(model_size, _DEFAULT_THRESHOLDS)
+        _, no_speech_threshold, compression_ratio_threshold = self._thresholds
         logger.info(
-            "Whisper '%s' thresholds: log_prob=%.1f, no_speech=%.2f, compression=%.1f",
-            model_size, *self._thresholds,
+            "Whisper '%s' profile: no_speech_threshold=%.2f enforced by Whisper; "
+            "log_prob filtering disabled (would truncate real speech); "
+            "compression_ratio_threshold=%.1f enforced per-segment AFTER "
+            "transcription (drops individual degenerate segments, not the "
+            "whole transcript) rather than inside Whisper",
+            model_size, no_speech_threshold, compression_ratio_threshold,
         )
         import platform
 
@@ -121,7 +154,28 @@ class LocalTranscriber(Transcriber):
                     language="en",
                     initial_prompt=initial_prompt or None,
                 )
-                return result.get("text", "").strip()
+                raw_segments = result.get("segments") or []
+                if not raw_segments:
+                    # No per-segment data to filter with -- fall back to the
+                    # whole-clip text rather than rejecting on nothing.
+                    return result.get("text", "").strip()
+
+                compression_ratio_threshold = self._thresholds[2]
+                parts = []
+                for seg in raw_segments:
+                    t = str(seg.get("text", "")).strip()
+                    cr = float(seg.get("compression_ratio", 0.0))
+                    if _segment_is_degenerate(cr, compression_ratio_threshold):
+                        logger.warning(
+                            "Dropped degenerate segment (mlx) compression_ratio=%.1f "
+                            "exceeds '%s' profile threshold %.1f -- discarded: %r",
+                            cr, self._model_size, compression_ratio_threshold, t[:120],
+                        )
+                        continue
+                    if t and (not parts or t != parts[-1]):
+                        parts.append(t)
+                text = " ".join(parts)
+                return " ".join(text.split())
             finally:
                 os.unlink(tmp_path)
         else:
@@ -139,9 +193,16 @@ class LocalTranscriber(Transcriber):
                 no_speech_threshold=0.95,
                 compression_ratio_threshold=None,
             )
-            # Collect segments, skip duplicates.  Log per-segment scores
-            # at INFO level for production diagnostics.
+            # Collect segments, skip duplicates, and drop individual
+            # degenerate (repetition-runaway) segments while keeping
+            # legitimate ones from the SAME clip -- see
+            # _segment_is_degenerate for why this is per-segment rather
+            # than an all-or-nothing reject of the whole transcript.
+            # Log per-segment scores at INFO level for production
+            # diagnostics regardless of the filtering decision.
+            compression_ratio_threshold = self._thresholds[2]
             parts = []
+            dropped_segments = 0
             for seg in segments:
                 t = seg.text.strip()
                 logger.info(
@@ -149,6 +210,15 @@ class LocalTranscriber(Transcriber):
                     seg.start, seg.end, seg.avg_logprob,
                     seg.no_speech_prob, seg.compression_ratio, t[:60],
                 )
+                if _segment_is_degenerate(seg.compression_ratio, compression_ratio_threshold):
+                    dropped_segments += 1
+                    logger.warning(
+                        "Dropped degenerate segment [%.1f-%.1fs] compression_ratio=%.1f "
+                        "exceeds '%s' profile threshold %.1f -- discarded: %r",
+                        seg.start, seg.end, seg.compression_ratio,
+                        self._model_size, compression_ratio_threshold, t[:120],
+                    )
+                    continue
                 if t and (not parts or t != parts[-1]):
                     parts.append(t)
             text = " ".join(parts)
@@ -159,6 +229,13 @@ class LocalTranscriber(Transcriber):
                 info.language,
                 text[:80],
             )
+            if dropped_segments:
+                logger.warning(
+                    "Transcription dropped %d degenerate segment(s); "
+                    "%d chars of legitimate speech survived",
+                    dropped_segments, len(text),
+                )
+
             return text
 
 
