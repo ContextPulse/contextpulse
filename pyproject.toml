@@ -26,6 +26,7 @@ dependencies = [
     # (pip would try to resolve them from PyPI and fail).
     "python-dotenv>=1.0",
     "cryptography>=43.0",
+    "psutil>=7.0,<8",
     "mss>=9.0",
     "pynput>=1.7",
     "pystray>=0.19",
