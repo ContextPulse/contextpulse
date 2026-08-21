@@ -28,13 +28,15 @@ if (-not $createdNew) {
 }
 
 # --- Config ---
-$WorkDir     = Split-Path $PSScriptRoot -Parent
-$VenvPythonw = Join-Path $WorkDir ".venv\Scripts\pythonw.exe"
-$VenvPython  = Join-Path $WorkDir ".venv\Scripts\python.exe"
-$Module      = "contextpulse_core.daemon"
-$McpModule   = "contextpulse_core.mcp_unified"
-$McpPort     = 8420
-$LogFile     = Join-Path $WorkDir "logs\daemon_watchdog.log"
+$WorkDir       = Split-Path $PSScriptRoot -Parent
+$VenvPythonw   = Join-Path $WorkDir ".venv\Scripts\pythonw.exe"
+$VenvPython    = Join-Path $WorkDir ".venv\Scripts\python.exe"
+$Module        = "contextpulse_core.daemon"
+$McpModule     = "contextpulse_core.mcp_unified"
+$McpPort       = 8420
+$LogFile       = Join-Path $WorkDir "logs\daemon_watchdog.log"
+$StderrLog     = Join-Path $WorkDir "daemon_stderr.log"
+$StderrBackups = 5   # generations of stderr to retain across restarts
 
 # --- State ---
 $restartTimestamps = [System.Collections.Generic.List[datetime]]::new()
@@ -47,6 +49,37 @@ function Write-Log {
     $line = "[$ts] [$Level] $Message"
     Write-Host $line
     Add-Content -Path $LogFile -Value $line -ErrorAction SilentlyContinue
+}
+
+function Rotate-StderrLog {
+    # Start-Process -RedirectStandardError opens the target file for write
+    # (truncating it) on every call, so a crashing run's stderr is
+    # destroyed by the very restart that follows it -- there is never a
+    # window to read it. Mirrors log_rotation.py's generation-shift naming
+    # (x.log -> x.log.1 -> x.log.2 ...) so the PREVIOUS run's stderr
+    # survives at daemon_stderr.log.1 after each restart, bounded to
+    # $StderrBackups generations (verified empirically 2026-08-21: without
+    # this, a second Start-Process to the same -RedirectStandardError path
+    # left ONLY the second run's output -- the first run's content was
+    # gone, not appended).
+    param(
+        [Parameter(Mandatory)] [string]$Path,
+        [int]$Keep = $StderrBackups
+    )
+    if (-not (Test-Path $Path)) {
+        return
+    }
+    $oldest = "$Path.$Keep"
+    if (Test-Path $oldest) {
+        Remove-Item $oldest -Force -ErrorAction SilentlyContinue
+    }
+    for ($generation = $Keep - 1; $generation -ge 1; $generation--) {
+        $source = "$Path.$generation"
+        if (Test-Path $source) {
+            Move-Item $source "$Path.$($generation + 1)" -Force -ErrorAction SilentlyContinue
+        }
+    }
+    Move-Item $Path "$Path.1" -Force -ErrorAction SilentlyContinue
 }
 
 function Get-RestartsInLastHour {
@@ -168,6 +201,12 @@ try {
             return
         }
 
+        # Preserve the PREVIOUS run's stderr before Start-Process truncates
+        # the file for this run -- otherwise the crashing run's diagnostics
+        # are destroyed by the restart that follows it (verified empirically
+        # 2026-08-21: -RedirectStandardError overwrites, never appends).
+        Rotate-StderrLog -Path $StderrLog
+
         # Use python.exe (not pythonw.exe) so stderr is capturable for crash diagnostics.
         # The -WindowStyle Hidden on Start-Process keeps the console window invisible.
         # Redirect stderr to crash log for post-mortem analysis.
@@ -175,12 +214,22 @@ try {
             -ArgumentList "-m", $Module `
             -WorkingDirectory $WorkDir `
             -PassThru -WindowStyle Hidden `
-            -RedirectStandardError "$WorkDir\daemon_stderr.log"
+            -RedirectStandardError $StderrLog
+
+        # Force .NET to associate the process handle NOW, before it can
+        # exit. Without this, $proc.ExitCode reliably returns $null after
+        # WaitForExit() (verified empirically 2026-08-21 -- reproduced with
+        # a plain `cmd /c exit 3` child: $proc.ExitCode was $null every
+        # time until .Handle was touched first). This is why every daemon
+        # exit was logging "DAEMON CRASHED (code= [0x00000000])" regardless
+        # of the real exit code, including clean/graceful exits.
+        $null = $proc.Handle
 
         Write-Log "Daemon started (pid=$($proc.Id))"
 
         # Wait for process to exit
         $proc.WaitForExit()
+        $proc.Refresh()
         $exitCode = $proc.ExitCode
         $runtime = ((Get-Date) - $startTime).TotalSeconds
 
@@ -191,6 +240,7 @@ try {
         }
 
         # It crashed
+        Write-Log "Crash diagnostics: see $StderrLog (this run) and $StderrLog.1 (prior run, if any)" "WARN"
         $exitHex = "0x{0:X8}" -f [uint32]$exitCode
         Write-Log "DAEMON CRASHED (code=$exitCode [$exitHex], runtime=$([math]::Round($runtime))s)" "ERROR"
 
