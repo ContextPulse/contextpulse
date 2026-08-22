@@ -29,7 +29,11 @@ $WorkDir       = Split-Path $PSScriptRoot -Parent
 $VenvPython    = Join-Path $WorkDir ".venv\Scripts\python.exe"
 $WatchdogScript = Join-Path $PSScriptRoot "daemon-watchdog.ps1"
 $StartupCmd    = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup\ContextPulse.cmd"
-$HeartbeatFile = "C:\Users\david\screenshots\heartbeat"
+# Overridable, with a per-user default. Was hardcoded to one developer's home
+# directory, so the healthcheck only ever worked on that machine -- and it sat in
+# a public repo. Set CONTEXTPULSE_HEARTBEAT to point elsewhere.
+$HeartbeatFile = if ($env:CONTEXTPULSE_HEARTBEAT) { $env:CONTEXTPULSE_HEARTBEAT }
+                 else { Join-Path $env:LOCALAPPDATA "ContextPulse\heartbeat" }
 $McpModule     = "contextpulse_core.mcp_unified"
 $McpPort       = 8420
 $LogFile       = Join-Path $WorkDir "logs\healthcheck.log"

@@ -10,7 +10,10 @@
 #
 # Why (2026-08-17): a merge audit of phase1-kg-spine found an internal handoff
 # doc referencing a DIFFERENT private venture (CryptoTrader) and 12 files with
-# hardcoded C:\Users\david paths. Both are HIGH, not BLOCKER, so this gate would
+# absolute paths under a developer home directory (the literal is omitted here
+# on purpose: check 26 scans this file too, and a comment quoting the pattern
+# blocks the gate on its own documentation). Both are HIGH, not BLOCKER, so this
+# gate would
 # have printed a warning and let the push through to a PUBLIC repo. Severity
 # tuned for "release quality" is the wrong axis for "must never be published":
 # a lint warning is not the same kind of thing as another project's name.
