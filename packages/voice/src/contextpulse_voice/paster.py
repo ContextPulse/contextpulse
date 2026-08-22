@@ -104,11 +104,20 @@ def paste_text(text: str) -> tuple[float, str]:
 
         pyperclip.copy(text)
         time.sleep(0.15)
-        # Ctrl+V pastes in normal apps but is inert in terminals, where paste is
-        # Ctrl+Shift+V. (mintty/Git Bash defaults to Shift+Insert and needs the
-        # user to map Ctrl+Shift+V to paste; conhost/Windows Terminal/WezTerm all
-        # accept Ctrl+Shift+V out of the box.)
-        if _focused_is_terminal():
+        # macOS paste is always Cmd+V, in terminals and normal apps alike --
+        # Terminal.app/iTerm2 interpret Cmd+V as paste natively, unlike Windows
+        # conhost where Ctrl+V is a legacy console control character in some
+        # contexts. Checked first and unconditionally: the terminal-detection
+        # branch below is Windows-only (_focused_is_terminal() always returns
+        # False off win32, via _foreground_window_class()'s own platform guard).
+        #
+        # Ctrl+V pastes in normal Windows apps but is inert in terminals, where
+        # paste is Ctrl+Shift+V. (mintty/Git Bash defaults to Shift+Insert and
+        # needs the user to map Ctrl+Shift+V to paste; conhost/Windows
+        # Terminal/WezTerm all accept Ctrl+Shift+V out of the box.)
+        if sys.platform == "darwin":
+            pyautogui.hotkey("command", "v")
+        elif _focused_is_terminal():
             pyautogui.hotkey("ctrl", "shift", "v")
         else:
             pyautogui.hotkey("ctrl", "v")

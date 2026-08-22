@@ -97,6 +97,51 @@ class TestPasteText:
         assert ts > 0
         hotkey.assert_called_once_with("ctrl", "v")
 
+    def test_macos_uses_command_v_regardless_of_terminal_focus(self, monkeypatch):
+        """macOS always sends Cmd+V, even when the focused window looks like a
+        terminal -- Terminal.app/iTerm2 interpret Cmd+V as paste natively,
+        unlike Windows conhost. Regression test for contextpulse-voice-macos-
+        paster-cmdv: paster.py previously sent Ctrl+V unconditionally on every
+        platform, which is a silent no-op on macOS."""
+        import pyautogui
+        import pyperclip
+        pyperclip.copy = MagicMock()
+        hotkey = MagicMock()
+        monkeypatch.setattr(pyautogui, "hotkey", hotkey)
+        monkeypatch.setattr(paster_module.sys, "platform", "darwin")
+        monkeypatch.setattr(paster_module, "_focused_is_terminal", lambda: True)
+
+        ts, _ = paste_text("into mac terminal")
+        assert ts > 0
+        hotkey.assert_called_once_with("command", "v")
+
+    def test_macos_uses_command_v_in_normal_apps(self, monkeypatch):
+        import pyautogui
+        import pyperclip
+        pyperclip.copy = MagicMock()
+        hotkey = MagicMock()
+        monkeypatch.setattr(pyautogui, "hotkey", hotkey)
+        monkeypatch.setattr(paster_module.sys, "platform", "darwin")
+        monkeypatch.setattr(paster_module, "_focused_is_terminal", lambda: False)
+
+        ts, _ = paste_text("into mac editor")
+        assert ts > 0
+        hotkey.assert_called_once_with("command", "v")
+
+    def test_windows_terminal_focus_still_uses_ctrl_shift_v(self, monkeypatch):
+        """Non-macOS behavior must be unchanged by the darwin branch."""
+        import pyautogui
+        import pyperclip
+        pyperclip.copy = MagicMock()
+        hotkey = MagicMock()
+        monkeypatch.setattr(pyautogui, "hotkey", hotkey)
+        monkeypatch.setattr(paster_module.sys, "platform", "win32")
+        monkeypatch.setattr(paster_module, "_focused_is_terminal", lambda: True)
+
+        ts, _ = paste_text("into windows terminal")
+        assert ts > 0
+        hotkey.assert_called_once_with("ctrl", "shift", "v")
+
     def test_terminal_class_detection(self, monkeypatch):
         """Known terminal window classes are recognized; others are not."""
         monkeypatch.setattr(

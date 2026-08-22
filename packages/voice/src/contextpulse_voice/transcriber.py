@@ -95,7 +95,14 @@ class LocalTranscriber(Transcriber):
 
         if sys.platform == "darwin" and platform.machine() == "arm64":
             self._backend = "mlx"
-            import mlx_whisper
+            try:
+                import mlx_whisper
+            except ImportError as e:
+                raise RuntimeError(
+                    "mlx-whisper is required for voice transcription on Apple Silicon "
+                    "but is not installed. Install it with: "
+                    'pip install -e "packages/voice[macos]"'
+                ) from e
             self._mlx_whisper = mlx_whisper
             # Map model sizes to HuggingFace repos
             model_map = {
