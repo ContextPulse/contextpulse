@@ -120,6 +120,42 @@ class TestLocalTranscriberInit:
         assert t._thresholds == _MODEL_THRESHOLDS["medium"]
 
 
+class TestMlxWhisperMissingOnAppleSilicon:
+    """Regression tests for the README's macOS 'Full support' claim: a Mac
+    user who installs without the `[macos]` extra must get an actionable
+    error, not a bare crash on the first dictation attempt.
+    (cp-public-readme-overclaims-macos)"""
+
+    @patch("platform.machine", return_value="arm64")
+    @patch("contextpulse_voice.transcriber.sys")
+    def test_missing_mlx_whisper_raises_actionable_runtime_error(self, mock_sys, mock_machine):
+        """mlx_whisper genuinely is not installed on this (non-Mac) test
+        machine, so this exercises the real ImportError path, not a stub."""
+        import pytest
+
+        mock_sys.platform = "darwin"
+        with pytest.raises(RuntimeError, match=r"mlx-whisper.*not installed.*packages/voice\[macos\]"):
+            LocalTranscriber(model_size="base")
+
+    @patch("platform.machine", return_value="arm64")
+    @patch("contextpulse_voice.transcriber.sys")
+    def test_mlx_whisper_present_selects_mlx_backend(self, mock_sys, mock_machine):
+        """When mlx_whisper IS importable, init must succeed and select the
+        mlx backend -- proves the try/except doesn't swallow the success path."""
+        import sys as real_sys
+        import types
+
+        mock_sys.platform = "darwin"
+        fake_mlx = types.ModuleType("mlx_whisper")
+        real_sys.modules["mlx_whisper"] = fake_mlx
+        try:
+            t = LocalTranscriber(model_size="base")
+            assert t._backend == "mlx"
+            assert t._mlx_whisper is fake_mlx
+        finally:
+            del real_sys.modules["mlx_whisper"]
+
+
 class TestTranscribeUsesThresholds:
     """The transcribe() call must pass model-specific thresholds to Whisper."""
 
