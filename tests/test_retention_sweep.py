@@ -221,3 +221,68 @@ class TestMain:
         rc = rs.main(["--project-root", str(tmp_path), "--targets", "working"])
         assert rc == 0
         assert "Nothing found" in capsys.readouterr().out
+
+
+class TestExecuteSafetyNet:
+    """Regression tests for cp-retention-sweep-execute-safety-net.
+
+    A prior fix correctly removed a hardcoded real directory name from
+    DEFAULT_PROTECT_PATTERNS, but left --execute able to run with zero
+    protection configured by default -- an operator who forgets --protect
+    or CP_RETENTION_PROTECT gets a real, unprotected delete sweep with no
+    warning.
+    """
+
+    def test_execute_with_no_protect_patterns_refuses(self, tmp_path, rs, capsys, monkeypatch):
+        monkeypatch.delenv("CP_RETENTION_PROTECT", raising=False)
+        now = time.time()
+        f = tmp_path / "working" / "stale.log"
+        _touch(f, age_days=45, now=now)
+        rc = rs.main(["--project-root", str(tmp_path), "--targets", "working", "--execute"])
+        assert rc == 2
+        assert f.exists(), "must not sweep anything when refusing to execute"
+        err = capsys.readouterr().err
+        assert "REFUSING TO EXECUTE" in err
+
+    def test_execute_with_cli_protect_proceeds(self, tmp_path, rs, monkeypatch):
+        monkeypatch.delenv("CP_RETENTION_PROTECT", raising=False)
+        now = time.time()
+        f = tmp_path / "working" / "stale.log"
+        _touch(f, age_days=45, now=now)
+        rc = rs.main([
+            "--project-root", str(tmp_path), "--targets", "working",
+            "--protect", "*nonexistent*", "--execute",
+        ])
+        assert rc == 0
+        assert not f.exists(), "with --protect configured (even matching nothing here), execute proceeds"
+
+    def test_execute_with_env_protect_proceeds(self, tmp_path, rs, monkeypatch):
+        now = time.time()
+        f = tmp_path / "working" / "stale.log"
+        _touch(f, age_days=45, now=now)
+        monkeypatch.setenv("CP_RETENTION_PROTECT", "*nonexistent*")
+        rc = rs.main(["--project-root", str(tmp_path), "--targets", "working", "--execute"])
+        assert rc == 0
+        assert not f.exists()
+
+    def test_execute_with_allow_empty_protect_flag_proceeds(self, tmp_path, rs, monkeypatch):
+        monkeypatch.delenv("CP_RETENTION_PROTECT", raising=False)
+        now = time.time()
+        f = tmp_path / "working" / "stale.log"
+        _touch(f, age_days=45, now=now)
+        rc = rs.main([
+            "--project-root", str(tmp_path), "--targets", "working",
+            "--execute", "--allow-empty-protect",
+        ])
+        assert rc == 0
+        assert not f.exists(), "explicit --allow-empty-protect must still allow the sweep"
+
+    def test_dry_run_never_gated_even_with_no_protect(self, tmp_path, rs, capsys, monkeypatch):
+        monkeypatch.delenv("CP_RETENTION_PROTECT", raising=False)
+        now = time.time()
+        f = tmp_path / "working" / "stale.log"
+        _touch(f, age_days=45, now=now)
+        rc = rs.main(["--project-root", str(tmp_path), "--targets", "working"])
+        assert rc == 0
+        assert f.exists()
+        assert "REFUSING" not in capsys.readouterr().err

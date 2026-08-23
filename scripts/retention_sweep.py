@@ -221,9 +221,32 @@ def main(argv: list[str] | None = None) -> int:
                          help="glob patterns (matched against the item's name) never to sweep. "
                               "Also merged with CP_RETENTION_PROTECT env var patterns, if set.")
     parser.add_argument("--execute", action="store_true", help="actually move candidates (default: dry-run)")
+    parser.add_argument(
+        "--allow-empty-protect",
+        action="store_true",
+        help="allow --execute to run with zero protect patterns configured (no --protect and "
+             "CP_RETENTION_PROTECT unset). Without this, --execute refuses to run unprotected -- "
+             "see cp-retention-sweep-execute-safety-net: the tool shipped with DEFAULT_PROTECT_"
+             "PATTERNS empty by design, which means an --execute run with nothing else configured "
+             "has zero protection, silently. Dry-run is never gated by this.",
+    )
     args = parser.parse_args(argv)
 
     protect_patterns = list(args.protect) + env_protect_patterns()
+
+    if args.execute and not protect_patterns and not args.allow_empty_protect:
+        print(
+            "REFUSING TO EXECUTE: no --protect patterns and CP_RETENTION_PROTECT is unset.\n"
+            "Running --execute with zero protection configured is the exact misconfiguration "
+            "cp-retention-sweep-execute-safety-net exists to prevent -- DEFAULT_PROTECT_PATTERNS "
+            "ships empty on purpose (no real directory name may be hardcoded into tracked source), "
+            "so an unconfigured --execute run has no safety net at all.\n"
+            "Set CP_RETENTION_PROTECT, pass --protect, or pass --allow-empty-protect to proceed "
+            "anyway (e.g. a machine with nothing sensitive under the target directories yet).",
+            file=sys.stderr,
+        )
+        return 2
+
     entries = scan(args.project_root, args.targets, args.max_age_days, protect_patterns)
     if not entries:
         print("Nothing found under any target directory.")
