@@ -29,6 +29,12 @@ _COMMON_PHRASES: set[str] = {
 # Minimum key length in characters to avoid overly aggressive matching.
 _MIN_KEY_LENGTH = 6
 
+# Guards applied only to OCR/clipboard-harvested phrases (see
+# is_safe_harvested_phrase below) -- NOT to the project/skill directory scan,
+# which only ever reads names David deliberately chose.
+_MAX_HARVESTED_WORDS = 2
+_MAX_HARVESTED_WORD_LENGTH = 12
+
 
 def _split_camel_to_phrase(name: str) -> str | None:
     """Split CamelCase into a lowercased space-separated phrase.
@@ -53,6 +59,35 @@ def _split_camel_to_phrase(name: str) -> str | None:
     if len(phrase) < _MIN_KEY_LENGTH:
         return None
     return phrase
+
+
+def is_safe_harvested_phrase(phrase: str) -> bool:
+    """Guard for OCR/clipboard-harvested phrases before they enter the vocabulary.
+
+    Harvested phrases come from arbitrary incidental screen/clipboard text, unlike
+    the project/skill directory scan in build_context_vocabulary(), which only ever
+    reads names David deliberately chose -- so this guard is NOT applied there.
+
+    Rejects:
+    - Phrases with more than _MAX_HARVESTED_WORDS words. An ordinary multi-word
+      English phrase (e.g. "day trading strategies", from the "DayTradingStrategies"
+      CamelCase run the OCR/clipboard regex matched) is far more likely to be an
+      incidental sentence fragment than a coined proper noun, and becoming a
+      permanent Whisper vocabulary substitution corrupts unrelated dictation
+      (David said "regarding day trading" and the paster wrote "regarding
+      DayTrading" -- 2026-08-21).
+    - Phrases containing a "word" longer than _MAX_HARVESTED_WORD_LENGTH characters.
+      This is the signature of OCR whitespace-collapse: when OCR drops the space
+      between two capitalized words, the CamelCase regex still matches
+      (e.g. "So I have" -> "SoIhave" -> split gives "so" + "ihave", the second
+      token abnormally long for a real English word).
+    """
+    words = phrase.split()
+    if not words:
+        return False
+    if len(words) > _MAX_HARVESTED_WORDS:
+        return False
+    return all(len(w) <= _MAX_HARVESTED_WORD_LENGTH for w in words)
 
 
 def _extract_names_from_context(text: str) -> list[str]:
@@ -177,6 +212,11 @@ def build_context_vocabulary(
 def merge_terms_to_context_vocab(terms: list[dict]) -> int:
     """Merge harvested terms into the context vocabulary file (additive only).
 
+    Every incoming phrase is checked by is_safe_harvested_phrase() -- this is the
+    single funnel both the OCR and clipboard harvesters write through, so it is
+    the authoritative gate regardless of whether a caller's own pre-filtering
+    drifts.
+
     Args:
         terms: Dicts carrying at least ``phrase`` (the key) and ``term``
                (the correct spelling), as produced by the OCR and clipboard
@@ -194,6 +234,9 @@ def merge_terms_to_context_vocab(terms: list[dict]) -> int:
         key = item.get("phrase")
         value = item.get("term")
         if not key or not value or key in existing:
+            continue
+        if not is_safe_harvested_phrase(key):
+            logger.info("Rejected unsafe harvested phrase: %r -> %r", key, value)
             continue
         existing[key] = value
         added += 1
