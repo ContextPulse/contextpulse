@@ -12,6 +12,7 @@ from contextpulse_voice.context_vocab import (
     build_context_vocabulary,
     get_context_entries,
     get_known_proper_nouns,
+    is_safe_harvested_phrase,
     merge_terms_to_context_vocab,
     rebuild_context_vocabulary,
 )
@@ -54,6 +55,48 @@ class TestSplitCamelToPhrase:
 
     def test_task_manager(self):
         assert _split_camel_to_phrase("TaskManager") == "task manager"
+
+
+class TestIsSafeHarvestedPhrase:
+    """Regression tests for cp-vocab-camelcases-common-phrases.
+
+    2026-08-21: David said "update your skills regarding day trading" and the
+    paster wrote "regarding DayTrading" -- an ordinary 3-word English phrase that
+    had been harvested into vocabulary_context.json as a permanent Whisper
+    vocabulary substitution just because it appeared CamelCase-collapsed
+    ("DayTradingStrategies") somewhere in OCR or clipboard text.
+    """
+
+    def test_rejects_three_word_ordinary_phrase(self):
+        # The exact reported bug: "day trading strategies" -> "DayTradingStrategies"
+        assert is_safe_harvested_phrase("day trading strategies") is False
+
+    def test_rejects_ocr_whitespace_collapse_artifact(self):
+        # "So I have" losing its spaces during OCR -> "SoIhave" -> split gives
+        # "so" + "ihave"; "ihave" alone isn't long enough to trip a word-length
+        # guard, so use a real observed artifact with a genuinely long token.
+        assert is_safe_harvested_phrase("checkedforlast run atnewerthanmywrite") is False
+
+    def test_accepts_two_word_product_name(self):
+        assert is_safe_harvested_phrase("nimbus flow") is True
+
+    def test_accepts_short_single_word(self):
+        assert is_safe_harvested_phrase("hilo") is True
+
+    def test_rejects_empty_phrase(self):
+        assert is_safe_harvested_phrase("") is False
+
+    def test_boundary_word_length_accepted(self):
+        # Exactly _MAX_HARVESTED_WORD_LENGTH (12) chars is still accepted.
+        assert is_safe_harvested_phrase("a" * 12) is True
+
+    def test_boundary_word_length_rejected(self):
+        # One char over the limit is rejected.
+        assert is_safe_harvested_phrase("a" * 13) is False
+
+    def test_boundary_word_count_accepted(self):
+        assert is_safe_harvested_phrase("word one two") is False  # 3 words
+        assert is_safe_harvested_phrase("word one") is True  # 2 words
 
 
 class TestExtractNamesFromContext:
@@ -252,6 +295,32 @@ class TestRebuildAndGet:
         assert added == 1
         data = json.loads(vocab_file.read_text())
         assert data["context pulse"] == "ContextPulse"
+        assert data["nimbus flow"] == "NimbusFlow"
+
+    def test_merge_rejects_unsafe_harvested_phrase(self, tmp_path, monkeypatch):
+        """Regression: cp-vocab-camelcases-common-phrases.
+
+        merge_terms_to_context_vocab is the single funnel both the OCR and
+        clipboard harvesters write through -- it must reject an ordinary
+        multi-word English phrase even if a caller's own pre-filter misses it.
+        """
+        vocab_file = tmp_path / "vocabulary_context.json"
+        monkeypatch.setattr(
+            "contextpulse_voice.context_vocab.CONTEXT_VOCAB_FILE", vocab_file,
+        )
+        monkeypatch.setattr(
+            "contextpulse_voice.context_vocab.VOICE_DATA_DIR", tmp_path,
+        )
+        vocab_file.write_text(json.dumps({}), encoding="utf-8")
+
+        added = merge_terms_to_context_vocab([
+            {"phrase": "day trading strategies", "term": "DayTradingStrategies"},
+            {"phrase": "nimbus flow", "term": "NimbusFlow"},
+        ])
+
+        assert added == 1
+        data = json.loads(vocab_file.read_text())
+        assert "day trading strategies" not in data
         assert data["nimbus flow"] == "NimbusFlow"
 
     def test_get_context_entries_empty(self, monkeypatch, tmp_path):
