@@ -74,6 +74,28 @@ class TestApplyCaps:
             _thread_caps.apply_caps(target)
         assert target["OMP_NUM_THREADS"] == "4"
 
+    def test_warns_when_override_active(self, caplog):
+        """Regression: cp-thread-count-157-above-baseline.
+
+        A stray persistent CONTEXTPULSE_CPU_THREADS=8 sat in David's Windows
+        user environment for months, quietly overriding the documented default
+        of 2 on every ContextPulse process, undetected until a psutil-based
+        monitor caught the live daemon near the original 163-thread incident
+        baseline. apply_caps() must log so this class of override is
+        diagnosable from the daemon's own logs, not just an ad-hoc process probe.
+        """
+        target: dict[str, str] = {}
+        with patch.dict(os.environ, {"CONTEXTPULSE_CPU_THREADS": "8"}):
+            with caplog.at_level("WARNING", logger="contextpulse_core._thread_caps"):
+                _thread_caps.apply_caps(target)
+        assert any("overridden to 8" in r.message for r in caplog.records)
+
+    def test_no_warning_at_default_cap(self, caplog):
+        target: dict[str, str] = {}
+        with caplog.at_level("WARNING", logger="contextpulse_core._thread_caps"):
+            _thread_caps.apply_caps(target)
+        assert caplog.records == []
+
     def test_module_import_applied_caps_to_real_environ(self):
         # The act of importing _thread_caps at the top of this file should
         # have populated these in os.environ already.
