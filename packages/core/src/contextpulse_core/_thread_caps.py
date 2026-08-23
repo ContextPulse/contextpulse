@@ -27,8 +27,11 @@ vars yourself before launch — those are respected via ``setdefault``.
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import MutableMapping
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_CAP = 2
 
@@ -67,7 +70,24 @@ def apply_caps(
     only the variables that were newly set (useful for tests and logging).
     """
     target: MutableMapping[str, str] = environ if environ is not None else os.environ
-    cap_str = str(get_cap())
+    cap = get_cap()
+    if cap != _DEFAULT_CAP:
+        # A silent override here is exactly how CONTEXTPULSE_CPU_THREADS=8 sat as
+        # a stray persistent Windows user env var for months (left over from a
+        # benchmarking session per this module's own docstring), quietly raising
+        # every pool's baseline 4x and going unnoticed until a psutil-based
+        # thread-budget monitor started firing near the original 163-thread
+        # incident level. Logged via logging's handler-of-last-resort if this
+        # runs before basicConfig(), since this module must import before any
+        # entry point configures logging.
+        logger.warning(
+            "Thread pool cap overridden to %d (default %d) via "
+            "CONTEXTPULSE_CPU_THREADS -- raises OMP/MKL/OPENBLAS/NUMEXPR pool "
+            "baseline roughly proportionally. Unset the env var to restore the "
+            "documented default unless this is a deliberate benchmark run.",
+            cap, _DEFAULT_CAP,
+        )
+    cap_str = str(cap)
     applied: dict[str, str] = {}
     for var in _ENV_VARS:
         if var not in target:
