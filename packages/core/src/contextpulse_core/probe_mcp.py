@@ -12,6 +12,7 @@ See ``.internal/fable-redesign/cp-implementation-plan-FINAL.md`` §Phase 0.
 
 from __future__ import annotations
 
+import logging
 import time as _time
 from datetime import datetime
 
@@ -20,6 +21,7 @@ from mcp.server.fastmcp import FastMCP
 from contextpulse_core import probe
 
 mcp_app = FastMCP("ContextPulse Probe")
+logger = logging.getLogger(__name__)
 
 
 def _fmt_ts(ts: float | None) -> str:
@@ -42,6 +44,20 @@ def _fmt_facts(hits: list[dict]) -> str:
             f"{h.get('entity')}: {h.get('fact')}{src}"
         )
     return "\n".join(lines)
+
+
+def _record_usage_safe(conn, tool: str, query: str, hit_count: int) -> None:
+    """Log a real probe-tool call (cp-savegate-attribution-instrument).
+
+    Automatic and unconditional — called on every real invocation regardless
+    of hit_count, so a future save count is never ambiguous between "no
+    value" and "nothing was watching". Instrumentation must never break the
+    tool it observes: any failure here is logged and swallowed, not raised.
+    """
+    try:
+        probe.record_usage(conn, tool, query, hit_count)
+    except Exception:
+        logger.exception("probe usage logging failed for tool=%s (recall unaffected)", tool)
 
 
 def _parse_when(when: str) -> float | None:
@@ -80,6 +96,7 @@ def facts_about(entity: str) -> str:
     conn = probe.connect_probe(probe.default_probe_db())
     try:
         hits = probe.query_facts_about(conn, entity)
+        _record_usage_safe(conn, "facts_about", entity, len(hits))
     finally:
         conn.close()
     if not hits:
@@ -104,6 +121,7 @@ def context_at(when: str, window_minutes: int = 30) -> str:
     conn = probe.connect_probe(probe.default_probe_db())
     try:
         hits = probe.query_context_at(conn, t, window_s=window_minutes * 60)
+        _record_usage_safe(conn, "context_at", f"{when} +/-{window_minutes}min", len(hits))
     finally:
         conn.close()
     if not hits:
