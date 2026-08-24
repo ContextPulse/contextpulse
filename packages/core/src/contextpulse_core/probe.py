@@ -146,6 +146,22 @@ CREATE TABLE IF NOT EXISTS probe_runs (
     facts INTEGER NOT NULL DEFAULT 0,
     error TEXT
 );
+
+-- Automatic call log for facts_about/context_at (cp-savegate-attribution-
+-- instrument). Written on EVERY real call, unconditionally -- this is what
+-- makes a future 0-of-3 save count unambiguous. Before this table, "0
+-- attributed saves" was indistinguishable between "recall has no value" and
+-- "nothing was watching": probe_save.py existed and worked but required a
+-- human to remember to invoke it separately, and across the entire Phase 0
+-- window nobody did (see pivot-decision-contextpulse-savegate, 2026-08-22).
+CREATE TABLE IF NOT EXISTS tool_usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    called_at REAL NOT NULL DEFAULT (unixepoch('subsec')),
+    tool TEXT NOT NULL,
+    query TEXT NOT NULL,
+    hit_count INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tool_usage_called_at ON tool_usage(called_at);
 """
 
 
@@ -188,6 +204,45 @@ def record_run(conn: sqlite3.Connection, events: int, facts: int, error: str | N
         (events, facts, error),
     )
     conn.commit()
+
+
+# ── automatic tool-usage log (cp-savegate-attribution-instrument) ──
+
+
+def record_usage(conn: sqlite3.Connection, tool: str, query: str, hit_count: int) -> None:
+    """Log one real call to a probe MCP tool — automatic, unconditional.
+
+    Call this from every facts_about/context_at invocation, regardless of
+    hit_count and regardless of whether the caller separately runs
+    probe_save.py. This is the fix for the save-gate's core ambiguity: a
+    future 0-of-3 (or 3-of-3) count can be read alongside "the tools were
+    called N times" instead of being silently indistinguishable from "the
+    instrument was never watching."
+    """
+    conn.execute(
+        "INSERT INTO tool_usage (tool, query, hit_count) VALUES (?, ?, ?)",
+        (tool, query, hit_count),
+    )
+    conn.commit()
+
+
+def usage_summary(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Aggregate tool_usage into total/with-hits counts, overall and per tool."""
+    rows = conn.execute("SELECT tool, hit_count FROM tool_usage").fetchall()
+    by_tool: dict[str, dict[str, int]] = {}
+    calls_with_hits = 0
+    for r in rows:
+        tool = r["tool"]
+        entry = by_tool.setdefault(tool, {"calls": 0, "with_hits": 0})
+        entry["calls"] += 1
+        if r["hit_count"] > 0:
+            entry["with_hits"] += 1
+            calls_with_hits += 1
+    return {
+        "total_calls": len(rows),
+        "calls_with_hits": calls_with_hits,
+        "by_tool": by_tool,
+    }
 
 
 def _row_to_fact(row: sqlite3.Row) -> dict[str, Any]:

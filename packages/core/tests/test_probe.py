@@ -332,3 +332,54 @@ def test_record_run_appends_ledger_row(tmp_path):
     probe.record_run(conn, events=0, facts=0, error="claude timeout")
     rows = conn.execute("SELECT events, facts, error FROM probe_runs ORDER BY id").fetchall()
     assert [tuple(r) for r in rows] == [(1500, 3, None), (0, 0, "claude timeout")]
+
+
+# ── automatic tool-usage log (cp-savegate-attribution-instrument) ──
+#
+# Fixes the ambiguity a 0-of-3 save count carried: "no value" (tools were
+# called, nothing qualified as novel) vs "nothing was watching" (probe_save.py
+# was simply never invoked). record_usage() is called on EVERY real
+# facts_about/context_at call, unconditionally — not a manual logger.
+
+
+def test_record_usage_inserts_row(tmp_path):
+    conn = probe.connect_probe(tmp_path / "probe.db")
+    probe.record_usage(conn, "facts_about", "ContextPulse", hit_count=3)
+    row = conn.execute("SELECT tool, query, hit_count FROM tool_usage").fetchone()
+    assert tuple(row) == ("facts_about", "ContextPulse", 3)
+
+
+def test_record_usage_persists_across_connections(tmp_path):
+    p = tmp_path / "probe.db"
+    conn1 = probe.connect_probe(p)
+    probe.record_usage(conn1, "context_at", "now +/-30min", hit_count=0)
+    conn1.close()
+    conn2 = probe.connect_probe(p)
+    assert conn2.execute("SELECT COUNT(*) FROM tool_usage").fetchone()[0] == 1
+
+
+def test_record_usage_zero_hits_is_a_valid_call(tmp_path):
+    """A call that returned nothing is still a call — must be logged, not skipped."""
+    conn = probe.connect_probe(tmp_path / "probe.db")
+    probe.record_usage(conn, "facts_about", "Nonexistent", hit_count=0)
+    assert conn.execute("SELECT COUNT(*) FROM tool_usage").fetchone()[0] == 1
+
+
+def test_usage_summary_empty_db_reports_zero_not_absence(tmp_path):
+    conn = probe.connect_probe(tmp_path / "probe.db")
+    summary = probe.usage_summary(conn)
+    assert summary == {"total_calls": 0, "calls_with_hits": 0, "by_tool": {}}
+
+
+def test_usage_summary_counts_and_breaks_down_by_tool(tmp_path):
+    conn = probe.connect_probe(tmp_path / "probe.db")
+    probe.record_usage(conn, "facts_about", "A", hit_count=2)
+    probe.record_usage(conn, "facts_about", "B", hit_count=0)
+    probe.record_usage(conn, "context_at", "now", hit_count=5)
+    summary = probe.usage_summary(conn)
+    assert summary["total_calls"] == 3
+    assert summary["calls_with_hits"] == 2
+    assert summary["by_tool"] == {
+        "facts_about": {"calls": 2, "with_hits": 1},
+        "context_at": {"calls": 1, "with_hits": 1},
+    }
