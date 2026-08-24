@@ -8,10 +8,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-import pytest
-
 from contextpulse_voice.hot_words import (
-    _COMMON_ACRONYMS,
     build_whisper_prompt,
     extract_hot_words,
 )
