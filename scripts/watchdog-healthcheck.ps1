@@ -30,10 +30,21 @@ $VenvPython    = Join-Path $WorkDir ".venv\Scripts\python.exe"
 $WatchdogScript = Join-Path $PSScriptRoot "daemon-watchdog.ps1"
 $StartupCmd    = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup\ContextPulse.cmd"
 # Overridable, with a per-user default. Was hardcoded to one developer's home
-# directory, so the healthcheck only ever worked on that machine -- and it sat in
-# a public repo. Set CONTEXTPULSE_HEARTBEAT to point elsewhere.
+# directory (cp-watchdog-healthcheck-hardcoded-path), fixed to an env-var
+# default -- but the replacement default (%LOCALAPPDATA%\ContextPulse\heartbeat)
+# does not match where the daemon actually writes it: daemon.py writes to
+# OUTPUT_DIR/heartbeat, where OUTPUT_DIR defaults to %USERPROFILE%\screenshots
+# (see packages/core/src/contextpulse_core/config.py, CONTEXTPULSE_OUTPUT_DIR).
+# That mismatch silently disabled check 1 entirely: every 2-minute run since
+# the first fix logged "Heartbeat missing/unparseable ... no action" because
+# nothing was ever written to the path being checked. Mirror config.py's own
+# resolution order so the two producers/consumers of this file agree: honor
+# CONTEXTPULSE_OUTPUT_DIR if set (same as the daemon), else the same default
+# the daemon uses. CONTEXTPULSE_HEARTBEAT remains a direct full-path override
+# for cases where the heartbeat genuinely lives somewhere else.
 $HeartbeatFile = if ($env:CONTEXTPULSE_HEARTBEAT) { $env:CONTEXTPULSE_HEARTBEAT }
-                 else { Join-Path $env:LOCALAPPDATA "ContextPulse\heartbeat" }
+                 elseif ($env:CONTEXTPULSE_OUTPUT_DIR) { Join-Path $env:CONTEXTPULSE_OUTPUT_DIR "heartbeat" }
+                 else { Join-Path $env:USERPROFILE "screenshots\heartbeat" }
 $McpModule     = "contextpulse_core.mcp_unified"
 $McpPort       = 8420
 $LogFile       = Join-Path $WorkDir "logs\healthcheck.log"
