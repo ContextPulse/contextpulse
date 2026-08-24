@@ -9,8 +9,6 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from contextpulse_voice.metrics import (
     compute_accuracy_scorecard,
     generate_weekly_report,

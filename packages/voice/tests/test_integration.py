@@ -285,6 +285,7 @@ class TestVocabHotReload:
         vocab_file, learned_file = vocab_env
         # Initial: no "fastapi" correction
         result_before = apply_vocabulary("I use fast api for my server")
+        assert "FastAPI" not in result_before  # comment above asserted this; code never did
         vocabulary._compiled_patterns = None  # Force reload check
 
         # Write new vocab
@@ -377,7 +378,11 @@ class TestAnalyzerRealisticData:
         # it should produce corrections for the single-word difference
         # The raw has 5 words, cleaned has 5 words — "cube" -> "kubectl" should match
         # Actually "cube control" (2 words) -> "kubectl" (1 word), so word counts differ
-        # This means the ratio check might filter it. That's okay — the test validates the logic.
+        # This means the ratio check filters it out. Verified by direct run against this
+        # fixture: corrections is {'jonh': {...}} only — no 'cube' key. Assert that
+        # explicitly instead of leaving the test body a no-op (it always passed before,
+        # regardless of whether find_corrections was correct or broken).
+        assert "cube" not in corrections
 
     def test_find_corrections_ignores_style_changes(self, large_activity_db):
         """Style changes like 'kinda' -> 'kind of' should NOT be flagged."""
@@ -474,8 +479,7 @@ class TestConfigEnvOverrides:
             # Clear the config-based key too
             with patch("contextpulse_voice.config.load_config", return_value={}):
                 from contextpulse_voice.config import get_api_key
-                key = get_api_key()
-                # May or may not be empty depending on dotenv, but should not error
+                get_api_key()  # May or may not be empty depending on dotenv, but should not error
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -497,7 +501,7 @@ class TestMCPToolsPopulated:
         with patch.object(mcp_server, "_DB_PATH", mcp_populated_db):
             result = mcp_server.get_recent_transcriptions(minutes=60, limit=3)
             # Should show at most 3 entries
-            lines = [l for l in result.split("\n") if l.startswith("[")]
+            lines = [line for line in result.split("\n") if line.startswith("[")]
             assert len(lines) <= 3
 
     def test_recent_transcriptions_narrow_time(self, mcp_populated_db):

@@ -176,7 +176,6 @@ class TestTranscribeUsesThresholds:
         MockModel.return_value = mock_instance
 
         t = LocalTranscriber(model_size="small")
-        expected = _MODEL_THRESHOLDS["small"]
 
         # Create minimal WAV bytes
         import io
@@ -223,6 +222,7 @@ class TestTailBuffer:
     def test_recorder_stop_does_not_sleep(self):
         """Recorder.stop() must NOT sleep — tail buffer is in VoiceModule."""
         import inspect
+
         from contextpulse_voice.recorder import Recorder
         source = inspect.getsource(Recorder.stop)
         assert "sleep" not in source, (
