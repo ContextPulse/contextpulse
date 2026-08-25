@@ -233,6 +233,128 @@ class TestCaptureBackend:
             assert mock_dxcam.create.call_count == 1
 
 
+class TestBoundedGrab:
+    """Regression tests for the 2026-08-24/25 incident: camera.grab() blocked
+    for 11+ hours when DXcam's Desktop Duplication backend lost the display
+    output, silently stalling the whole capture pipeline. _dxcam_grab_bounded
+    must never let a stuck grab() block the caller past its timeout."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_module_state(self):
+        import contextpulse_sight.capture as cap
+        cap._dxcam_cameras = {}
+        cap._dxcam_timeout_counts = {}
+        yield
+        cap._dxcam_cameras = {}
+        cap._dxcam_timeout_counts = {}
+
+    def test_fast_grab_returns_frame_and_resets_counter(self):
+        import numpy as np
+        from unittest.mock import MagicMock
+
+        import contextpulse_sight.capture as cap
+
+        cap._dxcam_timeout_counts[0] = 2  # pretend 2 prior timeouts
+        fake_frame = np.zeros((10, 10, 3), dtype=np.uint8)
+        camera = MagicMock()
+        camera.grab.return_value = fake_frame
+
+        result = cap._dxcam_grab_bounded(camera, 0)
+
+        assert result is fake_frame
+        assert cap._dxcam_timeout_counts[0] == 0
+
+    def test_blocking_grab_times_out_within_bound(self, monkeypatch):
+        """A camera.grab() that never returns must not block the caller past
+        the configured timeout -- this is the exact incident shape."""
+        import threading
+        import time
+        from unittest.mock import MagicMock
+
+        import contextpulse_sight.capture as cap
+
+        monkeypatch.setattr(cap, "_DXCAM_GRAB_TIMEOUT_SEC", 0.1)
+        never_set = threading.Event()
+        camera = MagicMock()
+        camera.grab.side_effect = lambda: never_set.wait()  # blocks forever
+
+        start = time.monotonic()
+        result = cap._dxcam_grab_bounded(camera, 0)
+        elapsed = time.monotonic() - start
+
+        assert result is None
+        assert elapsed < 1.0, f"caller blocked for {elapsed:.2f}s -- timeout did not bound it"
+        assert cap._dxcam_timeout_counts[0] == 1
+
+    def test_consecutive_timeouts_evict_camera(self, monkeypatch):
+        """After MAX_CONSECUTIVE_TIMEOUTS, the camera is evicted so future
+        captures skip DXcam for this monitor instead of stalling again."""
+        import threading
+        from unittest.mock import MagicMock
+
+        import contextpulse_sight.capture as cap
+
+        monkeypatch.setattr(cap, "_DXCAM_GRAB_TIMEOUT_SEC", 0.05)
+        never_set = threading.Event()
+        camera = MagicMock()
+        camera.grab.side_effect = lambda: never_set.wait()
+        cap._dxcam_cameras[0] = camera
+
+        for _ in range(cap._DXCAM_MAX_CONSECUTIVE_TIMEOUTS - 1):
+            cap._dxcam_grab_bounded(camera, 0)
+            assert cap._dxcam_cameras[0] is camera, "evicted before threshold reached"
+
+        cap._dxcam_grab_bounded(camera, 0)
+        assert cap._dxcam_cameras[0] is None, "not evicted after threshold reached"
+
+    def test_genuine_exception_propagates_unchanged(self):
+        """A real dxcam exception (not a hang) must still propagate through
+        so existing call-site `except Exception` handling is untouched."""
+        from unittest.mock import MagicMock
+
+        import contextpulse_sight.capture as cap
+
+        camera = MagicMock()
+        camera.grab.side_effect = RuntimeError("DXGI_ERROR_DEVICE_REMOVED")
+
+        with pytest.raises(RuntimeError, match="DXGI_ERROR_DEVICE_REMOVED"):
+            cap._dxcam_grab_bounded(camera, 0)
+
+    def test_capture_active_monitor_falls_back_to_mss_on_timeout(self, monkeypatch):
+        """End-to-end: a stuck DXcam grab must not prevent
+        capture_active_monitor() from returning a real image via mss."""
+        import threading
+        from unittest.mock import MagicMock, patch
+
+        import contextpulse_sight.capture as cap
+
+        monkeypatch.setattr(cap, "_DXCAM_GRAB_TIMEOUT_SEC", 0.05)
+        never_set = threading.Event()
+        camera = MagicMock()
+        camera.grab.side_effect = lambda: never_set.wait()
+
+        mock_sct = MagicMock()
+        mock_sct.monitors = [
+            {"left": 0, "top": 0, "width": 1920, "height": 1080},
+            {"left": 0, "top": 0, "width": 1920, "height": 1080},
+        ]
+        mock_sct_img = MagicMock()
+        mock_sct_img.width = 1920
+        mock_sct_img.height = 1080
+        mock_sct_img.rgb = b"\x00" * (1920 * 1080 * 3)
+        mock_sct.grab.return_value = mock_sct_img
+        mock_sct.__enter__ = MagicMock(return_value=mock_sct)
+        mock_sct.__exit__ = MagicMock(return_value=False)
+
+        with patch("contextpulse_sight.capture.mss.mss", return_value=mock_sct), \
+             patch("contextpulse_sight.capture._get_backend", return_value="dxcam"), \
+             patch("contextpulse_sight.capture._get_dxcam_camera", return_value=camera):
+            idx, img = cap.capture_active_monitor()
+
+        assert img.width <= 1280 and img.height <= 720
+        mock_sct.grab.assert_called()  # fell all the way through to mss
+
+
 class TestActiveWindowRect:
     """Test active window detection for adaptive region capture."""
 

@@ -9,6 +9,7 @@ DXcam is unavailable (Linux, macOS, RDP, import failure).
 
 import logging
 import sys
+import threading
 from io import BytesIO
 from pathlib import Path
 
@@ -25,6 +26,87 @@ logger = logging.getLogger(__name__)
 
 _backend: str | None = None  # "dxcam" or "mss", set on first use
 _dxcam_cameras: dict[int, object | None] = {}  # output_idx -> camera (None = unavailable)
+
+# --- Bounded camera.grab() -------------------------------------------------
+#
+# Incident 2026-08-24/25: dxcam's Desktop Duplication backend lost the
+# display output (screen lock/sleep/monitor reconfig) and its internal
+# recovery loop retried for 11+ hours without ever returning from
+# camera.grab(). That call is made directly on the auto-capture thread with
+# no timeout, so the ENTIRE capture pipeline (screen_capture, OCR, and
+# everything downstream of the same thread) silently stalled for the whole
+# window -- every liveness check stayed green because the thread was
+# alive, just blocked inside a third-party library. A blocking call cannot
+# be bounded with except; it needs a real timeout.
+#
+# Deliberately NOT concurrent.futures.ThreadPoolExecutor: its worker threads
+# are non-daemon by design (so queued work isn't dropped at interpreter
+# exit), and Python's own shutdown machinery joins every non-daemon thread
+# before exiting. Reproduced directly: a plain ThreadPoolExecutor with one
+# worker permanently blocked in Event.wait() prevented the whole process
+# from exiting at all (still running after 120s+, had to be taskkilled) --
+# using it here would trade "capture silently stalls" for "the daemon can
+# no longer shut down once a camera wedges." A bare `daemon=True`
+# threading.Thread has no such registry and is abandoned for free.
+_DXCAM_GRAB_TIMEOUT_SEC = 5.0
+_DXCAM_MAX_CONSECUTIVE_TIMEOUTS = 3
+_dxcam_timeout_counts: dict[int, int] = {}
+
+
+def _dxcam_grab_bounded(camera: object, output_idx: int) -> np.ndarray | None:
+    """Call ``camera.grab()`` with a hard wall-clock timeout.
+
+    Returns the frame on success, or None on timeout (treated identically
+    to dxcam returning None or raising -- caller falls back to mss). A
+    genuine exception raised inside grab() re-raises on the calling thread
+    unchanged, so existing exception handling at call sites is untouched.
+
+    After ``_DXCAM_MAX_CONSECUTIVE_TIMEOUTS`` consecutive timeouts for a
+    given monitor, the cached camera is evicted (mirrors the existing
+    None-caching pattern for ``dxcam.create()`` failures) so future
+    captures skip DXcam entirely for that monitor instead of repeatedly
+    spawning a thread behind an already-stuck grab().
+
+    Note: the daemon thread blocked inside the real ``camera.grab()`` is
+    abandoned, not killed -- Python cannot forcibly terminate a thread. This
+    unblocks the CALLING thread, which is what keeps the pipeline alive; it
+    does not free the stuck worker, and the interpreter can still exit
+    around it because the thread is daemon.
+    """
+    box: dict[str, object] = {}
+
+    def _run() -> None:
+        try:
+            box["frame"] = camera.grab()
+        except BaseException as exc:  # noqa: BLE001 -- re-raised on caller's thread below
+            box["exc"] = exc
+
+    worker = threading.Thread(target=_run, daemon=True, name=f"dxcam-grab-{output_idx}")
+    worker.start()
+    worker.join(timeout=_DXCAM_GRAB_TIMEOUT_SEC)
+
+    if worker.is_alive():
+        count = _dxcam_timeout_counts.get(output_idx, 0) + 1
+        _dxcam_timeout_counts[output_idx] = count
+        logger.warning(
+            "DXcam grab() exceeded %.1fs timeout for monitor %d (consecutive "
+            "timeout %d/%d) -- output may be detached (lock/sleep/reconfig); "
+            "falling back to mss",
+            _DXCAM_GRAB_TIMEOUT_SEC, output_idx, count, _DXCAM_MAX_CONSECUTIVE_TIMEOUTS,
+        )
+        if count >= _DXCAM_MAX_CONSECUTIVE_TIMEOUTS:
+            logger.warning(
+                "DXcam monitor %d exceeded %d consecutive grab timeouts -- "
+                "evicting camera, future captures use mss until process restart",
+                output_idx, _DXCAM_MAX_CONSECUTIVE_TIMEOUTS,
+            )
+            _dxcam_cameras[output_idx] = None
+        return None
+
+    _dxcam_timeout_counts[output_idx] = 0
+    if "exc" in box:
+        raise box["exc"]  # type: ignore[misc]
+    return box.get("frame")  # type: ignore[return-value]
 
 
 def _get_backend() -> str:
@@ -135,7 +217,7 @@ def capture_active_monitor() -> tuple[int, Image.Image]:
         camera = _get_dxcam_camera(idx)
         if camera is not None:
             try:
-                frame = camera.grab()
+                frame = _dxcam_grab_bounded(camera, idx)
                 if frame is not None:
                     return idx, _downscale(_dxcam_to_pil(frame))
                 logger.debug("DXcam returned None for monitor %d, falling back to mss", idx)
@@ -164,7 +246,7 @@ def capture_single_monitor(index: int) -> Image.Image:
         camera = _get_dxcam_camera(index)
         if camera is not None:
             try:
-                frame = camera.grab()
+                frame = _dxcam_grab_bounded(camera, index)
                 if frame is not None:
                     return _downscale(_dxcam_to_pil(frame))
                 logger.debug("DXcam returned None for monitor %d, falling back to mss", index)
@@ -204,7 +286,7 @@ def capture_all_monitors(
                 camera = _get_dxcam_camera(i)
                 if camera is not None:
                     try:
-                        frame = camera.grab()
+                        frame = _dxcam_grab_bounded(camera, i)
                         if frame is not None:
                             native = _dxcam_to_pil(frame)
                             scaled = _downscale(native.copy())
