@@ -132,6 +132,10 @@ git clone https://github.com/ContextPulse/contextpulse
 cd contextpulse
 pip install -e packages/core -e packages/screen -e packages/voice -e packages/touch -e packages/project
 
+# On Apple Silicon or Intel Mac, also install the macOS voice extra
+# (mlx-whisper) -- without it, transcription raises at runtime:
+pip install -e "packages/voice[macos]"
+
 # Optional: persistent memory + semantic search
 pip install -e packages/memory
 ```
