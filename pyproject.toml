@@ -33,7 +33,7 @@ dependencies = [
     "Pillow>=10.0",
     "numpy>=1.26",
     "rapidocr-onnxruntime>=1.2",
-    "mcp>=1.0",
+    "mcp>=1.0,<2",
     "faster-whisper>=1.0",
     "sounddevice>=0.4",
     "pyperclip>=1.8",
@@ -52,7 +52,7 @@ Documentation = "https://github.com/ContextPulse/contextpulse#readme"
 [project.optional-dependencies]
 # contextpulse-memory source is vendored via packages.find; mcp[cli] is the only
 # extra third-party need the memory sub-package declares beyond the base deps.
-memory = ["mcp[cli]>=1.0"]
+memory = ["mcp[cli]>=1.0,<2"]
 macos = [
     "pyobjc-framework-Cocoa>=12.1",
     "pyobjc-framework-Quartz>=10.0",
