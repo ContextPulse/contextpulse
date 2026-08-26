@@ -145,7 +145,11 @@ ContextPulse Voice gets smarter over time through multiple learning channels:
 4. **Session learning** (on-demand): `learn_from_session()` finds patterns in transcription history
 5. **User vocabulary** (manual): User edits the vocabulary file in the ContextPulse data directory
 
-Run `learn_from_session(hours=4, dry_run=False)` periodically to harvest correction patterns.
+Run `learn_from_session(hours=168, dry_run=False)` periodically to harvest correction patterns —
+use a wide window (a week, not a single session): the learner needs 2+ occurrences of the same
+CamelCase pattern to promote a correction, and a short window usually finds zero even when
+dictation is active (a single 4h window can show 0/5 corrections while a 168h window over the
+same account finds 6 real patterns).
 After creating new projects, run `rebuild_context_vocabulary()` to update project names.
 
 ## What NOT to do
@@ -223,7 +227,9 @@ ContextPulse Voice vocabulary file in the data directory.
 
 For best results, run dictation analysis periodically:
 1. `get_voice_stats(hours=4)` — skip if no dictation this session
-2. `learn_from_session(hours=4, dry_run=False)` — learn from recent patterns
+2. `learn_from_session(hours=168, dry_run=False)` — learn from a week of patterns, not just this
+   session; the CamelCase promotion rule needs 2+ occurrences of the same phrase, which a short
+   window rarely has even when dictation volume is high
 3. `rebuild_context_vocabulary()` — refresh if projects changed
 
 ## Common Whisper Failure Patterns
