@@ -38,12 +38,43 @@ CREATE TABLE IF NOT EXISTS events (
     correlation_id TEXT,
     attention_score REAL DEFAULT 0.0,
     cognitive_load REAL DEFAULT 0.0,
-    created_at REAL NOT NULL DEFAULT (unixepoch('subsec'))
+    created_at REAL NOT NULL DEFAULT (unixepoch('subsec')),
+    text_content TEXT GENERATED ALWAYS AS (
+        COALESCE(
+            json_extract(payload, '$.ocr_text'),
+            json_extract(payload, '$.transcript'),
+            json_extract(payload, '$.text'),
+            ''
+        )
+    ) VIRTUAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_events_modality ON events(modality, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_events_app ON events(app_name, timestamp DESC);
+"""
+
+# Migration for databases created before text_content existed on `events`.
+# events_fts declares content='events' with a text_content column, so FTS5's
+# column-value retrieval path (snippet(), highlight(), or a direct SELECT of
+# any declared column off the virtual table) executes
+# "SELECT window_title, app_name, text_content FROM events WHERE rowid=?"
+# against the content table. Without this column that SELECT raises
+# "no such column: text_content" -- MATCH and bm25() ranking are unaffected
+# (they use FTS5's own index, not the content table), which is why this was
+# silent. A VIRTUAL generated column (not STORED) is required here: SQLite
+# forbids ALTER TABLE ... ADD COLUMN ... STORED on a table with existing
+# rows (cannot add a STORED column), but VIRTUAL columns are computed on
+# read and can be added to a populated table in one fast metadata-only op.
+_MIGRATE_TEXT_CONTENT_SQL = """
+ALTER TABLE events ADD COLUMN text_content TEXT GENERATED ALWAYS AS (
+    COALESCE(
+        json_extract(payload, '$.ocr_text'),
+        json_extract(payload, '$.transcript'),
+        json_extract(payload, '$.text'),
+        ''
+    )
+) VIRTUAL;
 """
 
 # FTS5 and triggers are created separately because they require special handling
@@ -111,6 +142,7 @@ class EventBus:
         """Create events table and FTS index if they don't exist."""
         with self._lock:
             self._conn.executescript(_SCHEMA_SQL)
+            self._migrate_text_content_column()
             # FTS5 creation needs special handling — check if it exists first
             try:
                 self._conn.execute(
@@ -130,6 +162,25 @@ class EventBus:
                 self._conn.executescript(_TRIGGER_INSERT_SQL)
                 self._conn.executescript(_TRIGGER_DELETE_SQL)
             self._conn.commit()
+
+    def _migrate_text_content_column(self) -> None:
+        """Add text_content to `events` if missing (pre-migration databases).
+
+        Caller must already hold self._lock. See _MIGRATE_TEXT_CONTENT_SQL
+        for why this must be a VIRTUAL column, not STORED.
+        """
+        # PRAGMA table_info() omits GENERATED columns entirely (verified
+        # empirically -- a VIRTUAL generated column simply does not appear
+        # in its output). table_xinfo() is the variant that includes them;
+        # using table_info() here would make this check always report the
+        # column missing and re-run the ALTER on every startup, which fails
+        # with "duplicate column name" the second time.
+        cursor = self._conn.execute("PRAGMA table_xinfo(events)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if "text_content" not in columns:
+            self._conn.executescript(_MIGRATE_TEXT_CONTENT_SQL)
+            self._conn.commit()
+            logger.info("Migrated events table: added text_content generated column")
 
     def emit(self, event: ContextEvent) -> None:
         """Validate and persist an event, then notify listeners.

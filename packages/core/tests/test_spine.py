@@ -209,6 +209,62 @@ class TestEventBus:
             assert cursor.fetchone()[0] == "test"
         b.close()
 
+    def test_migration_adds_text_content_to_preexisting_events_table(self, tmp_path):
+        """Regression test for cp-events-fts-column-retrieval-broken.
+
+        A database created before the text_content column existed must be
+        migrated in place (not silently ignored) when EventBus reopens it,
+        and existing rows must survive.
+        """
+        db_path = tmp_path / "pre_migration.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            """CREATE TABLE events (
+                event_id TEXT PRIMARY KEY,
+                timestamp REAL NOT NULL,
+                modality TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                app_name TEXT DEFAULT '',
+                window_title TEXT DEFAULT '',
+                monitor_index INTEGER DEFAULT 0,
+                payload TEXT NOT NULL,
+                correlation_id TEXT,
+                attention_score REAL DEFAULT 0.0,
+                cognitive_load REAL DEFAULT 0.0,
+                created_at REAL NOT NULL DEFAULT (unixepoch('subsec'))
+            )"""
+        )
+        conn.execute(
+            "INSERT INTO events (event_id, timestamp, modality, event_type, payload) "
+            "VALUES ('pre1', 1.0, 'sight', 'ocr_result', '{\"ocr_text\": \"old row\"}')"
+        )
+        conn.commit()
+        conn.close()
+
+        # PRAGMA table_info() omits GENERATED columns; table_xinfo() is the
+        # variant that includes them (verified empirically -- see bus.py's
+        # _migrate_text_content_column docstring).
+        columns_before = {
+            row[1]
+            for row in sqlite3.connect(str(db_path)).execute("PRAGMA table_xinfo(events)")
+        }
+        assert "text_content" not in columns_before
+
+        b = EventBus(db_path)
+        try:
+            with b._lock:
+                columns_after = {
+                    row[1] for row in b._conn.execute("PRAGMA table_xinfo(events)")
+                }
+                assert "text_content" in columns_after
+                # Pre-existing row must survive the migration.
+                row = b._conn.execute(
+                    "SELECT text_content FROM events WHERE event_id='pre1'"
+                ).fetchone()
+                assert row[0] == "old row"
+        finally:
+            b.close()
+
     def test_emit_and_count(self, bus):
         event = ContextEvent(
             modality=Modality.SIGHT,
@@ -267,6 +323,38 @@ class TestEventBus:
         ))
         results = bus.search("connection refused", minutes_ago=5)
         assert len(results) >= 1
+
+    def test_events_fts_column_retrieval_works(self, bus):
+        """Regression test for cp-events-fts-column-retrieval-broken.
+
+        events_fts is an external-content FTS5 table (content='events').
+        FTS5's column-retrieval path (snippet(), highlight(), or a direct
+        SELECT of a declared column) queries the content table by column
+        name, which used to raise "no such column: text_content" because
+        events had no such column -- MATCH/bm25() ranking stayed silent-green
+        throughout because those use FTS5's own index, not this path.
+        """
+        bus.emit(ContextEvent(
+            modality=Modality.SIGHT,
+            event_type=EventType.OCR_RESULT,
+            payload={"ocr_text": "hello world regression test"},
+        ))
+        with bus._lock:
+            # Direct column retrieval off the virtual table.
+            row = bus._conn.execute(
+                "SELECT text_content FROM events_fts WHERE events_fts MATCH 'hello'"
+            ).fetchone()
+            assert row is not None
+            assert "hello world" in row[0]
+
+            # snippet()/highlight() specifically -- these are what the
+            # original finding named as broken.
+            snippet_row = bus._conn.execute(
+                "SELECT snippet(events_fts, 2, '[', ']', '...', 6) "
+                "FROM events_fts WHERE events_fts MATCH 'hello'"
+            ).fetchone()
+            assert snippet_row is not None
+            assert "[hello]" in snippet_row[0]
 
     def test_search_voice_transcript(self, bus):
         bus.emit(ContextEvent(
