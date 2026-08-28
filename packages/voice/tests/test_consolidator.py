@@ -13,6 +13,7 @@ from contextpulse_voice.consolidator import (
     _backup_vocab_files,
     _cross_modal_correction_mining,
     _deduplicate_vocab_layers,
+    _emit_consolidation_event,
     consolidate_vocabulary,
 )
 
@@ -165,6 +166,46 @@ class TestConsolidateVocabulary:
 
         assert calls.index("rebuild") < calls.index("ocr")
         assert calls.index("rebuild") < calls.index("clipboard")
+
+    def test_emit_consolidation_event_actually_lands(self, tmp_path):
+        """Regression test: _emit_consolidation_event imported a module that
+        does not exist (contextpulse_core.spine.event_bus) and called
+        EventBus() with no db_path, so every call raised before EventBus()
+        was even reached -- silently, because the caller wraps this in a
+        bare `except Exception: logger.debug(...)`. Never caught by any
+        test because no test called it without mocking around the failure.
+        """
+        db = _make_db(tmp_path)
+        _emit_consolidation_event({"session_learned": 3, "errors": {}}, db_path=db)
+
+        conn = sqlite3.connect(str(db))
+        try:
+            row = conn.execute(
+                "SELECT event_type, payload FROM events "
+                "WHERE event_type = 'learning_consolidation'"
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row is not None, (
+            "no learning_consolidation event was written -- "
+            "_emit_consolidation_event silently failed"
+        )
+        assert json.loads(row[1])["session_learned"] == 3
+
+    def test_consolidate_vocabulary_emits_event_using_its_own_db_path(self, tmp_path):
+        """consolidate_vocabulary must thread its db_path into the emitted
+        event rather than always defaulting to the real activity.db."""
+        db = _make_db(tmp_path)
+        consolidate_vocabulary(db_path=db, dry_run=True)
+
+        conn = sqlite3.connect(str(db))
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM events WHERE event_type = 'learning_consolidation'"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        assert count == 1
 
     def test_dedup_failure_recorded_and_does_not_crash_run(self, tmp_path):
         db = _make_db(tmp_path)

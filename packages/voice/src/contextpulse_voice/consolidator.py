@@ -152,7 +152,7 @@ def consolidate_vocabulary(
     # just happened; its own failure doesn't invalidate any step's data, so
     # it is intentionally excluded from summary["errors"].
     try:
-        _emit_consolidation_event(summary)
+        _emit_consolidation_event(summary, db_path)
     except Exception:
         logger.debug("Failed to emit consolidation event", exc_info=True)
 
@@ -386,18 +386,28 @@ def _deduplicate_vocab_layers() -> int:
     return len(to_remove)
 
 
-def _emit_consolidation_event(summary: dict) -> None:
-    """Emit a LEARNING_CONSOLIDATION event to the EventBus."""
+def _emit_consolidation_event(summary: dict, db_path: Path | None = None) -> None:
+    """Emit a LEARNING_CONSOLIDATION event to the EventBus.
+
+    db_path follows the same None -> ACTIVITY_DB_PATH convention as
+    ocr_harvester/clipboard_harvester/escalation in this module, so a
+    caller-supplied db_path (e.g. a test's tmp_path) is honored instead of
+    always writing to the real activity.db.
+    """
     try:
-        from contextpulse_core.spine import ContextEvent, EventType, Modality
-        from contextpulse_core.spine.event_bus import EventBus
+        from contextpulse_core.spine import ContextEvent, EventBus, EventType, Modality
+
+        if db_path is None:
+            from contextpulse_core.config import ACTIVITY_DB_PATH
+            db_path = ACTIVITY_DB_PATH
 
         event = ContextEvent(
             modality=Modality.SYSTEM,
             event_type=EventType.LEARNING_CONSOLIDATION,
             payload=summary,
         )
-        bus = EventBus()
+        bus = EventBus(db_path)
         bus.emit(event)
+        bus.close()
     except Exception:
         logger.debug("Could not emit consolidation event", exc_info=True)
