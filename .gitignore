@@ -34,7 +34,7 @@ desktop.ini
 # Runtime output
 screenshots/
 logs/
-daemon_stderr.log
+daemon_stderr.log*
 daemon_stdout.log
 mcp_unified_stderr.log
 
