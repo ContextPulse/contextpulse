@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import patch
 
 import pytest
 
@@ -74,6 +75,24 @@ class TestMemoryRecallTool:
 
 
 class TestMemorySearchTool:
+    """memory_search is Pro-gated (@_require_pro -> has_pro_access()).
+
+    has_pro_access() falls back to `not is_trial_expired()` when unlicensed,
+    which reads real trial-state from disk on whatever machine runs the
+    suite — so these tests were silently exercising the DENIED-tier error
+    response (no "count" key) whenever the ambient trial happened to read as
+    expired, instead of the real search path. Every assertion in this class
+    was a KeyError waiting on machine state, not a search bug. Pro access is
+    now explicitly granted per-test (matching the pattern already used in
+    packages/screen/tests/test_pro_tools.py), so these tests are hermetic
+    and actually exercise store.hybrid_search()/search().
+    """
+
+    @pytest.fixture(autouse=True)
+    def _grant_pro_access(self):
+        with patch("contextpulse_memory.mcp_server.has_pro_access", return_value=True):
+            yield
+
     def test_search_finds_match(self):
         memory_store("search_key", "unique_content_alpha_xyz")
         result = json.loads(memory_search("alpha"))
@@ -93,6 +112,15 @@ class TestMemorySearchTool:
         memory_store("project_context", "ContextPulse is a memory engine")
         result = json.loads(memory_search("project"))
         assert result["count"] >= 1
+
+    def test_search_denied_without_pro_access(self):
+        """Regression guard for the gate itself: without Pro access,
+        memory_search must return the denied-tier error shape, not raise
+        and not silently succeed."""
+        with patch("contextpulse_memory.mcp_server.has_pro_access", return_value=False):
+            result = json.loads(memory_search("alpha"))
+        assert "error" in result
+        assert "count" not in result
 
 
 class TestMemoryListTool:

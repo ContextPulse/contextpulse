@@ -646,32 +646,17 @@ class ContextPulseDaemon:
     # ── Main Entry ────────────────────────────────────────────────
 
     def run(self) -> None:
-        """Main entry point — single-instance guard, start modules, run tray."""
-        # Single-instance guard via platform provider
-        platform = get_platform_provider()
+        """Main entry point — single-instance guard, start modules, run tray.
 
-        # Kill zombie ContextPulse processes before acquiring mutex.
-        # These are leftover pythonw processes from previous crashes or
-        # the mutex race condition (fixed in windows.py).
-        my_pid = os.getpid()
-        if hasattr(platform, "find_contextpulse_processes"):
-            zombies = platform.find_contextpulse_processes(exclude_pid=my_pid)
-            if zombies:
-                logger.warning(
-                    "Found %d zombie ContextPulse process(es): %s — killing",
-                    len(zombies), zombies,
-                )
-                for pid in zombies:
-                    platform.kill_process(pid)
-                    logger.info("Killed zombie pid=%d", pid)
-                # Brief pause to let the OS release the mutex
-                time.sleep(0.5)
-
-        self._mutex = platform.acquire_single_instance_lock("ContextPulse_SingleInstance")
-        if self._mutex is None:
-            logger.error("ContextPulse is already running. Exiting.")
-            print("ContextPulse is already running.", file=sys.stderr)
-            sys.exit(1)
+        The single-instance guard normally already ran in ``main()`` BEFORE
+        this daemon was constructed, so ``self._mutex`` is pre-set here (see
+        ``_acquire_single_instance_or_exit`` and cp-daemon-double-launch-
+        race-wastes-4s). This is a fallback for any caller that constructs
+        and runs a ``ContextPulseDaemon`` directly without going through
+        ``main()`` first — it keeps ``run()`` a complete guard on its own.
+        """
+        if not getattr(self, "_mutex", None):
+            self._mutex = _acquire_single_instance_or_exit()
 
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -794,6 +779,45 @@ def _write_fatal_crash_log(header: str) -> None:
         pass
 
 
+def _acquire_single_instance_or_exit() -> object:
+    """Kill zombie ContextPulse processes and acquire the single-instance mutex.
+
+    Exits the process (``sys.exit(1)``) if another instance already holds
+    the lock. Extracted to a standalone function so ``main()`` can call it
+    BEFORE constructing ``ContextPulseDaemon()`` — module init (Sight, Voice,
+    Touch, the Phase-1 knowledge ingestor) does real work, and paying that
+    cost only to discover another instance already won the race wastes it
+    every time two launch attempts overlap (observed ~4-7s per occurrence at
+    the nightly 4am restart racing a manual relaunch — see
+    cp-daemon-double-launch-race-wastes-4s).
+    """
+    platform = get_platform_provider()
+
+    # Kill zombie ContextPulse processes before acquiring mutex. These are
+    # leftover pythonw processes from previous crashes or the mutex race
+    # condition (fixed in windows.py).
+    my_pid = os.getpid()
+    if hasattr(platform, "find_contextpulse_processes"):
+        zombies = platform.find_contextpulse_processes(exclude_pid=my_pid)
+        if zombies:
+            logger.warning(
+                "Found %d zombie ContextPulse process(es): %s — killing",
+                len(zombies), zombies,
+            )
+            for pid in zombies:
+                platform.kill_process(pid)
+                logger.info("Killed zombie pid=%d", pid)
+            # Brief pause to let the OS release the mutex
+            time.sleep(0.5)
+
+    mutex = platform.acquire_single_instance_lock("ContextPulse_SingleInstance")
+    if mutex is None:
+        logger.error("ContextPulse is already running. Exiting.")
+        print("ContextPulse is already running.", file=sys.stderr)
+        sys.exit(1)
+    return mutex
+
+
 def main() -> None:
     """Entry point for contextpulse CLI command."""
     _setup_logging()
@@ -824,9 +848,16 @@ def main() -> None:
         print_ecosystem_status()
         return
 
+    # Acquire the single-instance guard BEFORE constructing ContextPulseDaemon()
+    # -- module init (Sight/Voice/Touch/knowledge) does real work, and checking
+    # the mutex first means a losing launch attempt exits immediately instead
+    # of paying that cost only to discover it lost the race.
+    mutex = _acquire_single_instance_or_exit()
+
     try:
         logger.info("ContextPulse daemon starting (pid=%d)", os.getpid())
         daemon = ContextPulseDaemon()
+        daemon._mutex = mutex
         daemon.run()
     except MemoryError:
         logger.error("Fatal MemoryError — forcing GC and writing crash log")

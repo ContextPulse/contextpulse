@@ -5,7 +5,7 @@ bugs that unit tests with mocked threading cannot find.
 """
 
 import inspect
-import time
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -127,22 +127,86 @@ class TestModuleLifecycle:
 
 
 class TestSingleInstanceGuard:
-    """Daemon must prevent duplicate instances."""
+    """Daemon must prevent duplicate instances.
 
-    def test_daemon_acquires_mutex(self):
-        """run() must call acquire_single_instance_lock."""
-        from contextpulse_core.daemon import ContextPulseDaemon
+    cp-daemon-double-launch-race-wastes-4s: two overlapping launch attempts
+    (e.g. the nightly 4am restart racing a manual relaunch) used to both pay
+    the full Sight/Voice/Touch/Whisper module-init cost (~4-7s observed)
+    before either one checked the mutex, because ``main()`` constructed
+    ``ContextPulseDaemon()`` (which runs all four ``_init_*`` methods) BEFORE
+    calling ``run()`` (where the mutex check lived). The loser did all that
+    work only to discover it lost the race. The guard now runs in ``main()``
+    before the daemon is constructed at all; ``run()`` keeps a fallback copy
+    of the same guard for any caller that constructs+runs a
+    ``ContextPulseDaemon`` directly without going through ``main()`` first.
+    """
 
-        source = inspect.getsource(ContextPulseDaemon.run)
+    def test_guard_helper_acquires_mutex(self):
+        """The extracted guard must call acquire_single_instance_lock."""
+        from contextpulse_core.daemon import _acquire_single_instance_or_exit
+
+        source = inspect.getsource(_acquire_single_instance_or_exit)
         assert "acquire_single_instance_lock" in source, (
-            "Daemon must acquire a single-instance mutex on startup"
+            "Single-instance guard must acquire a mutex on startup"
         )
 
-    def test_daemon_exits_if_already_running(self):
-        """run() must exit if another instance holds the mutex."""
+    def test_guard_helper_exits_if_already_running(self):
+        """The extracted guard must exit if another instance holds the mutex."""
+        from contextpulse_core.daemon import _acquire_single_instance_or_exit
+
+        source = inspect.getsource(_acquire_single_instance_or_exit)
+        assert "sys.exit" in source, (
+            "Guard must exit the process if the single-instance lock fails"
+        )
+
+    def test_run_still_guards_when_mutex_not_preacquired(self):
+        """run() must remain a complete guard on its own (fallback path) for
+        any caller that constructs+runs a daemon without going through
+        main() first — it must not silently skip the check."""
         from contextpulse_core.daemon import ContextPulseDaemon
 
         source = inspect.getsource(ContextPulseDaemon.run)
-        assert "sys.exit" in source or "return" in source, (
-            "Daemon must exit if single-instance lock fails"
+        assert "_acquire_single_instance_or_exit" in source, (
+            "run() must fall back to the single-instance guard when "
+            "self._mutex was not already set by main()"
         )
+
+    def test_main_acquires_guard_before_constructing_daemon(self):
+        """main() must call the guard BEFORE constructing ContextPulseDaemon()
+        -- this is the actual fix: checking the mutex first means a losing
+        launch attempt exits immediately instead of paying the full
+        Sight/Voice/Touch/Whisper module-init cost only to discover it lost
+        the race."""
+        from contextpulse_core.daemon import main
+
+        source = inspect.getsource(main)
+        guard_pos = source.find("mutex = _acquire_single_instance_or_exit(")
+        construct_pos = source.find("= ContextPulseDaemon()")
+        assert guard_pos != -1, "main() must call the single-instance guard"
+        assert construct_pos != -1, "main() must construct ContextPulseDaemon()"
+        assert guard_pos < construct_pos, (
+            "main() must acquire the single-instance guard BEFORE "
+            "constructing ContextPulseDaemon() — otherwise module init "
+            "(Sight/Voice/Touch/Whisper) runs before the mutex is checked"
+        )
+
+    def test_main_exits_without_constructing_daemon_when_already_running(self):
+        """Behavioral proof: when another instance holds the mutex, main()
+        must exit WITHOUT ever constructing a ContextPulseDaemon — i.e.
+        without ever calling any of the expensive _init_* methods."""
+        mock_platform = MagicMock()
+        mock_platform.find_contextpulse_processes.return_value = []
+        mock_platform.acquire_single_instance_lock.return_value = None  # already running
+
+        mock_daemon_cls = MagicMock()
+
+        with patch("contextpulse_core.daemon.get_platform_provider", return_value=mock_platform), \
+             patch("contextpulse_core.daemon.ContextPulseDaemon", mock_daemon_cls), \
+             patch("contextpulse_core.daemon._setup_logging"), \
+             patch("contextpulse_core.daemon.sys.argv", ["contextpulse"]):
+            from contextpulse_core.daemon import main
+
+            with pytest.raises(SystemExit):
+                main()
+
+        mock_daemon_cls.assert_not_called()
