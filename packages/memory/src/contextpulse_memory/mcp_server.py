@@ -22,6 +22,7 @@ import os
 import threading
 from pathlib import Path
 
+from contextpulse_core.license import get_license_tier, has_pro_access
 from mcp.server.fastmcp import FastMCP
 
 from contextpulse_memory.storage import MemoryStore
@@ -50,7 +51,6 @@ def _require_pro(func):
     """Gate a tool behind Pro license (or active trial)."""
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        from contextpulse_core.license import get_license_tier, has_pro_access
         if has_pro_access():
             return func(*args, **kwargs)
         tier = get_license_tier()
