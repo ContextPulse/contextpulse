@@ -393,7 +393,7 @@ ENTITIES
   aliases, abbreviations, vendor prefixes, and misspellings into the most
   specific name the person themselves uses: "ToS" / "thinkorswim" /
   "TD Ameritrade thinkorswim" -> "thinkorswim"; "Bob" / "Robert Chen" /
-  "rchen@acme.com" -> "Robert Chen".
+  "rchen (Slack handle)" -> "Robert Chen".
 - Prefer the project over the file, the person over their email address, the
   product over its parent company (unless the fact is about the company).
 
