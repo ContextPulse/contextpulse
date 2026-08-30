@@ -109,7 +109,13 @@ def get_voice_stats(hours: float = 8.0) -> str:
         conn.close()
 
         if not rows:
-            return f"No dictations in the last {hours:.0f} hours."
+            return (
+                f"No dictations in the last {hours:.0f} hours. "
+                "Note: this covers local ContextPulse voice capture only -- "
+                "dictation done through a remote client (e.g. the Claude "
+                "mobile app, an iPad, another machine) is not instrumented "
+                "here and will never appear in this count."
+            )
 
         total = len(rows)
         total_duration = 0.0

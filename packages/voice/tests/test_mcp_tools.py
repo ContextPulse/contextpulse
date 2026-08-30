@@ -53,6 +53,35 @@ class TestGetVoiceStats:
             result = get_voice_stats()
         assert "No activity database" in result
 
+    def test_zero_rows_names_the_local_capture_scope(self, tmp_path):
+        """A zero-row result must say WHY it might be zero (local-only capture),
+        not just report a bare count that reads identically to "nothing to learn
+        from" when the real cause is "this channel is not instrumented" --
+        see voice-learning-blind-to-mobile-dictation."""
+        import sqlite3
+
+        from contextpulse_voice.mcp_server import get_voice_stats
+
+        db_path = tmp_path / "empty.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("""
+            CREATE TABLE events (
+                event_id TEXT PRIMARY KEY, timestamp REAL, modality TEXT,
+                event_type TEXT, app_name TEXT, window_title TEXT,
+                monitor_index INTEGER, payload TEXT, correlation_id TEXT,
+                attention_score REAL
+            )
+        """)
+        conn.commit()
+        conn.close()
+
+        with patch("contextpulse_voice.mcp_server._DB_PATH", db_path):
+            result = get_voice_stats(hours=24)
+
+        assert "No dictations" in result
+        assert "local ContextPulse voice capture only" in result
+        assert "not instrumented" in result
+
 
 class TestGetVocabulary:
     def test_returns_all(self, tmp_path):
