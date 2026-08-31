@@ -22,8 +22,12 @@ logger = logging.getLogger(__name__)
 # Common English words/phrases that should NOT be replaced even if they
 # match a CamelCase split. E.g., "island model" is valid English.
 _COMMON_PHRASES: set[str] = {
-    "personal finance", "stock market", "tax prep", "death planning",
-    "island model", "screen context",
+    "personal finance",
+    "stock market",
+    "tax prep",
+    "death planning",
+    "island model",
+    "screen context",
 }
 
 # Minimum key length in characters to avoid overly aggressive matching.
@@ -204,7 +208,9 @@ def build_context_vocabulary(
 
     logger.info(
         "Built context vocabulary: %d entries (projects=%s, skills=%s)",
-        len(vocab), projects_root, [str(d) for d in skills_dirs],
+        len(vocab),
+        projects_root,
+        [str(d) for d in skills_dirs],
     )
     return vocab
 
@@ -248,6 +254,42 @@ def merge_terms_to_context_vocab(terms: list[dict]) -> int:
         )
 
     return added
+
+
+def find_stale_harvested_garbage(
+    entries: dict[str, str] | None = None,
+    projects_root: Path | None = None,
+    skills_dirs: list[Path] | None = None,
+) -> dict[str, str]:
+    """Identify pre-guard entries that is_safe_harvested_phrase() would reject today.
+
+    merge_terms_to_context_vocab() is additive-only (see its own docstring), and
+    is_safe_harvested_phrase() was added after OCR/clipboard harvesting had
+    already been accumulating entries -- so phrases harvested before the guard
+    existed are still sitting in the live file even though the current guard
+    would reject them (cp-vocab-context-file-has-existing-garbage).
+
+    An entry is flagged only if BOTH:
+      1. it is NOT reproduced by a fresh directory/skills scan. Scan-sourced
+         entries never go through is_safe_harvested_phrase() at all -- see that
+         function's own docstring -- so a legitimate long or 3+-word project or
+         skill name must never be flagged here just because it resembles the
+         shape the guard rejects.
+      2. is_safe_harvested_phrase(key) is False today.
+
+    This is deliberately conservative and read-only: it never deletes anything
+    itself, and it never flags anything a scan can explain. See
+    scripts/cleanup_vocab_garbage.py for the reviewed, backed-up, dry-run-first
+    cleanup that consumes this.
+    """
+    if entries is None:
+        entries = get_context_entries()
+    scan_vocab = build_context_vocabulary(projects_root, skills_dirs=skills_dirs)
+    return {
+        key: value
+        for key, value in entries.items()
+        if key not in scan_vocab and not is_safe_harvested_phrase(key)
+    }
 
 
 def rebuild_context_vocabulary(
