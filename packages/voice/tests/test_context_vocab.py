@@ -10,6 +10,7 @@ from contextpulse_voice.context_vocab import (
     _extract_names_from_context,
     _split_camel_to_phrase,
     build_context_vocabulary,
+    find_stale_harvested_garbage,
     get_context_entries,
     get_known_proper_nouns,
     is_safe_harvested_phrase,
@@ -177,6 +178,60 @@ class TestBuildContextVocabulary:
         assert vocab["context pulse"] == "ContextPulse"
 
 
+class TestFindStaleHarvestedGarbage:
+    """Regression tests for cp-vocab-context-file-has-existing-garbage.
+
+    is_safe_harvested_phrase() (added for cp-vocab-camelcases-common-phrases)
+    only guards NEW harvested entries -- merge_terms_to_context_vocab() is
+    additive-only, so entries harvested before the guard existed are still
+    sitting in the live file even though the guard would reject them today.
+    find_stale_harvested_garbage() identifies that class without touching
+    anything a fresh directory/skills scan can explain, since scan-sourced
+    entries never go through the harvested-phrase guard at all.
+    """
+
+    def test_flags_pre_guard_ocr_artifact(self, tmp_path):
+        entries = {"checkedforlast run atnewerthanmywrite": "CheckedForLastRunAtNewerThanMyWrite"}
+        garbage = find_stale_harvested_garbage(entries, projects_root=tmp_path, skills_dirs=[])
+        assert "checkedforlast run atnewerthanmywrite" in garbage
+
+    def test_flags_pre_guard_three_word_phrase(self, tmp_path):
+        entries = {"day trading strategies": "DayTradingStrategies"}
+        garbage = find_stale_harvested_garbage(entries, projects_root=tmp_path, skills_dirs=[])
+        assert "day trading strategies" in garbage
+
+    def test_does_not_flag_entry_that_passes_current_guard(self, tmp_path):
+        entries = {"nimbus flow": "NimbusFlow"}
+        garbage = find_stale_harvested_garbage(entries, projects_root=tmp_path, skills_dirs=[])
+        assert "nimbus flow" not in garbage
+
+    def test_does_not_flag_scan_sourced_entry_even_if_it_would_fail_the_guard(self, tmp_path):
+        # A real project name that is legitimately long / multi-word must survive
+        # even though it would fail is_safe_harvested_phrase() -- scan-sourced
+        # entries are never subject to that guard (see the guard's own docstring).
+        (tmp_path / "SupercalifragilisticExpialidociousProject").mkdir()
+        vocab = build_context_vocabulary(tmp_path, skills_dirs=[])
+        long_key = next(iter(vocab))  # the scan's own derived key
+        entries = dict(vocab)
+        garbage = find_stale_harvested_garbage(entries, projects_root=tmp_path, skills_dirs=[])
+        assert long_key not in garbage
+
+    def test_empty_entries_returns_empty(self, tmp_path):
+        assert find_stale_harvested_garbage({}, projects_root=tmp_path, skills_dirs=[]) == {}
+
+    def test_defaults_to_live_context_entries_when_none_passed(self, monkeypatch, tmp_path):
+        context_file = tmp_path / "vocabulary_context.json"
+        context_file.write_text(
+            json.dumps({"day trading strategies": "DayTradingStrategies"}),
+            encoding="utf-8",
+        )
+        from contextpulse_voice import context_vocab as cv
+
+        monkeypatch.setattr(cv, "CONTEXT_VOCAB_FILE", context_file)
+        garbage = find_stale_harvested_garbage(projects_root=tmp_path, skills_dirs=[])
+        assert garbage == {"day trading strategies": "DayTradingStrategies"}
+
+
 class TestRebuildAndGet:
     """Tests for rebuild, get_context_entries, and get_known_proper_nouns."""
 
@@ -213,13 +268,16 @@ class TestRebuildAndGet:
         """
         vocab_file = tmp_path / "vocabulary_context.json"
         monkeypatch.setattr(
-            "contextpulse_voice.context_vocab.CONTEXT_VOCAB_FILE", vocab_file,
+            "contextpulse_voice.context_vocab.CONTEXT_VOCAB_FILE",
+            vocab_file,
         )
         monkeypatch.setattr(
-            "contextpulse_voice.context_vocab.VOICE_DATA_DIR", tmp_path,
+            "contextpulse_voice.context_vocab.VOICE_DATA_DIR",
+            tmp_path,
         )
         vocab_file.write_text(
-            json.dumps({"harvested term": "HarvestedTerm"}), encoding="utf-8",
+            json.dumps({"harvested term": "HarvestedTerm"}),
+            encoding="utf-8",
         )
 
         projects = tmp_path / "projects"
@@ -236,13 +294,16 @@ class TestRebuildAndGet:
         """A renamed project must propagate — preservation is not a freeze."""
         vocab_file = tmp_path / "vocabulary_context.json"
         monkeypatch.setattr(
-            "contextpulse_voice.context_vocab.CONTEXT_VOCAB_FILE", vocab_file,
+            "contextpulse_voice.context_vocab.CONTEXT_VOCAB_FILE",
+            vocab_file,
         )
         monkeypatch.setattr(
-            "contextpulse_voice.context_vocab.VOICE_DATA_DIR", tmp_path,
+            "contextpulse_voice.context_vocab.VOICE_DATA_DIR",
+            tmp_path,
         )
         vocab_file.write_text(
-            json.dumps({"context pulse": "ContextPulseOld"}), encoding="utf-8",
+            json.dumps({"context pulse": "ContextPulseOld"}),
+            encoding="utf-8",
         )
 
         projects = tmp_path / "projects"
@@ -257,13 +318,16 @@ class TestRebuildAndGet:
     def test_rebuild_without_preserve_drops_existing(self, tmp_path, monkeypatch):
         vocab_file = tmp_path / "vocabulary_context.json"
         monkeypatch.setattr(
-            "contextpulse_voice.context_vocab.CONTEXT_VOCAB_FILE", vocab_file,
+            "contextpulse_voice.context_vocab.CONTEXT_VOCAB_FILE",
+            vocab_file,
         )
         monkeypatch.setattr(
-            "contextpulse_voice.context_vocab.VOICE_DATA_DIR", tmp_path,
+            "contextpulse_voice.context_vocab.VOICE_DATA_DIR",
+            tmp_path,
         )
         vocab_file.write_text(
-            json.dumps({"harvested term": "HarvestedTerm"}), encoding="utf-8",
+            json.dumps({"harvested term": "HarvestedTerm"}),
+            encoding="utf-8",
         )
 
         projects = tmp_path / "projects"
@@ -278,19 +342,24 @@ class TestRebuildAndGet:
     def test_merge_terms_adds_only_new_keys(self, tmp_path, monkeypatch):
         vocab_file = tmp_path / "vocabulary_context.json"
         monkeypatch.setattr(
-            "contextpulse_voice.context_vocab.CONTEXT_VOCAB_FILE", vocab_file,
+            "contextpulse_voice.context_vocab.CONTEXT_VOCAB_FILE",
+            vocab_file,
         )
         monkeypatch.setattr(
-            "contextpulse_voice.context_vocab.VOICE_DATA_DIR", tmp_path,
+            "contextpulse_voice.context_vocab.VOICE_DATA_DIR",
+            tmp_path,
         )
         vocab_file.write_text(
-            json.dumps({"context pulse": "ContextPulse"}), encoding="utf-8",
+            json.dumps({"context pulse": "ContextPulse"}),
+            encoding="utf-8",
         )
 
-        added = merge_terms_to_context_vocab([
-            {"phrase": "context pulse", "term": "ContextPulseX"},
-            {"phrase": "nimbus flow", "term": "NimbusFlow"},
-        ])
+        added = merge_terms_to_context_vocab(
+            [
+                {"phrase": "context pulse", "term": "ContextPulseX"},
+                {"phrase": "nimbus flow", "term": "NimbusFlow"},
+            ]
+        )
 
         assert added == 1
         data = json.loads(vocab_file.read_text())
@@ -306,17 +375,21 @@ class TestRebuildAndGet:
         """
         vocab_file = tmp_path / "vocabulary_context.json"
         monkeypatch.setattr(
-            "contextpulse_voice.context_vocab.CONTEXT_VOCAB_FILE", vocab_file,
+            "contextpulse_voice.context_vocab.CONTEXT_VOCAB_FILE",
+            vocab_file,
         )
         monkeypatch.setattr(
-            "contextpulse_voice.context_vocab.VOICE_DATA_DIR", tmp_path,
+            "contextpulse_voice.context_vocab.VOICE_DATA_DIR",
+            tmp_path,
         )
         vocab_file.write_text(json.dumps({}), encoding="utf-8")
 
-        added = merge_terms_to_context_vocab([
-            {"phrase": "day trading strategies", "term": "DayTradingStrategies"},
-            {"phrase": "nimbus flow", "term": "NimbusFlow"},
-        ])
+        added = merge_terms_to_context_vocab(
+            [
+                {"phrase": "day trading strategies", "term": "DayTradingStrategies"},
+                {"phrase": "nimbus flow", "term": "NimbusFlow"},
+            ]
+        )
 
         assert added == 1
         data = json.loads(vocab_file.read_text())
