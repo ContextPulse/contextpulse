@@ -13,6 +13,8 @@ import time
 from contextpulse_core.config import ACTIVITY_DB_PATH
 from mcp.server.fastmcp import FastMCP
 
+from contextpulse_voice.config import get_voice_config, has_api_key
+
 logger = logging.getLogger(__name__)
 
 mcp_app = FastMCP("ContextPulse Voice")
@@ -83,6 +85,42 @@ def get_recent_transcriptions(minutes: int = 30, limit: int = 10) -> str:
         return f"Error reading transcriptions: {e}"
 
 
+def _diagnose_llm_cleanup_gap(llm_cleanups: int, total: int) -> str | None:
+    """Explain a zero llm_cleanups count instead of leaving it to read as
+    "nothing needed correction" when the real cause is "never configured".
+
+    Zero is a claim about the producer, not the input (see
+    cp-dictation-cleanup-stage-inert, measured 2026-08-31): without this,
+    "LLM cleanups: 0" is indistinguishable from a healthy session where
+    every dictation was already clean, when the actual cause was that the
+    feature was never turned on -- which also means learn_from_session can
+    never find a correction to learn from, structurally, regardless of how
+    many dictation errors actually occurred.
+    """
+    if total == 0 or llm_cleanups > 0:
+        return None
+    if not has_api_key():
+        return (
+            "LLM cleanup: NOT CONFIGURED -- no Anthropic API key is set "
+            "(voice_anthropic_api_key in config.json, or ANTHROPIC_API_KEY "
+            "env var). Corrections cannot be learned from these dictations "
+            "until an API key is configured."
+        )
+    cfg = get_voice_config()
+    if not cfg.get("always_use_llm"):
+        return (
+            "LLM cleanup: has an API key but is DISABLED "
+            "(voice_always_use_llm=false in config.json). Basic rule-based "
+            "cleanup ran instead; corrections cannot be learned until this "
+            "is enabled."
+        )
+    return (
+        "LLM cleanup: configured and enabled, but none applied in this "
+        "window -- check logs for cleanup failures (clean_with_llm fails "
+        "closed to the original text on any API error)."
+    )
+
+
 @mcp_app.tool()
 def get_voice_stats(hours: float = 8.0) -> str:
     """Get voice dictation statistics over the last N hours.
@@ -141,6 +179,9 @@ def get_voice_stats(hours: float = 8.0) -> str:
             f"Corrections applied: {corrections}/{total} ({correction_rate:.0f}%)",
             f"LLM cleanups: {llm_cleanups}",
         ]
+        gap_note = _diagnose_llm_cleanup_gap(llm_cleanups, total)
+        if gap_note:
+            lines.append(gap_note)
         return "\n".join(lines)
     except Exception as e:
         return f"Error calculating stats: {e}"
