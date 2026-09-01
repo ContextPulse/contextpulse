@@ -332,7 +332,7 @@ def get_context_entries() -> dict[str, str]:
     if not CONTEXT_VOCAB_FILE.exists():
         return {}
     try:
-        data = json.loads(CONTEXT_VOCAB_FILE.read_text(encoding="utf-8"))
+        data = json.loads(CONTEXT_VOCAB_FILE.read_text(encoding="utf-8-sig"))
         return data if isinstance(data, dict) else {}
     except (json.JSONDecodeError, OSError):
         return {}

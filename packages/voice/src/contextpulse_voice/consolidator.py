@@ -304,7 +304,7 @@ def _write_cross_modal_learned(corrections: list[dict]) -> None:
     existing: dict[str, str] = {}
     if LEARNED_VOCAB_FILE.exists():
         try:
-            existing = json.loads(LEARNED_VOCAB_FILE.read_text(encoding="utf-8"))
+            existing = json.loads(LEARNED_VOCAB_FILE.read_text(encoding="utf-8-sig"))
             if not isinstance(existing, dict):
                 existing = {}
         except (json.JSONDecodeError, OSError):
@@ -341,7 +341,7 @@ def _deduplicate_vocab_layers() -> int:
     user: dict[str, str] = {}
     if VOCAB_FILE.exists():
         try:
-            user = json.loads(VOCAB_FILE.read_text(encoding="utf-8"))
+            user = json.loads(VOCAB_FILE.read_text(encoding="utf-8-sig"))
             if not isinstance(user, dict):
                 user = {}
         except (json.JSONDecodeError, OSError):
@@ -351,7 +351,7 @@ def _deduplicate_vocab_layers() -> int:
     learned: dict[str, str] = {}
     if LEARNED_VOCAB_FILE.exists():
         try:
-            learned = json.loads(LEARNED_VOCAB_FILE.read_text(encoding="utf-8"))
+            learned = json.loads(LEARNED_VOCAB_FILE.read_text(encoding="utf-8-sig"))
             if not isinstance(learned, dict):
                 learned = {}
         except (json.JSONDecodeError, OSError):
@@ -361,7 +361,7 @@ def _deduplicate_vocab_layers() -> int:
     context: dict[str, str] = {}
     if CONTEXT_VOCAB_FILE.exists():
         try:
-            context = json.loads(CONTEXT_VOCAB_FILE.read_text(encoding="utf-8"))
+            context = json.loads(CONTEXT_VOCAB_FILE.read_text(encoding="utf-8-sig"))
             if not isinstance(context, dict):
                 context = {}
         except (json.JSONDecodeError, OSError):

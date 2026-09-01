@@ -142,7 +142,7 @@ def _write_learned(corrections: list[dict]) -> None:
     existing: dict[str, str] = {}
     if LEARNED_VOCAB_FILE.exists():
         try:
-            existing = json.loads(LEARNED_VOCAB_FILE.read_text(encoding="utf-8"))
+            existing = json.loads(LEARNED_VOCAB_FILE.read_text(encoding="utf-8-sig"))
             if not isinstance(existing, dict):
                 existing = {}
         except (json.JSONDecodeError, OSError):
