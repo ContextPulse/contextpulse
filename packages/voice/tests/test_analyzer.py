@@ -1,13 +1,32 @@
 """Tests for the analyzer module — auto-learning from transcription history."""
 
+import json
+from unittest.mock import patch
 
+from contextpulse_voice import analyzer
 from contextpulse_voice.analyzer import (
     _is_style_change,
+    _load_existing_vocab,
     build_user_profile,
     find_corrections,
     find_frequent_terms,
     load_entries_from_eventbus,
 )
+
+
+class TestLoadExistingVocab:
+    def test_survives_utf8_bom(self, tmp_path):
+        """A vocabulary.json with a UTF-8 BOM must not be silently treated
+        as missing/empty — see contextpulse_voice.vocabulary regression of
+        the same class."""
+        vocab_file = tmp_path / "vocabulary.json"
+        vocab_file.write_bytes(b"\xef\xbb\xbf" + json.dumps({"plaude": "Plaud"}).encode("utf-8"))
+        learned_file = tmp_path / "vocabulary_learned.json"
+
+        with patch("contextpulse_voice.config.VOCAB_FILE", vocab_file):
+            with patch.object(analyzer, "LEARNED_VOCAB_FILE", learned_file):
+                vocab = _load_existing_vocab()
+                assert vocab.get("plaude") == "Plaud"
 
 
 class TestFindCorrections:

@@ -403,6 +403,19 @@ class TestRebuildAndGet:
         )
         assert get_context_entries() == {}
 
+    def test_get_context_entries_survives_utf8_bom(self, monkeypatch, tmp_path):
+        """A UTF-8 BOM on vocabulary_context.json must not read as empty --
+        same-class bug fixed across the voice package's other vocab readers."""
+        vocab_file = tmp_path / "vocabulary_context.json"
+        vocab_file.write_bytes(
+            b"\xef\xbb\xbf" + json.dumps({"context pulse": "ContextPulse"}).encode("utf-8")
+        )
+        monkeypatch.setattr(
+            "contextpulse_voice.context_vocab.CONTEXT_VOCAB_FILE",
+            vocab_file,
+        )
+        assert get_context_entries() == {"context pulse": "ContextPulse"}
+
     def test_get_known_proper_nouns(self, monkeypatch, tmp_path):
         vocab_file = tmp_path / "vocabulary_context.json"
         vocab_file.write_text(

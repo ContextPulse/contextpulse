@@ -124,7 +124,10 @@ def _load_vocabulary() -> dict[str, str]:
     """Load the vocabulary dictionary from disk (user + learned)."""
     path = _ensure_vocab_file()
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        # utf-8-sig: transparently strips a UTF-8 BOM if present (e.g. from
+        # Windows Notepad, which this file's own README tells users to edit
+        # with) and behaves identically to utf-8 when no BOM exists.
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
         if not isinstance(data, dict):
             logger.warning("vocabulary.json is not a JSON object — using defaults")
             data = dict(_DEFAULT_VOCABULARY)
@@ -136,7 +139,7 @@ def _load_vocabulary() -> dict[str, str]:
     # Merge learned vocabulary (auto-discovered patterns)
     if LEARNED_VOCAB_FILE.exists():
         try:
-            learned = json.loads(LEARNED_VOCAB_FILE.read_text(encoding="utf-8"))
+            learned = json.loads(LEARNED_VOCAB_FILE.read_text(encoding="utf-8-sig"))
             if isinstance(learned, dict):
                 # User entries take priority over learned ones
                 for key, val in learned.items():
@@ -149,7 +152,7 @@ def _load_vocabulary() -> dict[str, str]:
     # Merge context vocabulary (project names, proper nouns — lowest priority)
     if CONTEXT_VOCAB_FILE.exists():
         try:
-            context = json.loads(CONTEXT_VOCAB_FILE.read_text(encoding="utf-8"))
+            context = json.loads(CONTEXT_VOCAB_FILE.read_text(encoding="utf-8-sig"))
             if isinstance(context, dict):
                 count = 0
                 for key, val in context.items():
@@ -221,7 +224,7 @@ def get_learned_entries() -> dict[str, str]:
     if not LEARNED_VOCAB_FILE.exists():
         return {}
     try:
-        data = json.loads(LEARNED_VOCAB_FILE.read_text(encoding="utf-8"))
+        data = json.loads(LEARNED_VOCAB_FILE.read_text(encoding="utf-8-sig"))
         return data if isinstance(data, dict) else {}
     except (json.JSONDecodeError, OSError):
         return {}

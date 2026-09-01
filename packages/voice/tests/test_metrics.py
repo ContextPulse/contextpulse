@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from contextpulse_voice.metrics import (
+    _count_vocab,
     compute_accuracy_scorecard,
     generate_weekly_report,
     record_metrics,
@@ -42,6 +43,18 @@ def _make_db(tmp_path: Path, events: list[dict] | None = None) -> Path:
     conn.commit()
     conn.close()
     return db_path
+
+
+class TestCountVocab:
+    def test_survives_utf8_bom(self, tmp_path):
+        """A vocab file saved with a UTF-8 BOM must still be counted, not
+        read as 0 entries -- see the same-class bug fixed in vocabulary.py."""
+        path = tmp_path / "vocabulary.json"
+        path.write_bytes(b"\xef\xbb\xbf" + json.dumps({"a": "A", "b": "B"}).encode("utf-8"))
+        assert _count_vocab(path) == 2
+
+    def test_missing_file_is_zero(self, tmp_path):
+        assert _count_vocab(tmp_path / "missing.json") == 0
 
 
 class TestComputeAccuracyScorecard:

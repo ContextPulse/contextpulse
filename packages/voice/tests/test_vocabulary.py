@@ -142,6 +142,37 @@ class TestVocabFileManagement:
                     data = vocabulary._load_vocabulary()
                     assert data["shared"] == "UserVersion"
 
+    def test_load_vocabulary_survives_utf8_bom(self, tmp_path):
+        """A vocabulary.json saved with a UTF-8 BOM (e.g. by Windows Notepad,
+        which the module's own README instructs users to hand-edit with) must
+        still load — not silently fall back to defaults and drop every
+        personal correction with no visible error."""
+        vocab_dir = tmp_path / "test_voice_bom"
+        vocab_dir.mkdir()
+        vocab_file = vocab_dir / "vocabulary.json"
+        payload = json.dumps({"plaude": "Plaud"}).encode("utf-8")
+        vocab_file.write_bytes(b"\xef\xbb\xbf" + payload)
+
+        with patch.object(vocabulary, 'VOICE_DATA_DIR', vocab_dir):
+            with patch.object(vocabulary, 'VOCAB_FILE', vocab_file):
+                with patch.object(vocabulary, 'LEARNED_VOCAB_FILE', vocab_dir / "none.json"):
+                    data = vocabulary._load_vocabulary()
+                    assert data.get("plaude") == "Plaud"
+
+    def test_load_vocabulary_merges_bom_learned_file(self, tmp_path):
+        vocab_dir = tmp_path / "test_voice_bom_learned"
+        vocab_dir.mkdir()
+        vocab_file = vocab_dir / "vocabulary.json"
+        learned_file = vocab_dir / "vocabulary_learned.json"
+        vocab_file.write_text(json.dumps({}), encoding="utf-8")
+        learned_file.write_bytes(b"\xef\xbb\xbf" + json.dumps({"foo": "Foo"}).encode("utf-8"))
+
+        with patch.object(vocabulary, 'VOICE_DATA_DIR', vocab_dir):
+            with patch.object(vocabulary, 'VOCAB_FILE', vocab_file):
+                with patch.object(vocabulary, 'LEARNED_VOCAB_FILE', learned_file):
+                    data = vocabulary._load_vocabulary()
+                    assert data.get("foo") == "Foo"
+
 
 class TestGetEntries:
     def test_get_all_entries(self, tmp_path):

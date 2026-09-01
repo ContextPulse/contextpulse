@@ -120,7 +120,7 @@ def _count_vocab(path: Path) -> int:
     if not path.exists():
         return 0
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
         return len(data) if isinstance(data, dict) else 0
     except (json.JSONDecodeError, OSError):
         return 0

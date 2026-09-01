@@ -356,3 +356,28 @@ class TestDeduplicateVocabLayers:
             removed = _deduplicate_vocab_layers()
 
         assert removed == 0
+
+    def test_survives_utf8_bom_on_all_three_layers(self, tmp_path):
+        """A BOM on any of the three vocab layers must not make that layer
+        read as empty -- an empty user/learned layer here would make a real
+        context-vocab entry look like a false duplicate and get removed."""
+        vocab = tmp_path / "vocabulary.json"
+        learned = tmp_path / "vocabulary_learned.json"
+        context = tmp_path / "vocabulary_context.json"
+
+        vocab.write_bytes(b"\xef\xbb\xbf" + json.dumps({"context pulse": "ContextPulse"}).encode("utf-8"))
+        learned.write_bytes(b"\xef\xbb\xbf" + json.dumps({}).encode("utf-8"))
+        context.write_bytes(
+            b"\xef\xbb\xbf"
+            + json.dumps({"context pulse": "ContextPulse", "weather app": "WeatherApp"}).encode("utf-8")
+        )
+
+        with patch("contextpulse_voice.consolidator.VOCAB_FILE", vocab), \
+             patch("contextpulse_voice.consolidator.LEARNED_VOCAB_FILE", learned), \
+             patch("contextpulse_voice.consolidator.CONTEXT_VOCAB_FILE", context):
+            removed = _deduplicate_vocab_layers()
+
+        assert removed == 1
+        remaining = json.loads(context.read_text())
+        assert "weather app" in remaining
+        assert "context pulse" not in remaining

@@ -261,7 +261,7 @@ def _load_existing_vocab() -> dict[str, str]:
     for path in [VOCAB_FILE, LEARNED_VOCAB_FILE]:
         if path.exists():
             try:
-                vocab.update(json.loads(path.read_text(encoding="utf-8")))
+                vocab.update(json.loads(path.read_text(encoding="utf-8-sig")))
             except (json.JSONDecodeError, OSError):
                 pass
     return vocab
@@ -336,7 +336,7 @@ def run(db_path: Path | None = None, dry_run: bool = False) -> dict[str, Any]:
         learned: dict[str, str] = {}
         if LEARNED_VOCAB_FILE.exists():
             try:
-                learned = json.loads(LEARNED_VOCAB_FILE.read_text(encoding="utf-8"))
+                learned = json.loads(LEARNED_VOCAB_FILE.read_text(encoding="utf-8-sig"))
             except (json.JSONDecodeError, OSError):
                 pass
         learned.update(new_entries)
