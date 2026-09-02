@@ -157,10 +157,16 @@ def generate_weekly_report(weeks: int = 4) -> dict:
         report["insufficient_data"] = True
         return report
 
-    # Read all entries
+    # Read all entries. utf-8-sig: this file is normally written by us
+    # (append, plain utf-8, never a BOM) but is also the kind of small
+    # JSONL log a human might open and re-save with an editor that adds a
+    # BOM -- only the FIRST line would be corrupted (only its `{` gets the
+    # ﻿ prefix), silently dropping just that one entry via the
+    # JSONDecodeError skip below. utf-8-sig strips it if present, matching
+    # every other vocab-file reader in this package (cp-vocab-add-plaud).
     entries = []
     try:
-        with open(METRICS_FILE, encoding="utf-8") as f:
+        with open(METRICS_FILE, encoding="utf-8-sig") as f:
             for line in f:
                 line = line.strip()
                 if line:

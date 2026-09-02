@@ -177,6 +177,38 @@ class TestBuildContextVocabulary:
         vocab = build_context_vocabulary(tmp_path, skills_dirs=[])
         assert vocab["context pulse"] == "ContextPulse"
 
+    def test_project_context_survives_utf8_bom(self, tmp_path):
+        """A PROJECT_CONTEXT.md saved with a UTF-8 BOM must still be
+        scanned for proper nouns -- same class as the vocab-file BOM fix
+        (cp-vocab-add-plaud). A different dir name (not "MyProject") keeps
+        this test from passing merely off the directory-name entry."""
+        proj = tmp_path / "SomeDir"
+        proj.mkdir()
+        ctx = proj / "PROJECT_CONTEXT.md"
+        ctx.write_bytes(
+            b"\xef\xbb\xbf"
+            + "# SomeDir\n\nThis uses MusicPlayer for audio streaming.\n".encode("utf-8")
+        )
+        vocab = build_context_vocabulary(tmp_path, skills_dirs=[])
+        assert "music player" in vocab
+
+    def test_skill_file_survives_utf8_bom(self, tmp_path):
+        """A SKILL.md saved with a UTF-8 BOM must still be scanned for
+        proper nouns -- same class as the vocab-file BOM fix
+        (cp-vocab-add-plaud)."""
+        skills_dir = tmp_path / "skills"
+        skill_dir = skills_dir / "some-skill"
+        skill_dir.mkdir(parents=True)
+        skill_file = skill_dir / "SKILL.md"
+        skill_file.write_bytes(
+            b"\xef\xbb\xbf"
+            + "---\nname: some-skill\n---\n\nUses NimbusFlow for orchestration.\n".encode(
+                "utf-8"
+            )
+        )
+        vocab = build_context_vocabulary(tmp_path / "empty", skills_dirs=[skills_dir])
+        assert "nimbus flow" in vocab
+
 
 class TestFindStaleHarvestedGarbage:
     """Regression tests for cp-vocab-context-file-has-existing-garbage.
