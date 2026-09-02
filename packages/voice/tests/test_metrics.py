@@ -153,3 +153,22 @@ class TestGenerateWeeklyReport:
         with patch("contextpulse_voice.metrics.METRICS_FILE", metrics_file):
             report = generate_weekly_report()
         assert report["entries"] == 2
+
+    def test_survives_utf8_bom_on_first_line(self, tmp_path):
+        """A metrics_history.jsonl re-saved by an editor that adds a UTF-8
+        BOM must not silently lose its first entry -- same class as the
+        vocab-file BOM fix (cp-vocab-add-plaud). Without utf-8-sig, the BOM
+        prepends to the first line's opening '{', json.loads() raises
+        JSONDecodeError, and the corrupt-line skip above silently drops
+        exactly the oldest entry every time."""
+        metrics_file = tmp_path / "metrics.jsonl"
+        entries = [
+            {"date": "a", "correction_rate": 0.5, "vocab_user_size": 0, "vocab_learned_size": 5, "vocab_context_size": 0, "top_corrected_words": []},
+            {"date": "b", "correction_rate": 0.3, "vocab_user_size": 0, "vocab_learned_size": 8, "vocab_context_size": 0, "top_corrected_words": []},
+        ]
+        metrics_file.write_bytes(
+            b"\xef\xbb\xbf" + ("\n".join(json.dumps(e) for e in entries) + "\n").encode("utf-8")
+        )
+        with patch("contextpulse_voice.metrics.METRICS_FILE", metrics_file):
+            report = generate_weekly_report()
+        assert report["entries"] == 2

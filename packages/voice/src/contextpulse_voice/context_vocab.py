@@ -129,7 +129,9 @@ def _scan_skills_directory(skills_dir: Path) -> dict[str, str]:
         if not skill_file.exists():
             continue
         try:
-            content = skill_file.read_text(encoding="utf-8")
+            # utf-8-sig: an editor-saved SKILL.md with a UTF-8 BOM must still
+            # scan -- same class as the vocab-file BOM fix (cp-vocab-add-plaud).
+            content = skill_file.read_text(encoding="utf-8-sig")
             # Only scan first 1500 chars (frontmatter + intro)
             content = content[:1500]
             for name in _extract_names_from_context(content):
@@ -186,7 +188,10 @@ def build_context_vocabulary(
             ctx_file = child / "PROJECT_CONTEXT.md"
             if ctx_file.exists():
                 try:
-                    content = ctx_file.read_text(encoding="utf-8")
+                    # utf-8-sig: a PROJECT_CONTEXT.md saved with a UTF-8 BOM
+                    # must still scan -- same class as the vocab-file BOM fix
+                    # (cp-vocab-add-plaud).
+                    content = ctx_file.read_text(encoding="utf-8-sig")
                     # Only scan first ~2000 chars (overview section)
                     content = content[:2000]
                     for name in _extract_names_from_context(content):
