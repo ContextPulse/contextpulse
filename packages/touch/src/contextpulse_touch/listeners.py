@@ -72,8 +72,22 @@ class KeyboardListener:
         if key in (kb.Key.shift_l, kb.Key.shift_r):
             self._pressed_keys.add(kb.Key.shift_l)
 
-        # Detect Ctrl+V (paste)
-        if (key == kb.KeyCode.from_char('v') and
+        # Detect Ctrl+V (paste). Windows' low-level keyboard hook reports a
+        # letter key held with Ctrl as its CONTROL-CHARACTER form, not the
+        # plain letter: Ctrl+V arrives as KeyCode(vk=86, char='\x16'), never
+        # as `kb.KeyCode.from_char('v')` (vk=None, char='v'). Those two
+        # KeyCode instances are never equal, so the old `key ==
+        # kb.KeyCode.from_char('v')` check could not fire for ANY Ctrl+V —
+        # real keypress or this module's own synthetic paste — which is why
+        # the correction-detection pipeline downstream of this listener has
+        # never recorded a single correction_detected event. `vk` is stable
+        # across modifier state (a plain 'v' press is also vk=86, char='v'),
+        # so gate on vk plus the already-tracked Ctrl-held state instead of
+        # the char/KeyCode identity. Verified live against this machine's
+        # actual pynput+Windows behavior for both Ctrl+V and the terminal
+        # paste chord Ctrl+Shift+V (both deliver vk=86, char='\x16').
+        _VK_V = 86
+        if (getattr(key, "vk", None) == _VK_V and
                 kb.Key.ctrl_l in self._pressed_keys):
             if self._on_paste:
                 # Small delay to let clipboard update
