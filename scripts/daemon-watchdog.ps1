@@ -241,7 +241,25 @@ try {
 
         # It crashed
         Write-Log "Crash diagnostics: see $StderrLog (this run) and $StderrLog.1 (prior run, if any)" "WARN"
-        $exitHex = "0x{0:X8}" -f [uint32]$exitCode
+        # [uint32]$exitCode THROWS for any negative Int32 -- which is most real
+        # Windows crash/kill codes (e.g. 0xC0000005 access violation reads as
+        # -1073741819, a forced Stop-Process kill reads as -1). Process.ExitCode
+        # is always a signed Int32, so the throw was reliable, not an edge case.
+        # Verified empirically 2026-09-03: with $ErrorActionPreference = "Stop"
+        # set script-wide and no catch around this block (only the outer
+        # try/finally that releases the mutex), that throw killed the WHOLE
+        # watchdog script silently -- no console (runs hidden via wscript.exe),
+        # no log line, nothing after "Crash diagnostics" ever written. The
+        # ~24h "clean" watchdog restarts in daemon_watchdog.log (04:28-2026-09-02
+        # onward) were this: the watchdog dying mid-crash-report, papered over
+        # by watchdog-healthcheck.ps1's 2-minute liveness check relaunching it
+        # via the Startup .cmd -- which is why "Watchdog starting" always
+        # reappears ~1-2 min later with restart counters reset, and why no
+        # "DAEMON CRASHED" line, real exit code, or Python traceback was ever
+        # captured for a single one of those events. BitConverter reinterprets
+        # the Int32's bit pattern instead of doing a range-checked cast, so it
+        # cannot throw for any value Process.ExitCode can actually return.
+        $exitHex = "0x{0:X8}" -f [BitConverter]::ToUInt32([BitConverter]::GetBytes([int32]$exitCode), 0)
         Write-Log "DAEMON CRASHED (code=$exitCode [$exitHex], runtime=$([math]::Round($runtime))s)" "ERROR"
 
         # Record restart timestamp
