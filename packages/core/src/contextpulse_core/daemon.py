@@ -54,8 +54,18 @@ ACTIVITY_DB_PATH = OUTPUT_DIR / os.environ.get("CONTEXTPULSE_ACTIVITY_DB", "acti
 
 # Default warn threshold for the thread-budget diagnostic. Override via
 # CONTEXTPULSE_THREAD_BUDGET_WARN. The 2026-04-29 incident saw a 163-thread
-# baseline; with _thread_caps in place the expected steady-state is ~30-50.
-# A threshold of 100 leaves headroom while still catching real regressions.
+# baseline; with _thread_caps in place the steady-state AT THE TIME was
+# ~30-50. That baseline is stale: verified live 2026-09-03 (psutil against
+# the running daemon, corroborated by 24h of logs/healthcheck.log) that the
+# current steady-state is ~137-154, not growing over a run's lifetime (so
+# NOT a leak) -- Sight/OCR, Voice/Whisper, Touch, the Knowledge bridge
+# ingest thread, and per-monitor dxcam capture threads have all been added
+# since the ~30-50 figure was measured. This WARNING fires on every healthy
+# run as a result and is not, by itself, evidence of anything wrong -- see
+# cp-daemon-heartbeat-kill-cause-unconfirmed before treating it as a lead.
+# Left at 100 rather than raised: doing so needs its own measurement of what
+# a genuinely elevated (leaking) count looks like now, which this pass did
+# not establish.
 THREAD_BUDGET_WARN_DEFAULT = 100
 
 
