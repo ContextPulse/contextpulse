@@ -24,23 +24,23 @@ dependencies = [
     # Their source is vendored into this single distribution via
     # [tool.setuptools.packages.find].where below, so they must not be listed here
     # (pip would try to resolve them from PyPI and fail).
-    "python-dotenv>=1.0",
-    "cryptography>=43.0",
+    "python-dotenv>=1.0,<2",
+    "cryptography>=43.0,<47",
     "psutil>=7.0,<8",
-    "mss>=9.0",
-    "pynput>=1.7",
-    "pystray>=0.19",
-    "Pillow>=10.0",
-    "numpy>=1.26",
-    "rapidocr-onnxruntime>=1.2",
+    "mss>=9.0,<11",
+    "pynput>=1.7,<2",
+    "pystray>=0.19,<1",
+    "Pillow>=10.0,<13",
+    "numpy>=1.26,<3",
+    "rapidocr-onnxruntime>=1.2,<2",
     "mcp>=1.0,<2",
-    "faster-whisper>=1.0",
-    "sounddevice>=0.4",
-    "pyperclip>=1.8",
-    "pyautogui>=0.9",
-    "anthropic>=0.39",
-    "onnxruntime>=1.17",
-    "tokenizers>=0.19",
+    "faster-whisper>=1.0,<2",
+    "sounddevice>=0.4,<1",
+    "pyperclip>=1.8,<2",
+    "pyautogui>=0.9,<1",
+    "anthropic>=0.39,<1",
+    "onnxruntime>=1.17,<2",
+    "tokenizers>=0.19,<1",
 ]
 
 [project.urls]

@@ -22,8 +22,8 @@ classifiers = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "python-dotenv>=1.0",
-    "cryptography>=43.0",
+    "python-dotenv>=1.0,<2",
+    "cryptography>=43.0,<47",
     "psutil>=7.0,<8",
 ]
 
