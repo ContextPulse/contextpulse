@@ -62,6 +62,14 @@ _brand = _spec_dir / "brand"
 if (_brand / "colors.json").exists():
     datas.append((str(_brand / "colors.json"), "brand"))
 
+# Phase-1 knowledge-graph schema (read via importlib.resources at runtime --
+# PyInstaller's import analysis cannot discover it, so it must be listed
+# explicitly or a frozen build with knowledge_enabled=true fails at first
+# KnowledgeStore init with FileNotFoundError).
+_kg_schema = PACKAGES / "knowledge" / "src" / "contextpulse_knowledge" / "schema.sql"
+if _kg_schema.exists():
+    datas.append((str(_kg_schema), "contextpulse_knowledge"))
+
 # Hidden imports — modules with lazy/conditional imports
 hidden_imports = [
     # Core
@@ -116,6 +124,15 @@ hidden_imports = [
     "contextpulse_touch.mcp_server",
     # Project
     "contextpulse_project",
+    # Knowledge (Phase 1 KG spine — gated behind config.knowledge_enabled,
+    # default false, so a frozen build with it off never hits this import.
+    # Included so the flag is real in a packaged build, not just from source.)
+    "contextpulse_knowledge",
+    "contextpulse_knowledge.bridge",
+    "contextpulse_knowledge.cp_core",
+    "contextpulse_knowledge.mcp_tools",
+    "contextpulse_knowledge.migrate",
+    "contextpulse_knowledge.store_sqlite",
     # Native deps with lazy imports
     "sounddevice",
     "_sounddevice_data",
@@ -154,6 +171,7 @@ a = Analysis(
         str(PACKAGES / "project" / "src"),
         str(PACKAGES / "memory" / "src"),
         str(PACKAGES / "agent" / "src"),
+        str(PACKAGES / "knowledge" / "src"),
     ],
     binaries=binaries,
     datas=datas,
