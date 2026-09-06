@@ -26,6 +26,40 @@
 
 set -u
 
+# --- WHO is pushing, checked before WHAT is being pushed ----------------------
+#
+# Added 2026-09-06, from David's standing direction the same day: "My time is
+# required on five things only: ... anything published to a public repo ...".
+# Publication to a public repo is HIS decision, and that is true of a clean push
+# as much as a dirty one.
+#
+# The gate below is excellent at its own job and answers a different question.
+# It asks "is this content safe to publish" -- PII, secrets, internal project
+# names, leaked paths -- and a perfectly clean agent push passes it. The tenet is
+# not about content quality; it is about who gets to decide that this estate
+# publishes at all. So this check runs FIRST and is cheap.
+#
+# CLAUDECODE is set in every Claude Code session and unset in David's own shell,
+# which makes it the discriminator. It is not a security boundary -- anything
+# running as David can unset it -- and it is not trying to be: the threat here is
+# an agent publishing without being asked, not an attacker. The security boundary
+# for content is the gate below, and CI re-runs it after the push regardless.
+if [ "${CLAUDECODE:-}" = "1" ] || [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
+    echo "" >&2
+    echo "PRE-PUSH REFUSED -- this is a PUBLIC repository and an agent is pushing." >&2
+    echo "" >&2
+    echo "  David's standing direction, 2026-09-06: publishing anything to a public" >&2
+    echo "  repo is one of the five things reserved to him. That holds even when the" >&2
+    echo "  content is clean -- the decision to publish is his, not the content's." >&2
+    echo "" >&2
+    echo "  What to do: stop, and tell David what you want to publish and why." >&2
+    echo "  He pushes it himself, or tells you to. Do NOT reach for --no-verify:" >&2
+    echo "  that bypasses the content gate as well, and it is the reflex this repo's" >&2
+    echo "  own gate was tuned to avoid teaching." >&2
+    echo "" >&2
+    exit 1
+fi
+
 PRE_PUBLISH="$HOME/Projects/AgentConfig/scripts/pre-publish.py"
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
 
