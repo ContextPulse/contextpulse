@@ -13,7 +13,11 @@ from __future__ import annotations
 import logging
 from unittest.mock import patch
 
-from contextpulse_core.daemon import format_thread_budget, log_thread_budget
+from contextpulse_core.daemon import (
+    THREAD_BUDGET_WARN_DEFAULT,
+    format_thread_budget,
+    log_thread_budget,
+)
 
 
 class TestFormatThreadBudget:
@@ -65,6 +69,41 @@ class TestLogThreadBudget:
         # so this is a relaxed warning — better than nothing.
         with caplog.at_level(logging.INFO, logger="contextpulse.daemon"):
             log_thread_budget(py_active=150, os_threads=None, warn_threshold=100)
+        budget_records = [r for r in caplog.records if "thread budget" in r.message]
+        assert any(r.levelno == logging.WARNING for r in budget_records)
+
+
+class TestDefaultThresholdMatchesConfirmedSteadyState:
+    """Regression coverage for the 2026-09-07 threshold recalibration.
+
+    The default was 100 for months while the daemon's real, confirmed,
+    non-leaking steady state (psutil-measured across 24h on 2026-09-03 and
+    again over an 11h live run on 2026-09-07) sits at 137-154 OS threads --
+    so the default fired a false WARNING roughly once a minute on every
+    healthy run. These tests pin the DEFAULT (not an explicit override) so a
+    future change back below the confirmed-healthy range is caught here
+    instead of silently reintroducing the noise.
+    """
+
+    def test_default_does_not_warn_on_confirmed_healthy_steady_state(self, caplog):
+        # Highest OS thread count actually observed on a healthy, non-leaking
+        # run (24h sample, 2026-09-03; corroborated by an 11h same-day sample
+        # 2026-09-07 topping out at 151).
+        with caplog.at_level(logging.INFO, logger="contextpulse.daemon"):
+            log_thread_budget(py_active=15, os_threads=154)
+        budget_records = [r for r in caplog.records if "thread budget" in r.message]
+        assert budget_records
+        assert all(r.levelno == logging.INFO for r in budget_records), (
+            "confirmed-healthy thread count logged a WARNING -- the default "
+            "threshold regressed below the measured non-leak steady state"
+        )
+
+    def test_default_still_warns_well_above_confirmed_steady_state(self, caplog):
+        # A leak that has grown 30%+ past the highest healthy value must
+        # still be caught -- this is not a test that the default merely
+        # exists, it is a test that raising it did not disable detection.
+        with caplog.at_level(logging.INFO, logger="contextpulse.daemon"):
+            log_thread_budget(py_active=15, os_threads=THREAD_BUDGET_WARN_DEFAULT)
         budget_records = [r for r in caplog.records if "thread budget" in r.message]
         assert any(r.levelno == logging.WARNING for r in budget_records)
 

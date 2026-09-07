@@ -60,13 +60,26 @@ ACTIVITY_DB_PATH = OUTPUT_DIR / os.environ.get("CONTEXTPULSE_ACTIVITY_DB", "acti
 # current steady-state is ~137-154, not growing over a run's lifetime (so
 # NOT a leak) -- Sight/OCR, Voice/Whisper, Touch, the Knowledge bridge
 # ingest thread, and per-monitor dxcam capture threads have all been added
-# since the ~30-50 figure was measured. This WARNING fires on every healthy
-# run as a result and is not, by itself, evidence of anything wrong -- see
-# cp-daemon-heartbeat-kill-cause-unconfirmed before treating it as a lead.
-# Left at 100 rather than raised: doing so needs its own measurement of what
-# a genuinely elevated (leaking) count looks like now, which this pass did
-# not establish.
-THREAD_BUDGET_WARN_DEFAULT = 100
+# since the ~30-50 figure was measured.
+#
+# The measurement this comment used to defer is now done. The daily daemon
+# restart this WARNING was suspected of causing/predicting
+# (cp-daemon-heartbeat-kill-cause-unconfirmed) was root-caused 2026-09-04 to
+# contextpulse-memory-guard.ps1's own scheduled 4 AM kill racing
+# daemon-watchdog.ps1's relaunch -- a supervisor collision, unrelated to
+# thread count. The heartbeat-staleness hypothesis that would have tied the
+# ~146-thread baseline to a real symptom was explicitly checked and refuted
+# 2026-09-03 (no Kill-WedgedDaemon correlation in logs/healthcheck.log). So
+# at 100 this metric fired a false-positive WARNING roughly once a minute on
+# every healthy run -- confirmed live 2026-09-07: 651 of 5427 daemon_stderr
+# lines (12%) over one 11h run, os= values 138-151, matching the confirmed
+# non-leak steady state exactly. Raised to 200: ~30% margin above the
+# highest steady-state value measured across both the 2026-09-03 24h sample
+# (top 154) and this same-day 11h sample (top 151), while still catching a
+# leak well before it doubles the healthy baseline. If a future feature
+# genuinely moves the steady state, re-measure rather than silence this by
+# raising it again without evidence.
+THREAD_BUDGET_WARN_DEFAULT = 200
 
 
 def sample_os_thread_count() -> int | None:
