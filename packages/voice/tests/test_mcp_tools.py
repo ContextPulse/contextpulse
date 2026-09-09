@@ -176,6 +176,189 @@ class TestGetVoiceStats:
         assert "DISABLED" not in result
 
 
+class TestLearnFromSession:
+    """learn_from_session() diffs raw vs cleaned transcript to find patterns.
+    With LLM cleanup disabled or unconfigured, raw and cleaned are far less
+    likely to diverge, so the loop structurally finds nothing to learn --
+    and the generic 'No learnable patterns found' message reads identically
+    to a healthy session where cleanup ran and genuinely found no repeating
+    corrections. See cp-voice-vocab-learning-is-vacuous (2026-09-08): 20
+    dictations, 6 rule-based corrections, 0 LLM cleanups, and the tool gave
+    no signal that the learning path was disabled rather than merely quiet.
+    """
+
+    def test_no_db(self, tmp_path):
+        from contextpulse_voice.mcp_server import learn_from_session
+        with patch("contextpulse_voice.mcp_server._DB_PATH", tmp_path / "nope.db"), \
+             patch("contextpulse_voice.session_learner.learn_from_transcription_history", return_value=[]):
+            result = learn_from_session(hours=24)
+        assert "No activity database" in result
+
+    def test_no_dictations_in_window(self, tmp_path):
+        import sqlite3
+        db_path = tmp_path / "empty.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("""
+            CREATE TABLE events (
+                event_id TEXT PRIMARY KEY, timestamp REAL, modality TEXT,
+                event_type TEXT, app_name TEXT, window_title TEXT,
+                monitor_index INTEGER, payload TEXT, correlation_id TEXT,
+                attention_score REAL
+            )
+        """)
+        conn.commit()
+        conn.close()
+
+        from contextpulse_voice.mcp_server import learn_from_session
+        with patch("contextpulse_voice.mcp_server._DB_PATH", db_path), \
+             patch("contextpulse_voice.session_learner.learn_from_transcription_history", return_value=[]):
+            result = learn_from_session(hours=24)
+        assert "No dictations" in result
+
+    def test_empty_result_names_missing_api_key(self, tmp_path):
+        """Zero patterns found, and the cause is 'never configured' -- must
+        say so, not read as a clean quiet session."""
+        import json
+        import sqlite3
+        import time
+
+        db_path = tmp_path / "activity.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("""
+            CREATE TABLE events (
+                event_id TEXT PRIMARY KEY, timestamp REAL, modality TEXT,
+                event_type TEXT, app_name TEXT, window_title TEXT,
+                monitor_index INTEGER, payload TEXT, correlation_id TEXT,
+                attention_score REAL
+            )
+        """)
+        now = time.time()
+        conn.execute(
+            "INSERT INTO events VALUES ('e0', ?, 'voice', 'transcription', '', '', 0, ?, NULL, 0.0)",
+            (now, json.dumps({
+                "transcript": "trigger a sell", "raw_transcript": "trigger a sell",
+                "duration_seconds": 2.0, "cleanup_applied": False,
+            })),
+        )
+        conn.commit()
+        conn.close()
+
+        from contextpulse_voice.mcp_server import learn_from_session
+        with patch("contextpulse_voice.mcp_server._DB_PATH", db_path), \
+             patch("contextpulse_voice.mcp_server.has_api_key", return_value=False), \
+             patch("contextpulse_voice.session_learner.learn_from_transcription_history", return_value=[]):
+            result = learn_from_session(hours=24)
+
+        assert "No learnable patterns found" in result
+        assert "NOT CONFIGURED" in result
+        assert "API key" in result
+
+    def test_empty_result_names_disabled_toggle(self, tmp_path):
+        """Same zero, different cause: a key IS set but always_use_llm is off."""
+        import json
+        import sqlite3
+        import time
+
+        db_path = tmp_path / "activity.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("""
+            CREATE TABLE events (
+                event_id TEXT PRIMARY KEY, timestamp REAL, modality TEXT,
+                event_type TEXT, app_name TEXT, window_title TEXT,
+                monitor_index INTEGER, payload TEXT, correlation_id TEXT,
+                attention_score REAL
+            )
+        """)
+        now = time.time()
+        conn.execute(
+            "INSERT INTO events VALUES ('e0', ?, 'voice', 'transcription', '', '', 0, ?, NULL, 0.0)",
+            (now, json.dumps({
+                "transcript": "x", "raw_transcript": "x",
+                "duration_seconds": 2.0, "cleanup_applied": False,
+            })),
+        )
+        conn.commit()
+        conn.close()
+
+        from contextpulse_voice.mcp_server import learn_from_session
+        with patch("contextpulse_voice.mcp_server._DB_PATH", db_path), \
+             patch("contextpulse_voice.mcp_server.has_api_key", return_value=True), \
+             patch(
+                 "contextpulse_voice.mcp_server.get_voice_config",
+                 return_value={"always_use_llm": False},
+             ), \
+             patch("contextpulse_voice.session_learner.learn_from_transcription_history", return_value=[]):
+            result = learn_from_session(hours=24)
+
+        assert "No learnable patterns found" in result
+        assert "DISABLED" in result
+        assert "voice_always_use_llm" in result
+
+    def test_empty_result_stays_generic_when_cleanup_is_active(self, tmp_path):
+        """When LLM cleanup IS configured and enabled but genuinely finds no
+        repeating pattern, the message must NOT falsely claim the loop is
+        disabled or unconfigured -- this is the true 'ran fine, nothing to
+        learn' case."""
+        import json
+        import sqlite3
+        import time
+
+        db_path = tmp_path / "activity.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("""
+            CREATE TABLE events (
+                event_id TEXT PRIMARY KEY, timestamp REAL, modality TEXT,
+                event_type TEXT, app_name TEXT, window_title TEXT,
+                monitor_index INTEGER, payload TEXT, correlation_id TEXT,
+                attention_score REAL
+            )
+        """)
+        now = time.time()
+        conn.execute(
+            "INSERT INTO events VALUES ('e0', ?, 'voice', 'transcription', '', '', 0, ?, NULL, 0.0)",
+            (now, json.dumps({
+                "transcript": "clean text", "raw_transcript": "clean text",
+                "duration_seconds": 2.0, "cleanup_applied": True,
+            })),
+        )
+        conn.commit()
+        conn.close()
+
+        from contextpulse_voice.mcp_server import learn_from_session
+        with patch("contextpulse_voice.mcp_server._DB_PATH", db_path), \
+             patch("contextpulse_voice.mcp_server.has_api_key", return_value=True), \
+             patch(
+                 "contextpulse_voice.mcp_server.get_voice_config",
+                 return_value={"always_use_llm": True},
+             ), \
+             patch("contextpulse_voice.session_learner.learn_from_transcription_history", return_value=[]):
+            result = learn_from_session(hours=24)
+
+        assert "No learnable patterns found" in result
+        assert "DISABLED" not in result
+        assert "NOT CONFIGURED" not in result
+
+    def test_nonempty_results_unaffected(self, activity_db):
+        """When the learner DOES find patterns, output format is unchanged --
+        the diagnostic path only fires on the empty-results branch."""
+        from contextpulse_voice.mcp_server import learn_from_session
+
+        fake_results = [
+            {"original": "gerard ventures", "corrected": "JerardVentures", "count": 3, "confidence": 0.8},
+        ]
+        with patch("contextpulse_voice.mcp_server._DB_PATH", activity_db), \
+             patch(
+                 "contextpulse_voice.session_learner.learn_from_transcription_history",
+                 return_value=fake_results,
+             ):
+            result = learn_from_session(hours=24)
+
+        assert "Session Learning" in result
+        assert "gerard ventures" in result
+        assert "DISABLED" not in result
+        assert "NOT CONFIGURED" not in result
+
+
 class TestGetVocabulary:
     def test_returns_all(self, tmp_path):
         from contextpulse_voice.mcp_server import get_vocabulary

@@ -219,6 +219,46 @@ def get_vocabulary(learned_only: bool = False) -> str:
         return f"Error reading vocabulary: {e}"
 
 
+def _diagnose_empty_session_learning(hours: float) -> str:
+    """Explain a zero-pattern learn_from_session() result instead of leaving
+    it to read as "ran fine, nothing to learn" when the real cause is that
+    LLM cleanup -- the signal the diff is built on -- never ran at all.
+
+    See cp-voice-vocab-learning-is-vacuous (measured 2026-09-08): 20
+    dictations in 8 hours, 6 rule-based corrections applied, 0 LLM cleanups,
+    and learn_from_session returned the same "No learnable patterns found"
+    it would return on a genuinely healthy, quiet session. The two cases are
+    indistinguishable to whoever reads the output unless this says which one
+    happened. Mirrors _diagnose_llm_cleanup_gap's reasoning for
+    get_voice_stats -- same root cause, different tool.
+    """
+    conn = _get_db()
+    if not conn:
+        return "No activity database found."
+
+    try:
+        cutoff = time.time() - (hours * 3600)
+        rows = conn.execute(
+            "SELECT payload FROM events "
+            "WHERE modality = 'voice' AND event_type = 'transcription' "
+            "AND timestamp > ?",
+            (cutoff,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return f"No dictations in the last {hours:.0f} hours -- nothing to learn from."
+
+    total = len(rows)
+    llm_cleanups = sum(1 for row in rows if json.loads(row["payload"]).get("cleanup_applied"))
+
+    gap_note = _diagnose_llm_cleanup_gap(llm_cleanups, total)
+    if gap_note:
+        return f"No learnable patterns found in recent transcription history.\n{gap_note}"
+    return "No learnable patterns found in recent transcription history."
+
+
 @mcp_app.tool()
 def learn_from_session(hours: int = 24, dry_run: bool = True) -> str:
     """Analyze recent dictation history and learn vocabulary corrections.
@@ -237,7 +277,7 @@ def learn_from_session(hours: int = 24, dry_run: bool = True) -> str:
         results = learn_from_transcription_history(hours=hours, dry_run=dry_run)
 
         if not results:
-            return "No learnable patterns found in recent transcription history."
+            return _diagnose_empty_session_learning(hours)
 
         mode = "DRY RUN" if dry_run else "APPLIED"
         lines = [f"=== Session Learning ({mode}) — {len(results)} patterns ===\n"]
