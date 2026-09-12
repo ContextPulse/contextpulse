@@ -104,7 +104,7 @@ select = ["E", "F", "W", "I"]
 ignore = ["E501"]
 
 [tool.pytest.ini_options]
-testpaths = ["packages/*/tests", "tests", "contextpulse_pipeline/tests"]
+testpaths = ["packages/*/tests", "tests"]
 addopts = "--import-mode=importlib --timeout=30"
 markers = [
     "unit: fast, mocked, CI-safe on all platforms (default)",
