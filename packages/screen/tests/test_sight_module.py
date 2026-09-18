@@ -123,6 +123,35 @@ class TestSightModuleEmitOCR:
         results = bus.search("unique_search_term_42", minutes_ago=5)
         assert len(results) >= 1
 
+    def test_emit_ocr_carries_monitor_index(self, wired_module, bus):
+        """Regression: cp-ocr-crossmonitor-mislabeled-attribution.
+
+        emit_ocr must accept and propagate monitor_index onto the
+        ContextEvent so a downstream consumer (probe_consolidator) can
+        tell a cursor-monitor OCR event (trustworthy app/window
+        attribution) apart from a non-cursor-monitor one (untrustworthy).
+        Before the fix, emit_ocr took no monitor_index param at all and
+        every OCR_RESULT event silently defaulted to monitor_index=0.
+        """
+        wired_module.emit_ocr(
+            timestamp=time.time(), frame_path="/tmp/f.jpg",
+            ocr_text="some text", confidence=0.9,
+            app_name="Terminal", window_title="bash",
+            monitor_index=1,
+        )
+        events = bus.query_recent(seconds=60, modality="sight")
+        assert len(events) == 1
+        assert events[0].monitor_index == 1
+
+    def test_emit_ocr_monitor_index_defaults_to_zero(self, wired_module, bus):
+        """Backward compatible: callers that don't pass monitor_index still work."""
+        wired_module.emit_ocr(
+            timestamp=time.time(), frame_path="/tmp/f.jpg",
+            ocr_text="some text", confidence=0.9,
+        )
+        events = bus.query_recent(seconds=60, modality="sight")
+        assert events[0].monitor_index == 0
+
 
 class TestSightModuleEmitClipboard:
     def test_emit_clipboard(self, wired_module, bus):

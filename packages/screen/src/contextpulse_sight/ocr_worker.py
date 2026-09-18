@@ -54,6 +54,7 @@ class OCRWorker:
         app_name: str = "",
         window_title: str = "",
         native_img: "Image.Image | None" = None,
+        monitor_index: int = 0,
     ):
         """Queue a frame for OCR. Non-blocking; drops if queue full.
 
@@ -61,11 +62,15 @@ class OCRWorker:
             native_img: Optional native-resolution PIL Image for higher-quality
                 OCR. If provided, OCR runs on this instead of the downscaled
                 JPEG on disk. The image is NOT saved — only used for OCR.
+            monitor_index: Which monitor this frame came from. Forwarded to
+                emit_ocr() so the resulting ContextEvent carries it.
         """
         if STORAGE_MODE == "visual":
             return  # No OCR needed in visual-only mode
         try:
-            self._queue.put_nowait((frame_path, row_id, app_name, window_title, native_img))
+            self._queue.put_nowait(
+                (frame_path, row_id, app_name, window_title, native_img, monitor_index)
+            )
         except queue.Full:
             logger.debug("OCR queue full, skipping frame %s", frame_path)
 
@@ -85,11 +90,16 @@ class OCRWorker:
     def _run(self):
         while not self._stop.is_set():
             try:
-                frame_path, row_id, app_name, window_title, native_img = self._queue.get(timeout=1.0)
+                frame_path, row_id, app_name, window_title, native_img, monitor_index = (
+                    self._queue.get(timeout=1.0)
+                )
             except queue.Empty:
                 continue
             try:
-                self._process(frame_path, row_id, app_name, window_title, native_img)
+                self._process(
+                    frame_path, row_id, app_name, window_title, native_img,
+                    monitor_index=monitor_index,
+                )
             except Exception:
                 logger.debug("OCR processing failed for %s", frame_path, exc_info=True)
 
@@ -100,6 +110,7 @@ class OCRWorker:
         app_name: str = "",
         window_title: str = "",
         native_img: "Image.Image | None" = None,
+        monitor_index: int = 0,
     ):
         """Run OCR on a frame, apply storage mode logic.
 
@@ -150,6 +161,7 @@ class OCRWorker:
                     confidence=result["confidence"],
                     app_name=app_name,
                     window_title=window_title,
+                    monitor_index=monitor_index,
                 )
 
         # Decide whether to keep the image

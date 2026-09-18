@@ -252,10 +252,22 @@ class ContextPulseSightApp:
                 # the gate for event-driven captures.
                 if frame_path and isinstance(frame_path, Path):
                     if should_run_ocr(diff_pct, force_ocr, OCR_DIFF_THRESHOLD):
+                        # window_title/app_name were read ONCE above for the
+                        # system-wide foreground window, which is only what
+                        # THIS frame shows when idx is the cursor monitor.
+                        # Attributing a non-cursor monitor's OCR text to the
+                        # foreground app is false (cp-ocr-crossmonitor-
+                        # mislabeled-attribution) -- suppress it there rather
+                        # than propagate the wrong app/window downstream.
+                        if idx == cursor_idx:
+                            ocr_app_name, ocr_window_title = app_name, window_title
+                        else:
+                            ocr_app_name, ocr_window_title = "", ""
                         self._ocr_worker.enqueue(
-                            frame_path, row_id, app_name,
-                            window_title=window_title,
+                            frame_path, row_id, ocr_app_name,
+                            window_title=ocr_window_title,
                             native_img=native_img,
+                            monitor_index=idx,
                         )
                     else:
                         logger.debug(

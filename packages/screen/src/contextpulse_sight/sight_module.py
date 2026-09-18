@@ -129,14 +129,23 @@ class SightModule(ModalityModule):
         confidence: float,
         app_name: str = "",
         window_title: str = "",
+        monitor_index: int = 0,
     ) -> None:
-        """Emit an OCR_RESULT event after OCR processing completes."""
+        """Emit an OCR_RESULT event after OCR processing completes.
+
+        monitor_index identifies which monitor the OCR'd frame came from.
+        It must be forwarded by the caller (OCRWorker._process) rather than
+        left at its default — app_name/window_title are only trustworthy
+        for the cursor monitor (see app.py:_do_auto_capture), and a
+        consumer needs monitor_index to tell the two cases apart.
+        """
         self._emit(ContextEvent(
             timestamp=timestamp,
             modality=Modality.SIGHT,
             event_type=EventType.OCR_RESULT,
             app_name=app_name,
             window_title=window_title,
+            monitor_index=monitor_index,
             payload={
                 "ocr_text": ocr_text,
                 "ocr_confidence": confidence,
