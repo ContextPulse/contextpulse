@@ -8,10 +8,16 @@ import inspect
 import time
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 # ---------------------------------------------------------------------------
 # Import daemon module (conftest.py ensures tkinter + pystray are mocked)
 # ---------------------------------------------------------------------------
-from contextpulse_core.daemon import ContextPulseDaemon, _write_fatal_crash_log
+from contextpulse_core.daemon import (
+    ContextPulseDaemon,
+    _refuse_if_session_0,
+    _write_fatal_crash_log,
+)
 
 # ---------------------------------------------------------------------------
 # Factory: build a daemon instance without triggering real __init__ side-effects
@@ -528,3 +534,88 @@ class TestKnowledgeIntegration:
         daemon._stop_knowledge()
         daemon._knowledge_ingestor.stop.assert_called_once()
         daemon._knowledge_store.close.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _refuse_if_session_0 -- the Session 0 startup guard.
+#
+# Regression coverage for cp-daemon-session0-blind-capture: a 4-day silent
+# outage where the whole supervision chain got relaunched into Windows
+# Session 0 (non-interactive) and every existing liveness signal (heartbeat,
+# process-alive, MCP port) stayed green the entire time because none of
+# them observe whether a capture actually happened.
+# ---------------------------------------------------------------------------
+
+class TestRefuseIfSession0:
+    def test_noop_on_non_windows(self, monkeypatch):
+        import contextpulse_core.daemon as daemon_mod
+        monkeypatch.setattr(daemon_mod.sys, "platform", "darwin")
+        with patch.object(daemon_mod, "get_windows_session_id") as mock_get:
+            _refuse_if_session_0()  # must not raise / not exit
+        mock_get.assert_not_called()
+
+    def test_exits_when_session_is_zero(self, monkeypatch):
+        import contextpulse_core.daemon as daemon_mod
+        monkeypatch.setattr(daemon_mod.sys, "platform", "win32")
+        with patch.object(daemon_mod, "get_windows_session_id", return_value=0), \
+             pytest.raises(SystemExit) as exc_info:
+            _refuse_if_session_0()
+        assert exc_info.value.code == 1
+
+    def test_exits_when_session_is_undeterminable(self, monkeypatch):
+        """Fails CLOSED: None (couldn't determine) is treated the same as
+        Session 0 -- proof of safety is required, not merely absence of
+        proof of danger."""
+        import contextpulse_core.daemon as daemon_mod
+        monkeypatch.setattr(daemon_mod.sys, "platform", "win32")
+        with patch.object(daemon_mod, "get_windows_session_id", return_value=None), \
+             pytest.raises(SystemExit) as exc_info:
+            _refuse_if_session_0()
+        assert exc_info.value.code == 1
+
+    def test_allows_a_real_interactive_session(self, monkeypatch):
+        import contextpulse_core.daemon as daemon_mod
+        monkeypatch.setattr(daemon_mod.sys, "platform", "win32")
+        with patch.object(daemon_mod, "get_windows_session_id", return_value=1):
+            _refuse_if_session_0()  # must not raise
+
+    def test_logs_error_naming_session_0_before_exiting(self, monkeypatch, caplog):
+        import logging
+
+        import contextpulse_core.daemon as daemon_mod
+        monkeypatch.setattr(daemon_mod.sys, "platform", "win32")
+        with patch.object(daemon_mod, "get_windows_session_id", return_value=0), \
+             caplog.at_level(logging.ERROR, logger="contextpulse.daemon"), \
+             pytest.raises(SystemExit):
+            _refuse_if_session_0()
+        assert any("Session 0" in r.getMessage() for r in caplog.records)
+
+
+class TestSessionGuardOrdering:
+    """Source-inspection guards (same style as TestWatchdogRestartCounting
+    above) proving the guard runs BEFORE expensive/unsafe work, not just
+    that it exists somewhere in the file."""
+
+    def test_main_checks_session_before_acquiring_mutex(self):
+        import contextpulse_core.daemon as daemon_mod
+        src = inspect.getsource(daemon_mod.main)
+        assert src.index("_refuse_if_session_0()") < src.index("_acquire_single_instance_or_exit()")
+
+    def test_run_checks_session_as_its_first_statement(self):
+        src = inspect.getsource(ContextPulseDaemon.run)
+        # First non-docstring statement inside run(): the mutex fallback
+        # comment block is documentation, but the guard call itself must
+        # precede the mutex fallback's own acquisition line.
+        assert src.index("_refuse_if_session_0()") < src.index("_acquire_single_instance_or_exit()")
+
+    def test_run_refuses_before_touching_the_tray(self, tmp_path, monkeypatch):
+        """End-to-end: run() must exit before pystray.Icon is ever built --
+        not just log an error and continue."""
+        import contextpulse_core.daemon as daemon_mod
+        daemon, _ = _make_daemon(tmp_path)
+        monkeypatch.setattr(daemon_mod.sys, "platform", "win32")
+        with patch.object(daemon_mod, "get_windows_session_id", return_value=0), \
+             patch.object(ContextPulseDaemon, "_start_modules") as mock_start, \
+             pytest.raises(SystemExit):
+            daemon.run()
+        mock_start.assert_not_called()

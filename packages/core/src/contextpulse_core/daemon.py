@@ -40,8 +40,13 @@ else:
 from contextpulse_core.config import OUTPUT_DIR as _cfg_output_dir
 from contextpulse_core.first_run import is_first_run, show_welcome_dialog
 from contextpulse_core.license_dialog import show_nag_dialog
-from contextpulse_core.log_rotation import rotate_if_oversized, rotating_file_handler
+from contextpulse_core.log_rotation import (
+    get_repeat_dedupe_filter,
+    rotate_if_oversized,
+    rotating_file_handler,
+)
 from contextpulse_core.platform import get_platform_provider
+from contextpulse_core.session_check import get_windows_session_id
 from contextpulse_core.settings import show_settings
 from contextpulse_core.spine import EventBus
 
@@ -141,6 +146,58 @@ def _setup_logging() -> None:
             logging.StreamHandler(),
         ],
     )
+    # Attached to the root LOGGER (not a handler) so it is evaluated once per
+    # record regardless of how many handlers exist -- including the
+    # StreamHandler above, whose stderr output is what daemon-watchdog.ps1
+    # redirects to daemon_stderr.log. That file is only rotated at process
+    # RESTART (see Rotate-StderrLog), so a daemon that never crashes but gets
+    # stuck logging the same error on a timer can regrow it without bound
+    # between restarts -- see cp-daemon-session0-blind-capture (10,524
+    # identical "Auto-capture failed" tracebacks, 20.5MB, over 4 days with no
+    # restart to trigger rotation). This does not replace rotation, it
+    # prevents a single stuck loop from outrunning it.
+    logging.getLogger().addFilter(get_repeat_dedupe_filter())
+
+
+def _refuse_if_session_0() -> None:
+    """Refuse to start in Windows Session 0 -- fail loud and fail closed.
+
+    Session 0 is the non-interactive services session: no desktop, no audio
+    endpoint, no input queue. Every capture modality silently produces
+    nothing there while every existing liveness signal (heartbeat file,
+    process-alive, MCP port listening) stays green, because none of them
+    observe whether a capture actually happened. That combination produced
+    a 4-day silent outage starting 2026-09-15 (cp-daemon-session0-blind-
+    capture): a scheduled task's recovery path relaunched the whole
+    supervision chain from within Session 0, and it stayed there, reporting
+    healthy the entire time.
+
+    Fails CLOSED: an undeterminable session (``None``) is treated the same
+    as Session 0. We are refusing to run somewhere we cannot prove is safe
+    to capture in, not merely somewhere we can prove is unsafe.
+
+    No-ops on non-Windows -- Session 0 is a Windows-only concept.
+    """
+    if sys.platform != "win32":
+        return
+    session_id = get_windows_session_id()
+    if session_id == 0:
+        reason = "Windows Session 0 (the non-interactive services session)"
+    elif session_id is None:
+        reason = "an undeterminable Windows session"
+    else:
+        return  # a real, non-zero, interactive-capable session
+
+    logger.error(
+        "Refusing to start ContextPulse in %s -- screen/voice/touch capture "
+        "cannot function without a real interactive desktop. See "
+        "cp-daemon-session0-blind-capture for the incident this guard "
+        "exists to prevent. Run ContextPulse from an interactive logon "
+        "session instead of a service/task context.",
+        reason,
+    )
+    print(f"ContextPulse: refusing to start in {reason}.", file=sys.stderr)
+    sys.exit(1)
 
 
 class ContextPulseDaemon:
@@ -677,7 +734,13 @@ class ContextPulseDaemon:
         race-wastes-4s). This is a fallback for any caller that constructs
         and runs a ``ContextPulseDaemon`` directly without going through
         ``main()`` first — it keeps ``run()`` a complete guard on its own.
+
+        Same pattern for the Session 0 guard: ``main()`` checks it before
+        ``ContextPulseDaemon()`` is even constructed (cheapest possible
+        rejection), and this is the fallback for direct construct-and-run
+        callers.
         """
+        _refuse_if_session_0()
         if not getattr(self, "_mutex", None):
             self._mutex = _acquire_single_instance_or_exit()
 
@@ -870,6 +933,12 @@ def main() -> None:
         from contextpulse_core.skill_setup import print_ecosystem_status
         print_ecosystem_status()
         return
+
+    # Refuse to run in Windows Session 0 BEFORE anything else that assumes a
+    # real desktop exists -- see _refuse_if_session_0's docstring. Checked
+    # here (the actual daemon-run path), not above the --setup/--status
+    # flags, which are inert CLI utilities that don't touch capture.
+    _refuse_if_session_0()
 
     # Acquire the single-instance guard BEFORE constructing ContextPulseDaemon()
     # -- module init (Sight/Voice/Touch/knowledge) does real work, and checking
