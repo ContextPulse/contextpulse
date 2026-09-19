@@ -108,24 +108,71 @@ if [ "${CLAUDECODE:-}" = "1" ] || [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
     if [ "$DEST_VISIBILITY" = "PRIVATE" ]; then
         echo "pre-push: agent push to PRIVATE remote '${REMOTE_NAME:-?}' -- allowed." >&2
         echo "pre-push: publication gate still runs on the content below." >&2
+
+    elif [ -n "${CONTEXTPULSE_PUBLISH_APPROVED_BY:-}" ]; then
+        # Corrected 2026-09-19, David, verbatim: "I don't think I ever asked to
+        # have to do pushes myself. I want you to use your skills to do pushes
+        # even to public, but you need my permission to do so."
+        #
+        # The refusal above encoded the stricter reading -- that an agent may
+        # NEVER push to a public remote -- and so made David the manual operator
+        # of every publish. The rule he actually holds is that a public push
+        # needs his PERMISSION, which is a different thing: permission can be
+        # given, and once given the agent does the work.
+        #
+        # So the public path is now openable, but only by an explicit, named
+        # approval that an agent has to set deliberately for this one push, and
+        # every use is appended to an audit log. This is deliberately NOT a
+        # security boundary -- as the note above says, anything running as David
+        # can set any variable -- and the threat model has not changed: the thing
+        # being prevented is an agent publishing WITHOUT BEING ASKED. An approval
+        # that must be typed out, attributed, and logged cannot be reached by
+        # accident or by momentum, which is the whole job.
+        #
+        # It is strictly better than the --no-verify it replaces: --no-verify
+        # skips the content gate below as well, so the old "ask David to push it"
+        # advice was one impatient keystroke away from disabling leak scanning
+        # entirely. This path leaves the content gate fully armed.
+        # REPO_ROOT is not set until further down, and `set -u` is on, so
+        # resolve the root here rather than reaching for it early.
+        APPROVAL_LOG="$(git rev-parse --show-toplevel 2>/dev/null)/logs/public-pushes.log"
+        mkdir -p "$(dirname "$APPROVAL_LOG")" 2>/dev/null || true
+        {
+            printf '%s\tremote=%s\turl=%s\tvisibility=%s\thead=%s\tapproved_by=%s\n' \
+                "$(date '+%Y-%m-%d %H:%M:%S')" \
+                "${REMOTE_NAME:-?}" \
+                "${REMOTE_URL:-?}" \
+                "$DEST_VISIBILITY" \
+                "$(git rev-parse --short HEAD 2>/dev/null || echo '?')" \
+                "$CONTEXTPULSE_PUBLISH_APPROVED_BY"
+        } >> "$APPROVAL_LOG" 2>/dev/null || true
+
+        echo "pre-push: agent push to $DEST_VISIBILITY remote '${REMOTE_NAME:-?}'." >&2
+        echo "pre-push: approved by: $CONTEXTPULSE_PUBLISH_APPROVED_BY" >&2
+        echo "pre-push: recorded in logs/public-pushes.log; content gate still runs." >&2
+
     else
         echo "" >&2
-        echo "PRE-PUSH REFUSED -- agent pushing to a destination that is not proven private." >&2
+        echo "PRE-PUSH REFUSED -- agent pushing to a destination that is not proven private," >&2
+        echo "and no publication approval was given." >&2
         echo "" >&2
         echo "  remote:     ${REMOTE_NAME:-?} ${REMOTE_URL:-(no url given)}" >&2
         echo "  visibility: $DEST_VISIBILITY" >&2
         echo "" >&2
-        echo "  David's standing direction, 2026-09-06: publishing anything to a public" >&2
-        echo "  repo is one of the five things reserved to him. That holds even when the" >&2
-        echo "  content is clean -- the decision to publish is his, not the content's." >&2
-        echo "  UNKNOWN is refused for the same reason: unresolved visibility is treated" >&2
-        echo "  as public, because the cost of a needless question is one sentence and" >&2
-        echo "  the cost of a wrong publish is a one-way door." >&2
+        echo "  David's standing direction: a public push needs his permission. Not his" >&2
+        echo "  hands on the keyboard -- his permission. UNKNOWN is refused on the same" >&2
+        echo "  footing as PUBLIC, because unresolved visibility is treated as public:" >&2
+        echo "  the cost of a needless question is one sentence, and the cost of a wrong" >&2
+        echo "  publish is a one-way door." >&2
         echo "" >&2
-        echo "  What to do: stop, and tell David what you want to publish and why." >&2
-        echo "  He pushes it himself, or tells you to. Do NOT reach for --no-verify:" >&2
-        echo "  that bypasses the content gate as well, and it is the reflex this repo's" >&2
-        echo "  own gate was tuned to avoid teaching." >&2
+        echo "  What to do: tell David what you want to publish and why, and ask. If he" >&2
+        echo "  says yes, re-run the push with his approval named:" >&2
+        echo "" >&2
+        echo "    CONTEXTPULSE_PUBLISH_APPROVED_BY=\"david, <date>, <what he approved>\" \\" >&2
+        echo "      git push <remote> <branch>" >&2
+        echo "" >&2
+        echo "  Do NOT reach for --no-verify: that bypasses the content gate as well," >&2
+        echo "  and it is the reflex this repo's own gate was tuned to avoid teaching." >&2
         echo "" >&2
         exit 1
     fi
