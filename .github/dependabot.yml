@@ -47,13 +47,22 @@ updates:
     # Lift these only as part of the migration that makes them safe, never
     # to find out what breaks. Security advisories ignore this setting.
     # ------------------------------------------------------------------
+    # `versions:`, NOT `update-types:`. The update-types form was tried first and
+    # DOES NOT WORK here, proven rather than guessed: Dependabot's job definition
+    # for run 35473830319 listed all three semver-major ignore-conditions, sourced
+    # from this file and stamped 22:36:48 -- and the run still opened PR #13
+    # raising mcp to <3. These are RANGE-WIDENING updates on a library with no
+    # lockfile, so there is no single "current version" for a semver comparison to
+    # classify against (`version-requirement: null` in that job definition), and
+    # the update-types filter does not engage. Naming the versions outright does
+    # not depend on that classification.
     ignore:
       - dependency-name: "mcp"
-        update-types: ["version-update:semver-major"]
+        versions: [">=2.0.0"]
       - dependency-name: "mcp[cli]"
-        update-types: ["version-update:semver-major"]
+        versions: [">=2.0.0"]
       - dependency-name: "anthropic"
-        update-types: ["version-update:semver-major"]
+        versions: [">=1.0.0"]
     groups:
       # One PR per batch instead of one per manifest. Without this, a shared
       # dependency bumped across the workspace opens a near-identical PR for
