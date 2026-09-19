@@ -11,6 +11,16 @@ def _make_image(width, height, color=(128, 128, 128)):
     return Image.new("RGB", (width, height), color)
 
 
+# Captured at module load, before any test can patch builtins.__import__.
+# _ctypes must be imported here too (not inside a function that itself runs
+# AS the patched __import__) -- an `import _ctypes` statement inside such a
+# function calls the patched __import__ again for "_ctypes" every time,
+# which recurses forever even though the module is already cached.
+_REAL_IMPORT = __import__
+if sys.platform == "win32":
+    import _ctypes as _ctypes_for_tests
+
+
 class TestDownscale:
     """Test image downscaling logic."""
 
@@ -160,6 +170,127 @@ class TestCaptureBackend:
             cap._dxcam_cameras = {}
             backend = _get_backend()
             assert backend == "mss"
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="dxcam is Windows-only")
+    def test_get_backend_falls_back_to_mss_on_comerror(self):
+        """dxcam's import-time DXFactory() init hits the GPU/display adapter
+        directly and can raise _ctypes.COMError -- a direct Exception
+        subclass, NOT ImportError/OSError (verified: COMError.__mro__ ==
+        (COMError, Exception, BaseException, object)). Reproduces the live
+        incident (cp-daemon-stuck-in-session0): Desktop Duplication has no
+        output to enumerate in Windows Session 0 (no desktop), so every
+        capture cycle re-attempted `import dxcam` and re-raised the same
+        COMError -- 10,539 identical tracebacks, ~20MB of daemon_stderr.log
+        from one process, because a failed import is never cached in
+        sys.modules and _get_backend() had no except clause for it."""
+        import _ctypes
+        import builtins
+        from unittest.mock import patch
+
+        import contextpulse_sight.capture as cap
+
+        real_import = builtins.__import__
+
+        def _fake_import(name, *args, **kwargs):
+            if name == "dxcam":
+                raise _ctypes.COMError(
+                    -2005270494,
+                    "A resource is not available at the time of the call, "
+                    "but may become available later.",
+                    (None, None, None, 0, None),
+                )
+            return real_import(name, *args, **kwargs)
+
+        cap._backend = None
+        cap._dxcam_cameras = {}
+        with patch("builtins.__import__", side_effect=_fake_import):
+            backend = cap._get_backend()
+        assert backend == "mss"
+        # Second call must NOT re-attempt the import (proves caching, not
+        # just a lucky single catch) -- if it did, the patched import above
+        # is out of scope by now and a real, uncaught COMError would surface
+        # instead of the cached "mss" being returned.
+        assert cap._get_backend() == "mss"
+        assert cap._backend == "mss"
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="dxcam is Windows-only")
+    def test_comerror_fallback_in_session_0_logs_at_error_with_warning_text(self, caplog):
+        """A dxcam failure that coincides with Session 0 must be unmistakable,
+        not just an ordinary warning -- mss silently returns plausible-looking
+        garbage for a desktop that doesn't exist in Session 0 (see
+        cp-daemon-session0-blind-capture)."""
+        import logging
+        from unittest.mock import patch
+
+        import contextpulse_sight.capture as cap
+
+        cap._backend = None
+        cap._dxcam_cameras = {}
+        with patch("builtins.__import__", side_effect=self._raise_comerror), \
+             patch("contextpulse_core.session_check.get_windows_session_id", return_value=0), \
+             caplog.at_level(logging.WARNING, logger="contextpulse_sight.capture"):
+            backend = cap._get_backend()
+
+        assert backend == "mss"
+        error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert error_records, "Session 0 dxcam failure must log at ERROR, not merely WARNING"
+        assert "Session 0" in error_records[0].getMessage()
+        assert "NOT trustworthy" in error_records[0].getMessage()
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="dxcam is Windows-only")
+    def test_comerror_fallback_outside_session_0_logs_at_warning_only(self, caplog):
+        """The ordinary case -- a real runtime dxcam failure on an
+        interactive desktop -- must NOT be escalated to ERROR; that would
+        cry wolf on every legitimate transient dxcam hiccup."""
+        import logging
+        from unittest.mock import patch
+
+        import contextpulse_sight.capture as cap
+
+        cap._backend = None
+        cap._dxcam_cameras = {}
+        with patch("builtins.__import__", side_effect=self._raise_comerror), \
+             patch("contextpulse_core.session_check.get_windows_session_id", return_value=1), \
+             caplog.at_level(logging.WARNING, logger="contextpulse_sight.capture"):
+            backend = cap._get_backend()
+
+        assert backend == "mss"
+        assert not [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert [r for r in caplog.records if r.levelno == logging.WARNING]
+
+    @staticmethod
+    def _raise_comerror(name, *args, **kwargs):
+        if name == "dxcam":
+            raise _ctypes_for_tests.COMError(
+                -2005270494,
+                "A resource is not available at the time of the call, "
+                "but may become available later.",
+                (None, None, None, 0, None),
+            )
+        # NOTE: must use the REAL __import__, captured before this test's
+        # patch() replaces builtins.__import__ -- calling
+        # builtins.__import__ again from inside this function would call
+        # right back into the patched (this same) function and recurse
+        # forever.
+        return _REAL_IMPORT(name, *args, **kwargs)
+
+    def test_ordinary_missing_dxcam_does_not_probe_session_id(self):
+        """ImportError (dxcam simply not installed) is the routine, expected
+        case on many setups -- it must stay quiet and must NOT pay the cost
+        of a session lookup, which is only useful for diagnosing a genuine
+        runtime failure."""
+        from unittest.mock import patch
+
+        import contextpulse_sight.capture as cap
+
+        cap._backend = None
+        cap._dxcam_cameras = {}
+        with patch.dict("sys.modules", {"dxcam": None}), \
+             patch("contextpulse_core.session_check.get_windows_session_id") as mock_session:
+            backend = cap._get_backend()
+
+        assert backend == "mss"
+        mock_session.assert_not_called()
 
     def test_dxcam_grab_returns_pil_image(self):
         """DXcam grab returns numpy BGR array — must be converted to PIL RGB."""

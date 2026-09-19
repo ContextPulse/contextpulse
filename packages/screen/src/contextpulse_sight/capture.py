@@ -126,10 +126,64 @@ def _get_backend() -> str:
             return _backend
         except (ImportError, OSError):
             pass
+        except Exception as exc:
+            # dxcam's import-time DXFactory() init talks to the GPU/display
+            # adapter directly and can raise anything from that layer --
+            # observed live: _ctypes.COMError (a direct Exception subclass,
+            # NOT ImportError/OSError -- verified via COMError.__mro__) when
+            # Desktop Duplication has no attached output (e.g. the process
+            # is stuck in Windows Session 0, which has no desktop). Without
+            # this catch, every capture cycle re-attempts `import dxcam`
+            # (a failed import is never cached in sys.modules, so it
+            # re-executes the module's top-level code) and re-raises the
+            # identical traceback forever -- confirmed live: 10,539
+            # identical tracebacks, ~20MB of daemon_stderr.log from one
+            # process (cp-daemon-stuck-in-session0). Cache the mss fallback
+            # exactly like the ImportError/OSError path so this is
+            # diagnosed once per process, not every capture cycle.
+            #
+            # Falling back to mss here must NOT read as an ordinary,
+            # quiet recovery: in Windows Session 0 mss does not fail the
+            # way dxcam just did -- it returns real-looking bytes for a
+            # desktop that does not exist, i.e. plausible garbage, not an
+            # error. The daemon's own startup guard
+            # (daemon.py:_refuse_if_session_0) is meant to stop the
+            # process before it ever reaches this line; this check is
+            # defense in depth for any other caller of this module that
+            # guard doesn't cover (tests, the MCP server, a future entry
+            # point).
+            _warn_dxcam_fallback(exc)
 
     _backend = "mss"
     logger.info("Using mss capture backend (GDI)")
     return _backend
+
+
+def _warn_dxcam_fallback(exc: Exception) -> None:
+    """Log the dxcam->mss fallback, escalated to unmistakable in Session 0."""
+    session_id = None
+    try:
+        from contextpulse_core.session_check import get_windows_session_id
+        session_id = get_windows_session_id()
+    except Exception:
+        logger.debug("Could not determine Windows session id for dxcam diagnostic", exc_info=True)
+
+    if session_id == 0:
+        logger.error(
+            "DXcam unavailable (%s: %s) AND this process is running in "
+            "Windows Session 0 (non-interactive) -- falling back to mss, "
+            "but mss captures taken in Session 0 are BLANK/GARBAGE, not a "
+            "real screen. This almost certainly means the daemon is "
+            "running in the wrong session (see cp-daemon-stuck-in-session0 "
+            "/ cp-daemon-session0-blind-capture). Captures from this point "
+            "are NOT trustworthy.",
+            type(exc).__name__, exc,
+        )
+    else:
+        logger.warning(
+            "DXcam unavailable (%s: %s) -- falling back to mss for this process lifetime",
+            type(exc).__name__, exc,
+        )
 
 
 def _get_dxcam_camera(output_idx: int = 0) -> object | None:
