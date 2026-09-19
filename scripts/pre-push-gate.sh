@@ -44,20 +44,91 @@ set -u
 # running as David can unset it -- and it is not trying to be: the threat here is
 # an agent publishing without being asked, not an attacker. The security boundary
 # for content is the gate below, and CI re-runs it after the push regardless.
+# Narrowed 2026-09-19 on David's decision: this refusal used to fire on EVERY
+# agent push, whatever the destination. That blocked the workflow this project's
+# own CLAUDE.md prescribes -- "code-in-progress lives on the private
+# contextpulse-wip remote" -- because an agent could not push there either, and
+# the only ways past were David pushing by hand or --no-verify, which also
+# bypasses the content gate. The tenet being enforced is about PUBLICATION:
+# "anything published to a public repo". A push to a PRIVATE remote publishes
+# nothing, so refusing it bought no safety and cost the private-WIP lane.
+#
+# Git hands a pre-push hook its destination as $1 (remote name) and $2 (remote
+# URL). This gate simply never read them. It does now, and it fails CLOSED:
+# only a destination positively proven PRIVATE is allowed. An unresolvable
+# slug, a non-GitHub host, no gh, no auth, a network blip, or INTERNAL all
+# resolve to UNKNOWN and are refused exactly as PUBLIC is -- David's standing
+# rule is "unresolvable visibility = treat as public and ask".
+#
+# This narrows WHO may push WHERE. It does not touch WHAT may leave: the
+# content gate below still runs on every push, private destinations included.
+
+REMOTE_NAME="${1:-}"
+REMOTE_URL="${2:-}"
+
+remote_visibility() {
+    # Echo PUBLIC / PRIVATE / INTERNAL / UNKNOWN for a push destination URL.
+    local url="$1"
+    if [ -z "$url" ]; then echo "UNKNOWN"; return; fi
+
+    # Accept https://github.com/OWNER/REPO(.git) and git@github.com:OWNER/REPO(.git).
+    local slug owner repo
+    case "$url" in
+        *github.com[:/]*)
+            slug="${url#*github.com}"
+            slug="${slug#[:/]}"
+            slug="${slug%.git}"
+            slug="${slug%/}"
+            ;;
+        *)
+            # Not GitHub: nothing here can prove it is private.
+            echo "UNKNOWN"; return ;;
+    esac
+
+    # Require exactly OWNER/REPO. Anything else is not a slug worth trusting.
+    owner="${slug%%/*}"
+    repo="${slug#*/}"
+    if [ -z "$owner" ] || [ -z "$repo" ] || [ "$repo" != "${repo%%/*}" ]; then
+        echo "UNKNOWN"; return
+    fi
+
+    if ! command -v gh >/dev/null 2>&1; then echo "UNKNOWN"; return; fi
+
+    local vis
+    vis="$(gh repo view "$owner/$repo" --json visibility -q .visibility 2>/dev/null)"
+    case "$vis" in
+        PUBLIC|PRIVATE|INTERNAL) echo "$vis" ;;
+        *) echo "UNKNOWN" ;;
+    esac
+}
+
 if [ "${CLAUDECODE:-}" = "1" ] || [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
-    echo "" >&2
-    echo "PRE-PUSH REFUSED -- this is a PUBLIC repository and an agent is pushing." >&2
-    echo "" >&2
-    echo "  David's standing direction, 2026-09-06: publishing anything to a public" >&2
-    echo "  repo is one of the five things reserved to him. That holds even when the" >&2
-    echo "  content is clean -- the decision to publish is his, not the content's." >&2
-    echo "" >&2
-    echo "  What to do: stop, and tell David what you want to publish and why." >&2
-    echo "  He pushes it himself, or tells you to. Do NOT reach for --no-verify:" >&2
-    echo "  that bypasses the content gate as well, and it is the reflex this repo's" >&2
-    echo "  own gate was tuned to avoid teaching." >&2
-    echo "" >&2
-    exit 1
+    DEST_VISIBILITY="$(remote_visibility "$REMOTE_URL")"
+
+    if [ "$DEST_VISIBILITY" = "PRIVATE" ]; then
+        echo "pre-push: agent push to PRIVATE remote '${REMOTE_NAME:-?}' -- allowed." >&2
+        echo "pre-push: publication gate still runs on the content below." >&2
+    else
+        echo "" >&2
+        echo "PRE-PUSH REFUSED -- agent pushing to a destination that is not proven private." >&2
+        echo "" >&2
+        echo "  remote:     ${REMOTE_NAME:-?} ${REMOTE_URL:-(no url given)}" >&2
+        echo "  visibility: $DEST_VISIBILITY" >&2
+        echo "" >&2
+        echo "  David's standing direction, 2026-09-06: publishing anything to a public" >&2
+        echo "  repo is one of the five things reserved to him. That holds even when the" >&2
+        echo "  content is clean -- the decision to publish is his, not the content's." >&2
+        echo "  UNKNOWN is refused for the same reason: unresolved visibility is treated" >&2
+        echo "  as public, because the cost of a needless question is one sentence and" >&2
+        echo "  the cost of a wrong publish is a one-way door." >&2
+        echo "" >&2
+        echo "  What to do: stop, and tell David what you want to publish and why." >&2
+        echo "  He pushes it himself, or tells you to. Do NOT reach for --no-verify:" >&2
+        echo "  that bypasses the content gate as well, and it is the reflex this repo's" >&2
+        echo "  own gate was tuned to avoid teaching." >&2
+        echo "" >&2
+        exit 1
+    fi
 fi
 
 PRE_PUBLISH="$HOME/Projects/AgentConfig/scripts/pre-publish.py"
