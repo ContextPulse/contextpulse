@@ -25,7 +25,7 @@ dependencies = [
     # [tool.setuptools.packages.find].where below, so they must not be listed here
     # (pip would try to resolve them from PyPI and fail).
     "python-dotenv>=1.0,<2",
-    "cryptography>=43.0,<47",
+    "cryptography>=43.0,<51",
     "psutil>=7.0,<8",
     "mss>=9.0,<11",
     "pynput>=1.7,<2",
