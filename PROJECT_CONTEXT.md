@@ -118,8 +118,15 @@ paid cloud tier under active evaluation.
 
    | Stage | Condition | Checked by |
    |---|---|---|
-   | 1 — precondition | ≥ 20 `tool_usage` rows after 2026-09-19 | `python scripts/probe_usage_report.py --since 2026-09-19` |
+   | 1 — precondition | report's **"Tool calls total" ≥ 22** | `python scripts/probe_usage_report.py --since 2026-09-19` |
    | 2 — value | ≥ 3 journal rows `category=phase0-save` after 2026-09-19 | same command |
+
+   Stage 1 is an **absolute against a baseline of 2** (one call 2026-08-24, one
+   verification call 2026-09-19 16:09), i.e. 20 new calls. It is phrased that way
+   because `--since` filters only the save count; the tool-call figure is
+   all-time and ignores it (`cp-probe-usage-report-since-ignores-tool-calls`).
+   Stage 2 *is* filtered correctly. **Do not restate stage 1 as "20 calls since
+   <date>" until that defect is fixed** — the report cannot express it.
 
    Checkpoint **2026-10-17**. Precondition met and saves ≥ 3 → the KG earned its
    keep. Precondition met and saves < 3 → a *genuine* stop, and unlike August that
