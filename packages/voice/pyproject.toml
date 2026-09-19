@@ -23,13 +23,13 @@ classifiers = [
 requires-python = ">=3.12"
 dependencies = [
     "contextpulse-core>=0.1.0",
-    "mcp>=1.0,<2",
+    "mcp>=1.0,<3",
     "faster-whisper>=1.0,<2",
     "sounddevice>=0.4,<1",
     "numpy>=1.24,<3",
     "pyperclip>=1.8,<2",
     "pyautogui>=0.9,<1",
-    "anthropic>=0.39,<1",
+    "anthropic>=0.39,<2",
     "python-dotenv>=1.0,<2",
 ]
 
