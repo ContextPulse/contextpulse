@@ -35,6 +35,25 @@ updates:
       interval: "weekly"
     versioning-strategy: increase-if-necessary
     open-pull-requests-limit: 5
+    # ------------------------------------------------------------------
+    # Deliberate major-version caps. increase-if-necessary still proposes
+    # widening a range when a release lands OUTSIDE it, which is right for
+    # an accidental bound and wrong for an intentional one. Within hours of
+    # enabling the globs above, Dependabot opened a PR raising mcp to <3
+    # across six manifests -- mcp 2.0.0 removed mcp.server.fastmcp, which
+    # this project uses, and broke every CI job when it shipped. An upper
+    # bound a release has moved past is the bound working, not a stale pin.
+    #
+    # Lift these only as part of the migration that makes them safe, never
+    # to find out what breaks. Security advisories ignore this setting.
+    # ------------------------------------------------------------------
+    ignore:
+      - dependency-name: "mcp"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "mcp[cli]"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "anthropic"
+        update-types: ["version-update:semver-major"]
     groups:
       # One PR per batch instead of one per manifest. Without this, a shared
       # dependency bumped across the workspace opens a near-identical PR for
