@@ -108,14 +108,24 @@ paid cloud tier under active evaluation.
 
 ## Next Steps
 
-1. **DECISION FOR DAVID, not a build task.** The instrument he required on
-   2026-08-22 already exists (see In Progress above), and it has now answered the
-   question it was built to answer: the wedge probe never ran. One tool call in
-   two months. So the choice is no longer "does the KG earn its keep" — nothing
-   has tested that yet — but whether to actually run the experiment now that the
-   tools are discoverable, or retire Phase 0 and delete the throwaway scaffolding.
-   Running it costs nothing new: the consolidator, the tools and the counter are
-   all built and working.
+1. **Phase 0 is RUNNING again as of 2026-09-19** (David's call; decision row
+   `cp-phase0-restart-20260919`). The 2026-08-20 STOP at "0 of 3 attributed saves"
+   is **void as evidence** — `tool_usage` held one row for all time, so the
+   experiment had no treatment arm and the number was never a verdict on recall.
+   The restart carries a **two-stage gate**, because the old one could not tell
+   "never called" apart from "called and useless" — opposite problems with
+   opposite fixes:
+
+   | Stage | Condition | Checked by |
+   |---|---|---|
+   | 1 — precondition | ≥ 20 `tool_usage` rows after 2026-09-19 | `python scripts/probe_usage_report.py --since 2026-09-19` |
+   | 2 — value | ≥ 3 journal rows `category=phase0-save` after 2026-09-19 | same command |
+
+   Checkpoint **2026-10-17**. Precondition met and saves ≥ 3 → the KG earned its
+   keep. Precondition met and saves < 3 → a *genuine* stop, and unlike August that
+   verdict is real evidence. **Precondition not met → a routing defect, not a
+   verdict — re-open it and do not judge the knowledge graph.** The thresholds 20
+   and 3 are the agent's; David set the original 3 and delegated the restart.
 2. Fix the consolidator's silent failure before trusting any new gate reading
    (`cp-consolidator-silent-zero-fact-runs`). A scheduled run on 2026-09-19 12:30
    read 1500 events, returned in 6.4s and wrote 0 facts while printing "OK"; the
