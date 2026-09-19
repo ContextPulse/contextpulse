@@ -1,10 +1,54 @@
 version: 2
+
 updates:
+  # ---------------------------------------------------------------------
+  # Python dependencies
+  #
+  # versioning-strategy: increase-if-necessary
+  #   ContextPulse is an installable library, not an application. The pip
+  #   default ("auto") raises the MINIMUM of a range, which narrows who can
+  #   install us without protecting us from anything -- the upper bound is
+  #   what guards against a breaking major, and those are already declared
+  #   (numpy<3, psutil<8, mcp<2). On 2026-09-19 that default produced five
+  #   PRs in one batch that did nothing but lift floors; all five were
+  #   closed on policy.
+  #   "increase-if-necessary" touches a requirement ONLY when the new release
+  #   falls outside the range we already declare. numpy 2.5.3 satisfies
+  #   numpy>=1.26,<3, so it raises nothing; a numpy 3.0 would fall outside
+  #   and open a PR, which is a real decision worth surfacing.
+  #   ("widen" is NOT valid for pip -- Dependabot accepts only lockfile-only,
+  #   auto, increase and increase-if-necessary here, and rejects the whole
+  #   file otherwise. It is an npm/composer option.)
+  #   Security advisories still open PRs regardless of this setting.
+  #
+  # directories
+  #   "/" alone left every packages/*/pyproject.toml unmonitored -- eight
+  #   manifests carrying real pins, invisible to Dependabot, so a published
+  #   advisory against one of them would never have raised a PR. The glob
+  #   covers them and any package added later.
+  # ---------------------------------------------------------------------
   - package-ecosystem: "pip"
-    directory: "/"
+    directories:
+      - "/"
+      - "/packages/*"
     schedule:
       interval: "weekly"
+    versioning-strategy: increase-if-necessary
+    open-pull-requests-limit: 5
+    groups:
+      # One PR per batch instead of one per manifest. Without this, a shared
+      # dependency bumped across the workspace opens a near-identical PR for
+      # each of the nine manifests above.
+      python-dev-dependencies:
+        dependency-type: "development"
+      python-runtime-dependencies:
+        dependency-type: "production"
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"

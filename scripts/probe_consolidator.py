@@ -47,13 +47,21 @@ logging.basicConfig(
 logger = logging.getLogger("probe.consolidator")
 
 
-def call_claude(prompt: str, timeout: int = 600) -> str:
-    """Invoke the Claude CLI headlessly and return stdout. Fail loud.
+def call_claude(prompt: str, timeout: int = 600) -> tuple[str, float]:
+    """Invoke the Claude CLI headlessly. Return (stdout, elapsed_seconds). Fail loud.
 
     The prompt is piped via STDIN (not passed as an argv) — it can be tens of KB
     with full Unicode, which would hit the Windows command-line length limit and
     mangle non-ASCII if passed as an argument.
+
+    elapsed_seconds is measured around the subprocess call regardless of outcome
+    (cp-consolidator-silent-zero-fact-runs) — it is currently the single
+    clearest available signal that a run got a fast non-answer rather than an
+    actual model response: a scheduled run that returned in 6.4s could not
+    have read the ~80K-token prompt that a manual rerun of the identical
+    workload took 42s to answer.
     """
+    start = time.monotonic()
     proc = subprocess.run(
         ["claude", "-p"],
         input=prompt,
@@ -67,9 +75,13 @@ def call_claude(prompt: str, timeout: int = 600) -> str:
         # API key that leaked in from the User-scope environment.
         env=probe.claude_cli_env(),
     )
+    elapsed = time.monotonic() - start
     if proc.returncode != 0:
-        raise RuntimeError(f"claude CLI exited {proc.returncode}: {proc.stderr[:500].strip()}")
-    return proc.stdout
+        raise RuntimeError(
+            f"claude CLI exited {proc.returncode} after {elapsed:.1f}s: "
+            f"{proc.stderr[:500].strip()}"
+        )
+    return proc.stdout, elapsed
 
 
 def open_events_ro(activity_db) -> sqlite3.Connection:
@@ -125,15 +137,54 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         try:
             logger.info("Calling Claude CLI for extraction...")
-            output = call_claude(prompt, timeout=args.timeout)
+            output, elapsed = call_claude(prompt, timeout=args.timeout)
         except Exception as exc:  # noqa: BLE001 — record then fail loud
             probe.record_run(pconn, events=len(events), facts=0, error=str(exc)[:300])
             logger.exception("Claude CLI call failed")
             return 1
-        facts = probe.parse_facts(output)
-        logger.info("Parsed %d facts from LLM output", len(facts))
+
+        facts, outcome = probe.parse_facts_with_outcome(output)
+        output_bytes = len(output.encode("utf-8", errors="replace"))
+
+        if outcome is probe.ParseOutcome.FAULT:
+            # The failure this action exists to fix: an events>0 run that got
+            # a non-answer from the CLI must NOT report OK. Log the raw
+            # output (truncated) and its byte length — the two facts that
+            # would have named the 12:30 scheduled failure's own cause
+            # instead of leaving it silent.
+            snippet = output.strip()[:800] if output and output.strip() else "(empty output)"
+            logger.error(
+                "Extraction FAULT after %.1fs — events=%d, output=%d bytes, "
+                "no parseable JSON array found. First 800 chars: %r",
+                elapsed,
+                len(events),
+                output_bytes,
+                snippet,
+            )
+            error_msg = (
+                f"unparseable CLI output: {output_bytes} bytes in {elapsed:.1f}s "
+                f"(events={len(events)}); see log for raw excerpt"
+            )
+            probe.record_run(
+                pconn, events=len(events), facts=0, error=error_msg[:990], elapsed_s=elapsed
+            )
+            return 1
+
+        logger.info(
+            "Parsed %d facts from LLM output in %.1fs (%s, %d bytes)",
+            len(facts),
+            elapsed,
+            outcome.value,
+            output_bytes,
+        )
+        if outcome is probe.ParseOutcome.EMPTY:
+            logger.info(
+                "Valid empty result — legitimate quiet window (%d events, %.1fs), not a fault.",
+                len(events),
+                elapsed,
+            )
         n = probe.write_facts(pconn, facts)
-        probe.record_run(pconn, events=len(events), facts=n, error=None)
+        probe.record_run(pconn, events=len(events), facts=n, error=None, elapsed_s=elapsed)
         logger.info("Wrote %d new facts to %s", n, args.probe_db)
         print(f"OK: {len(events)} events -> {n} new facts written to {args.probe_db}")
         return 0

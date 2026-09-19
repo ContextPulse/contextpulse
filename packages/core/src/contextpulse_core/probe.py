@@ -15,6 +15,9 @@ Surface:
     read_recent_events(conn, since)   -> [event dict]  (from activity.db `events`)
     build_extraction_prompt(events)   -> str           (prompt for the Claude CLI)
     parse_facts(llm_output)           -> [fact dict]   (tolerant JSON extraction)
+    parse_facts_with_outcome(output)  -> ([fact dict], ParseOutcome)  (discriminates
+                                          a legit empty `[]` from unparseable output —
+                                          see ParseOutcome)
     write_facts(conn, facts)          -> int           (rows written to probe.db)
     query_facts_about(conn, entity)   -> [fact dict]   (entity recall)
     query_context_at(conn, t)         -> [fact dict]   (temporal recall)
@@ -29,6 +32,7 @@ import logging
 import os
 import sqlite3
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -139,6 +143,14 @@ CREATE INDEX IF NOT EXISTS idx_facts_valid_from ON facts(valid_from);
 -- Per-run ledger so a failed/empty 3am run is visible, not a silent zero
 -- (red-team M1). Reviewed at the exit gate to distinguish "no saves" from
 -- "consolidator never actually ran".
+--
+-- elapsed_s (cp-consolidator-silent-zero-fact-runs) is added via an idempotent
+-- ALTER TABLE in _ensure_probe_runs_elapsed_column() rather than here, because
+-- CREATE TABLE IF NOT EXISTS does not retrofit a column onto an
+-- already-existing probe.db (this one already carries 280+ real rows). It is
+-- the clearest signal available for the failure this schema comment names:
+-- a scheduled run that returns in 6.4s cannot have read an ~80K-token prompt,
+-- while a manual run of the identical workload took 42s and succeeded.
 CREATE TABLE IF NOT EXISTS probe_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ran_at REAL NOT NULL DEFAULT (unixepoch('subsec')),
@@ -174,7 +186,23 @@ def connect_probe(path: Path | str) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.executescript(_SCHEMA_SQL)
     conn.commit()
+    _ensure_probe_runs_elapsed_column(conn)
     return conn
+
+
+def _ensure_probe_runs_elapsed_column(conn: sqlite3.Connection) -> None:
+    """Idempotent migration: add probe_runs.elapsed_s to an older probe.db.
+
+    Cheap and backward compatible — SQLite's ALTER TABLE ADD COLUMN does not
+    rewrite existing rows (they read back NULL for the new column), and this
+    is checked-then-added rather than a bare ALTER because SQLite has no
+    ADD COLUMN IF NOT EXISTS and re-running it on an already-migrated probe.db
+    must not raise.
+    """
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(probe_runs)")}
+    if "elapsed_s" not in cols:
+        conn.execute("ALTER TABLE probe_runs ADD COLUMN elapsed_s REAL")
+        conn.commit()
 
 
 def write_facts(conn: sqlite3.Connection, facts: list[dict[str, Any]]) -> int:
@@ -197,11 +225,25 @@ def write_facts(conn: sqlite3.Connection, facts: list[dict[str, Any]]) -> int:
     return written
 
 
-def record_run(conn: sqlite3.Connection, events: int, facts: int, error: str | None = None) -> None:
-    """Append a row to the run ledger so empty/failed runs aren't silent."""
+def record_run(
+    conn: sqlite3.Connection,
+    events: int,
+    facts: int,
+    error: str | None = None,
+    elapsed_s: float | None = None,
+) -> None:
+    """Append a row to the run ledger so empty/failed runs aren't silent.
+
+    elapsed_s is the Claude CLI call's wall-clock time, when known (the
+    6.4s-vs-42s gap between a silently-failed scheduled run and a successful
+    manual rerun of the same workload was the clearest signal available for
+    cp-consolidator-silent-zero-fact-runs, and nothing was recording it).
+    Optional and defaults to None so existing positional/keyword callers are
+    unaffected.
+    """
     conn.execute(
-        "INSERT INTO probe_runs (events, facts, error) VALUES (?, ?, ?)",
-        (events, facts, error),
+        "INSERT INTO probe_runs (events, facts, error, elapsed_s) VALUES (?, ?, ?, ?)",
+        (events, facts, error, elapsed_s),
     )
     conn.commit()
 
@@ -483,25 +525,66 @@ def build_extraction_prompt(events: list[dict[str, Any]]) -> str:
 # ── tolerant parsing ────────────────────────────────────────────────
 
 
-def parse_facts(llm_output: str) -> list[dict[str, Any]]:
-    """Extract a fact list from raw LLM output, tolerant of fences/prose.
+class ParseOutcome(Enum):
+    """How ``parse_facts_with_outcome`` classifies one LLM-output parse.
 
-    Drops entries missing ``entity`` or ``fact``; defaults optional fields.
-    Returns [] on any parse failure (never raises).
+    Collapsing all three into a bare fact count is exactly what let the
+    consolidator report OK on total extraction failure
+    (cp-consolidator-silent-zero-fact-runs): a scheduled run that got a fast
+    non-answer from the CLI logged "Parsed 0 facts" and recorded error=None,
+    identically to a legitimate quiet window. The three cases are NOT
+    equivalent and must not be merged back into one:
+
+    FACTS  a valid JSON array with 1+ well-formed entries — normal success.
+    EMPTY  a valid JSON array that is genuinely `[]` — the prompt explicitly
+           allows this ("If nothing durable happened, return []"), and
+           historically common on small/quiet windows. Still success.
+    FAULT  no array found in the output, the array was malformed JSON, or
+           the top-level value parsed but was not a list at all — the CLI
+           gave a non-answer. This is the case that was silently swallowed.
+
+    Note this classifies the RAW parsed array, not the post-validation fact
+    list: an array of well-formed JSON objects that all happen to be missing
+    ``entity``/``fact`` (and so parse to 0 usable facts) is still FACTS-shaped
+    output from the model, not a FAULT — the model answered, just badly.
     """
-    if not llm_output:
-        return []
+
+    FACTS = "facts"
+    EMPTY = "empty"
+    FAULT = "fault"
+
+
+def _extract_json_array(llm_output: str) -> tuple[list[Any] | None, ParseOutcome]:
+    """Locate and ``json.loads`` the array in raw LLM output. Never raises.
+
+    Shared by ``parse_facts`` and ``parse_facts_with_outcome`` so the two
+    never disagree about what counts as "found an array" — see ParseOutcome
+    for what FACTS/EMPTY/FAULT mean.
+    """
+    if not llm_output or not llm_output.strip():
+        return None, ParseOutcome.FAULT
     start = llm_output.find("[")
     end = llm_output.rfind("]")
     if start == -1 or end == -1 or end < start:
-        return []
+        return None, ParseOutcome.FAULT
     try:
         raw = json.loads(llm_output[start : end + 1])
     except json.JSONDecodeError:
-        return []
+        return None, ParseOutcome.FAULT
     if not isinstance(raw, list):
-        return []
+        # Defensive, not reachable via this bracket-slice strategy today: a
+        # substring bounded by its own first "[" and last "]" that parses as
+        # valid JSON is array syntax by grammar and must already be a list.
+        # Kept in case the extraction strategy changes later.
+        return None, ParseOutcome.FAULT  # pragma: no cover
+    return raw, (ParseOutcome.EMPTY if len(raw) == 0 else ParseOutcome.FACTS)
 
+
+def _facts_from_raw(raw: list[Any]) -> list[dict[str, Any]]:
+    """Validate/normalize a parsed JSON array into fact dicts.
+
+    Drops entries missing ``entity`` or ``fact``; defaults optional fields.
+    """
     facts: list[dict[str, Any]] = []
     for item in raw:
         if not isinstance(item, dict):
@@ -527,3 +610,29 @@ def parse_facts(llm_output: str) -> list[dict[str, Any]]:
             }
         )
     return facts
+
+
+def parse_facts(llm_output: str) -> list[dict[str, Any]]:
+    """Extract a fact list from raw LLM output, tolerant of fences/prose.
+
+    Drops entries missing ``entity`` or ``fact``; defaults optional fields.
+    Returns [] on any parse failure (never raises) — this is the original,
+    unchanged contract other callers may rely on. Prefer
+    ``parse_facts_with_outcome`` for any caller that needs to tell a
+    legitimate empty result apart from an unparseable one.
+    """
+    raw, _outcome = _extract_json_array(llm_output)
+    if raw is None:
+        return []
+    return _facts_from_raw(raw)
+
+
+def parse_facts_with_outcome(llm_output: str) -> tuple[list[dict[str, Any]], ParseOutcome]:
+    """Like ``parse_facts``, plus WHY an empty result happened.
+
+    See ``ParseOutcome`` for what FACTS/EMPTY/FAULT mean. Never raises.
+    """
+    raw, outcome = _extract_json_array(llm_output)
+    if raw is None:
+        return [], outcome
+    return _facts_from_raw(raw), outcome

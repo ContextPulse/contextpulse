@@ -264,6 +264,107 @@ def test_parse_facts_defaults_optional_fields():
     assert facts[0]["source_event_ids"] == []
 
 
+# ── outcome-discriminating parse (cp-consolidator-silent-zero-fact-runs) ──
+#
+# probe.parse_facts() alone cannot tell a legitimate empty `[]` (the prompt
+# explicitly allows this) apart from unparseable non-answer output — both
+# collapse to []. That collapse is exactly what let a scheduled run that got
+# a fast non-answer from the CLI report "OK: ... -> 0 new facts" identically
+# to a genuine quiet window. parse_facts_with_outcome() is the discriminator.
+
+
+def test_outcome_facts_on_nonempty_valid_array():
+    out = json.dumps([_fact("A", "b", 1.0)])
+    facts, outcome = probe.parse_facts_with_outcome(out)
+    assert outcome is probe.ParseOutcome.FACTS
+    assert len(facts) == 1
+
+
+def test_outcome_empty_on_valid_empty_array():
+    facts, outcome = probe.parse_facts_with_outcome("[]")
+    assert outcome is probe.ParseOutcome.EMPTY
+    assert facts == []
+
+
+def test_outcome_empty_on_valid_empty_array_with_surrounding_prose():
+    # The prompt's own escape hatch: "If nothing durable happened, return []."
+    out = "I reviewed the log and found nothing durable to record.\n[]\nDone."
+    facts, outcome = probe.parse_facts_with_outcome(out)
+    assert outcome is probe.ParseOutcome.EMPTY
+    assert facts == []
+
+
+def test_outcome_fault_on_no_array_found():
+    facts, outcome = probe.parse_facts_with_outcome("the model refused, no json here")
+    assert outcome is probe.ParseOutcome.FAULT
+    assert facts == []
+
+
+def test_outcome_fault_on_empty_string():
+    facts, outcome = probe.parse_facts_with_outcome("")
+    assert outcome is probe.ParseOutcome.FAULT
+    assert facts == []
+
+
+def test_outcome_fault_on_whitespace_only():
+    facts, outcome = probe.parse_facts_with_outcome("   \n\t  ")
+    assert outcome is probe.ParseOutcome.FAULT
+    assert facts == []
+
+
+def test_outcome_fault_on_malformed_json():
+    # A truncated/garbled array — brackets present, contents not valid JSON.
+    facts, outcome = probe.parse_facts_with_outcome('[{"entity": "A", "fact": ')
+    assert outcome is probe.ParseOutcome.FAULT
+    assert facts == []
+
+
+def test_outcome_facts_when_array_wrapped_in_an_object():
+    # find("[")/rfind("]") bracket-extraction (inherited unchanged from
+    # parse_facts, same mechanism test_parse_facts_strips_markdown_fences_
+    # and_prose relies on) means an object-wrapped array still extracts the
+    # inner array successfully -- this is the SAME tolerance already
+    # exercised for markdown fences/prose, not a new behavior, and is
+    # deliberately not classified FAULT.
+    out = '{"facts": [{"entity": "A", "fact": "b"}]}'
+    facts, outcome = probe.parse_facts_with_outcome(out)
+    assert outcome is probe.ParseOutcome.FACTS
+    assert len(facts) == 1
+
+
+def test_outcome_fault_when_no_bracket_pair_exists_at_all():
+    # A prose-only refusal with no array anywhere — the actually-reachable
+    # "no array found" FAULT path (find("[")/rfind("]") both return -1).
+    facts, outcome = probe.parse_facts_with_outcome('{"result": "nothing to report"}')
+    assert outcome is probe.ParseOutcome.FAULT
+    assert facts == []
+
+
+def test_outcome_facts_not_fault_when_array_valid_but_entries_all_invalid():
+    # A structurally valid, non-empty array is FACTS-shaped output even if
+    # every entry fails the entity/fact validation below it (the model
+    # answered, just answered badly) -- NOT the same failure as no answer
+    # at all. This is a deliberate design choice, not an oversight: see the
+    # ParseOutcome docstring.
+    out = json.dumps([{"entity": "A"}, {"fact": "no entity"}])
+    facts, outcome = probe.parse_facts_with_outcome(out)
+    assert outcome is probe.ParseOutcome.FACTS
+    assert facts == []  # both entries dropped by validation
+
+
+def test_parse_facts_and_parse_facts_with_outcome_agree_on_returned_facts():
+    # The two must never diverge on WHAT they return, only on whether the
+    # caller also gets to see WHY it was empty.
+    for out in (
+        json.dumps([_fact("A", "b", 1.0)]),
+        "[]",
+        "garbage",
+        "",
+        '[{"entity": "A", "fact": ',
+    ):
+        assert probe.parse_facts(out) == probe.parse_facts_with_outcome(out)[0]
+
+
 # ── valid_from coercion (red-team M2) ───────────────────────────────
 
 
@@ -332,6 +433,63 @@ def test_record_run_appends_ledger_row(tmp_path):
     probe.record_run(conn, events=0, facts=0, error="claude timeout")
     rows = conn.execute("SELECT events, facts, error FROM probe_runs ORDER BY id").fetchall()
     assert [tuple(r) for r in rows] == [(1500, 3, None), (0, 0, "claude timeout")]
+
+
+def test_record_run_elapsed_s_defaults_to_null(tmp_path):
+    # Old call sites (and the ledger's historical rows) never passed timing.
+    conn = probe.connect_probe(tmp_path / "probe.db")
+    probe.record_run(conn, events=1500, facts=3, error=None)
+    row = conn.execute("SELECT elapsed_s FROM probe_runs").fetchone()
+    assert row["elapsed_s"] is None
+
+
+def test_record_run_persists_elapsed_s():
+    # The 6.4s-vs-42s gap IS the signal cp-consolidator-silent-zero-fact-runs
+    # needed and nothing was recording — this is the fix.
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(probe._SCHEMA_SQL)
+    probe._ensure_probe_runs_elapsed_column(conn)
+    probe.record_run(conn, events=1500, facts=0, error="unparseable output", elapsed_s=6.4)
+    probe.record_run(conn, events=1500, facts=17, error=None, elapsed_s=42.1)
+    rows = conn.execute("SELECT elapsed_s FROM probe_runs ORDER BY id").fetchall()
+    assert [r["elapsed_s"] for r in rows] == [pytest.approx(6.4), pytest.approx(42.1)]
+
+
+def test_ensure_probe_runs_elapsed_column_migrates_pre_existing_db(tmp_path):
+    # Simulate a probe.db created before this fix: schema WITHOUT elapsed_s,
+    # already holding real rows (this repo's probe.db has 280+). Migration
+    # must add the column without touching existing data.
+    p = tmp_path / "probe.db"
+    pre_migration = sqlite3.connect(str(p))
+    pre_migration.executescript(
+        """
+        CREATE TABLE probe_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ran_at REAL NOT NULL DEFAULT (unixepoch('subsec')),
+            events INTEGER NOT NULL DEFAULT 0,
+            facts INTEGER NOT NULL DEFAULT 0,
+            error TEXT
+        );
+        """
+    )
+    pre_migration.execute(
+        "INSERT INTO probe_runs (events, facts, error) VALUES (1500, 0, NULL)"
+    )
+    pre_migration.commit()
+    pre_migration.close()
+
+    # connect_probe() must not raise on a probe_runs table that predates
+    # elapsed_s, and the pre-existing row must survive with elapsed_s NULL.
+    conn = probe.connect_probe(p)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(probe_runs)")}
+    assert "elapsed_s" in cols
+    row = conn.execute("SELECT events, facts, elapsed_s FROM probe_runs").fetchone()
+    assert tuple(row) == (1500, 0, None)
+
+    # Re-opening an already-migrated probe.db must not raise either.
+    conn2 = probe.connect_probe(p)
+    assert conn2.execute("SELECT COUNT(*) FROM probe_runs").fetchone()[0] == 1
 
 
 # ── automatic tool-usage log (cp-savegate-attribution-instrument) ──
