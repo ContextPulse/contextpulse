@@ -77,8 +77,20 @@ paid cloud tier under active evaluation.
   repo root actually collects tests (fixed 2026-08-28).
 
 ### In Progress
-- Phase 0 wedge probe extended per David's 2026-08-22 ruling — attribution
-  instrument needed before the gate can be trusted, not yet built.
+- Phase 0 wedge probe extended per David's 2026-08-22 ruling. **The attribution
+  instrument is BUILT and live** (corrected 2026-09-19; this file previously said
+  "not yet built", which was wrong): `probe.record_usage()` writes a `tool_usage`
+  row on every real `facts_about`/`context_at` call, wired at `probe_mcp.py:99`
+  and `:124`, fail-soft, covered by tests, and reconciled against confirmed saves
+  by `scripts/probe_usage_report.py`.
+  What the instrument then revealed is the actual blocker: **`tool_usage` held
+  exactly ONE row for all time** — `facts_about('1Password')`, 2026-08-24 — against
+  1000 accumulated facts. The tools are exposed over MCP and work, but the
+  `using-contextpulse` skill never mentioned them, so no agent could discover
+  them. The gate's "0 of 3 attributed saves" was never a verdict on recall
+  quality; the experiment had no treatment arm. Skill fixed 2026-09-19
+  (`~/.claude/skills/using-contextpulse/SKILL.md`, commit 52b5991); the gate is
+  measurable from this point forward, and any count taken before it is void.
 - `working/` directory retention: was misdiagnosed as unbounded 4.3GB scratch;
   corrected 2026-08-27 — it holds exactly one real asset
   (an interview-episode asset directory, name redacted per the open PII scrub —
@@ -96,17 +108,41 @@ paid cloud tier under active evaluation.
 
 ## Next Steps
 
-1. Build the attribution instrument David required before the save-gate extension
-   means anything (2026-08-22 ruling) — currently the highest-value unstarted work
-   against the thread this repo exists to resolve.
-2. Reconcile the README fragmentation between `main` and `phase1-kg-spine` (careful
-   prose merge, not a mechanical one).
-3. Resolve `cp-public-history-surname` (David decision: leave / rewrite public git
-   history / accept knowingly) and its sibling finding about the private backup
-   remote still holding the same un-scrubbed commit (needs an approved force-push) —
-   both already filed and blocked on David, not re-listed here as new work. Deliberately
-   not naming the affected person or the action's own slug in this file, since this
-   file itself lives in the repo the leak is about.
+1. **DECISION FOR DAVID, not a build task.** The instrument he required on
+   2026-08-22 already exists (see In Progress above), and it has now answered the
+   question it was built to answer: the wedge probe never ran. One tool call in
+   two months. So the choice is no longer "does the KG earn its keep" — nothing
+   has tested that yet — but whether to actually run the experiment now that the
+   tools are discoverable, or retire Phase 0 and delete the throwaway scaffolding.
+   Running it costs nothing new: the consolidator, the tools and the counter are
+   all built and working.
+2. Fix the consolidator's silent failure before trusting any new gate reading
+   (`cp-consolidator-silent-zero-fact-runs`). A scheduled run on 2026-09-19 12:30
+   read 1500 events, returned in 6.4s and wrote 0 facts while printing "OK"; the
+   same wrapper run by hand at 15:07 took 42s and wrote 17. `parse_facts` returns
+   `[]` on any parse failure and the caller records `error=None`, so a total
+   extraction failure is indistinguishable from a quiet day. A gate fed by a
+   silently-empty fact store would repeat the exact 2026-08-20 mistake.
+3. Get CI green on the public default branch. It is RED at `5c50d63`, the current
+   public HEAD, and has been since the repo was made public: `packages/core`'s own
+   tests import `contextpulse_sight` and `contextpulse_knowledge`, and no job in
+   `.github/workflows/ci.yml` installs `packages/knowledge` (the cross-platform job
+   also omits `packages/screen`), so 4 tests die on import in every job. All 6 open
+   Dependabot PRs show the same failures, which is how it was found. Same root cause
+   as `cp-knowledge-package-not-in-root-build`.
+4. Decide the 6 open Dependabot PRs, and set `versioning-strategy` in
+   `.github/dependabot.yml`. All six merely RAISE dependency floors, which narrows
+   who can install an open-core library for no stated benefit; the absent strategy
+   setting is why they were generated, and they will regenerate weekly until it is
+   set. That file also watches only `/`, so no `packages/*/pyproject.toml` is
+   monitored at all — a vulnerable pin in a sub-package would never raise a PR.
+
+**Settled 2026-09-19, listed here only so they are not re-proposed:** the README
+fragmentation between `main` and `phase1-kg-spine` is reconciled (both at `5c50d63`,
+0/0 divergence against both remotes), and the public-history leak is resolved — 102
+paths stripped, the repo deleted and recreated to kill `refs/pull/*` reachability,
+validated clean on a fresh clone, and returned to public. The private `contextpulse-wip`
+remote still holds the pre-rewrite line; that is private and untouched by design.
 
 ## Open Questions
 
