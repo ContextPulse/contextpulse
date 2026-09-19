@@ -5,6 +5,7 @@ so this file can safely import contextpulse_core.daemon.
 """
 
 import inspect
+import sys
 import time
 from unittest.mock import MagicMock, patch
 
@@ -427,6 +428,17 @@ class TestNotifyTrayDebounce:
 # run() entry point — tray keep-alive loop
 # ---------------------------------------------------------------------------
 
+@pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason=(
+        "Exercises the pystray keep-alive loop, which does not exist on macOS. "
+        "daemon.py imports pystray only in its non-darwin branch and uses the "
+        "rumps-based tray_macos tray instead, so patching "
+        "contextpulse_core.daemon.pystray raises AttributeError here. Skipping "
+        "rather than asserting: there is no pystray path on this platform to "
+        "get wrong. The macOS tray needs its own coverage, tracked separately."
+    ),
+)
 class TestRunTrayLoop:
     """Smoke-tests the run() tray keep-alive loop.
 
