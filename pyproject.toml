@@ -20,8 +20,8 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
-    # NOTE: contextpulse-core/-sight/-voice/-touch/-memory are NOT PyPI packages.
-    # Their source is vendored into this single distribution via
+    # NOTE: contextpulse-core/-sight/-voice/-touch/-memory/-knowledge are NOT PyPI
+    # packages. Their source is vendored into this single distribution via
     # [tool.setuptools.packages.find].where below, so they must not be listed here
     # (pip would try to resolve them from PyPI and fail).
     "python-dotenv>=1.0,<2",
@@ -92,8 +92,22 @@ where = [
     "packages/project/src",
     "packages/voice/src",
     "packages/touch/src",
+    "packages/knowledge/src",
     ".",
 ]
+
+[tool.setuptools.package-data]
+# contextpulse_knowledge/schema.sql is read at runtime via importlib.resources
+# (migrate.py:read_schema_sql). Editable installs (the only install this repo's
+# CI/daemon actually use today) read straight from the source tree regardless
+# of this declaration, so its absence is currently invisible -- but a real
+# (non-editable) wheel build of this root distribution silently drops the file
+# without it, and read_schema_sql() would raise FileNotFoundError for anyone
+# who installed that wheel. packages/knowledge/pyproject.toml already declares
+# this correctly for its own standalone build; root needs its own copy because
+# root is a separate distribution that vendors the same source via
+# [tool.setuptools.packages.find] above, not a build of that file.
+contextpulse_knowledge = ["schema.sql"]
 
 [tool.ruff]
 line-length = 100
