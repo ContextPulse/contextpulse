@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+import time
 from collections.abc import Iterator
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -158,3 +160,186 @@ class TestRotateIfOversized:
         with patch.object(Path, "replace", side_effect=OSError("locked")):
             assert log_rotation.rotate_if_oversized(path, max_bytes=10) is False
         assert path.exists()
+
+
+# ---------------------------------------------------------------------------
+# RepeatDedupeFilter / get_repeat_dedupe_filter
+#
+# Regression coverage for cp-daemon-session0-blind-capture: a single stuck
+# error looped every ~30s for 4 days and grew daemon_stderr.log to 20.5MB,
+# because that file is only rotated at process RESTART and the daemon never
+# crashed. These tests drive the filter directly against real LogRecords
+# (via a real logger + a capturing handler) rather than hand-building
+# LogRecord objects, so record.getMessage()'s %-formatting is exercised for
+# real.
+# ---------------------------------------------------------------------------
+
+
+def _make_logger(name: str, dedupe_filter: log_rotation.RepeatDedupeFilter) -> tuple[logging.Logger, list[str]]:
+    logger = logging.getLogger(name)
+    logger.propagate = False
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
+    logger.filters.clear()
+
+    captured: list[str] = []
+
+    class _ListHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured.append(record.getMessage())
+
+    logger.addHandler(_ListHandler())
+    logger.addFilter(dedupe_filter)
+    return logger, captured
+
+
+class TestRepeatDedupeFilter:
+    def test_first_occurrence_always_passes(self):
+        f = log_rotation.RepeatDedupeFilter(threshold=3, repeat_every=10)
+        logger, captured = _make_logger("test.dedupe.first", f)
+        logger.error("boom")
+        assert captured == ["boom"]
+
+    def test_occurrences_up_to_threshold_all_pass_unmodified(self):
+        f = log_rotation.RepeatDedupeFilter(threshold=3, repeat_every=10)
+        logger, captured = _make_logger("test.dedupe.threshold", f)
+        for _ in range(3):
+            logger.error("same message")
+        assert captured == ["same message"] * 3
+
+    def test_occurrence_past_threshold_is_suppressed(self):
+        f = log_rotation.RepeatDedupeFilter(threshold=3, repeat_every=100)
+        logger, captured = _make_logger("test.dedupe.suppress", f)
+        for _ in range(4):
+            logger.error("same message")
+        # 3 pass through as-is, the 4th becomes the "suppressing" notice --
+        # nothing is silently dropped without SOME trace in the log.
+        assert len(captured) == 4
+        assert captured[:3] == ["same message"] * 3
+        assert "suppressing" in captured[3]
+
+    def test_a_stuck_loop_is_bounded_not_silenced(self):
+        """The actual incident, replayed: 300 identical records (a stand-in
+        for '10,524 over 4 days') must produce far fewer than 300 log
+        lines, AND at least one must still be getting through -- this is
+        rate limiting, not a black hole."""
+        f = log_rotation.RepeatDedupeFilter(threshold=5, repeat_every=20)
+        logger, captured = _make_logger("test.dedupe.stuck_loop", f)
+        for _ in range(300):
+            logger.exception("Auto-capture failed (%d consecutive)", 1)
+        assert 0 < len(captured) < 30, (
+            f"expected heavy suppression of a 300x repeat, got {len(captured)} lines through"
+        )
+        # The very last (300th) occurrence must be one of the periodic
+        # reminders, not silence -- prove the loop never goes fully dark.
+        assert captured[-1] != captured[0]
+
+    def test_different_message_resets_the_count(self):
+        f = log_rotation.RepeatDedupeFilter(threshold=1, repeat_every=10)
+        logger, captured = _make_logger("test.dedupe.reset", f)
+        logger.error("A")  # 1st: passes clean
+        logger.error("A")  # 2nd: past threshold -> announce, still passes
+        logger.error("A")  # 3rd: genuinely suppressed (not a multiple of repeat_every)
+        logger.error("B")  # different signature -- resets, always passes
+        assert len(captured) == 3
+        assert captured[0] == "A"
+        assert "repeating identically" in captured[1]
+        assert captured[2] == "B"
+
+    def test_different_level_is_a_different_signature(self):
+        f = log_rotation.RepeatDedupeFilter(threshold=1, repeat_every=10)
+        logger, captured = _make_logger("test.dedupe.level", f)
+        logger.setLevel(logging.DEBUG)
+        logger.warning("same text")
+        logger.error("same text")  # different level -> not a repeat of the WARNING
+        assert captured == ["same text", "same text"]
+
+    def test_a_gap_longer_than_the_window_resets_the_count(self):
+        f = log_rotation.RepeatDedupeFilter(threshold=1, repeat_every=100, window_seconds=0.05)
+        logger, captured = _make_logger("test.dedupe.window", f)
+        logger.error("same message")  # 1st: passes clean
+        logger.error("same message")  # 2nd: past threshold -> announce, passes
+        logger.error("same message")  # 3rd: genuinely suppressed (same window)
+        assert len(captured) == 2
+        time.sleep(0.1)
+        logger.error("same message")  # window elapsed -> treated as fresh, passes
+        assert len(captured) == 3
+        assert captured[2] == "same message"
+
+    def test_percent_formatted_args_are_deduped_by_final_text(self):
+        """Two records with the same literal msg template but the SAME
+        rendered text (e.g. a fixed arg) are one signature; this also
+        proves record.args=() doesn't corrupt the summary line's own %
+        characters."""
+        f = log_rotation.RepeatDedupeFilter(threshold=1, repeat_every=2)
+        logger, captured = _make_logger("test.dedupe.percent", f)
+        for _ in range(4):
+            logger.error("rate is %d%% (%s)", 50, "steady")
+        # threshold=1 -> 1 passes clean, then every 2nd is a repeat-count
+        # notice; none of this may raise even though the rendered text
+        # itself contains a literal '%'.
+        assert captured[0] == "rate is 50% (steady)"
+        assert all("%" in line for line in captured)
+
+    def test_formatting_failure_never_hides_the_record(self):
+        f = log_rotation.RepeatDedupeFilter(threshold=1, repeat_every=10)
+        logger, captured = _make_logger("test.dedupe.badfmt", f)
+        logger.error("needs an arg: %s")  # missing arg -> getMessage() raises
+        assert len(captured) == 1
+
+    def test_thread_safety_under_concurrent_logging(self):
+        """Best-effort counting under concurrency must not raise or drop
+        the filter into an inconsistent state that blocks all output."""
+        f = log_rotation.RepeatDedupeFilter(threshold=5, repeat_every=10)
+        logger, captured = _make_logger("test.dedupe.threads", f)
+
+        def _hammer():
+            for _ in range(100):
+                logger.error("concurrent message")
+
+        threads = [threading.Thread(target=_hammer) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        assert not any(t.is_alive() for t in threads)
+        assert len(captured) > 0  # some output got through; nothing deadlocked
+
+
+class TestGetRepeatDedupeFilter:
+    def test_defaults_match_module_constants(self):
+        with patch.dict(os.environ, {}, clear=False):
+            for key in (
+                "CONTEXTPULSE_LOG_REPEAT_THRESHOLD",
+                "CONTEXTPULSE_LOG_REPEAT_EVERY",
+                "CONTEXTPULSE_LOG_REPEAT_WINDOW_SEC",
+            ):
+                os.environ.pop(key, None)
+            f = log_rotation.get_repeat_dedupe_filter()
+        assert f.threshold == log_rotation.DEFAULT_REPEAT_THRESHOLD
+        assert f.repeat_every == log_rotation.DEFAULT_REPEAT_EVERY
+        assert f.window_seconds == log_rotation.DEFAULT_REPEAT_WINDOW_SECONDS
+
+    def test_env_overrides_are_honoured(self):
+        with patch.dict(
+            os.environ,
+            {
+                "CONTEXTPULSE_LOG_REPEAT_THRESHOLD": "2",
+                "CONTEXTPULSE_LOG_REPEAT_EVERY": "7",
+                "CONTEXTPULSE_LOG_REPEAT_WINDOW_SEC": "12.5",
+            },
+        ):
+            f = log_rotation.get_repeat_dedupe_filter()
+        assert f.threshold == 2
+        assert f.repeat_every == 7
+        assert f.window_seconds == 12.5
+
+    def test_garbage_window_env_degrades_to_default(self):
+        with patch.dict(os.environ, {"CONTEXTPULSE_LOG_REPEAT_WINDOW_SEC": "not-a-number"}):
+            f = log_rotation.get_repeat_dedupe_filter()
+        assert f.window_seconds == log_rotation.DEFAULT_REPEAT_WINDOW_SECONDS
+
+    def test_explicit_args_override_env(self):
+        with patch.dict(os.environ, {"CONTEXTPULSE_LOG_REPEAT_THRESHOLD": "99"}):
+            f = log_rotation.get_repeat_dedupe_filter(threshold=1)
+        assert f.threshold == 1
