@@ -139,3 +139,12 @@ unified_transcript_labeled.json
 # Generic personal-research data directories — never meant for git
 local-archive/
 recordings/
+
+# Spot-fleet / AMI infrastructure for the LOCAL-ONLY audio pipeline (David,
+# 2026-09-19). Stripped from public history the same day: it carried three
+# EC2 instance ids and an S3 bucket named after a private venture, and an
+# auto-backup had published all of it. Files remain on disk; never in git.
+infra/
+# Any instance-id / worker-id marker file, wherever a script drops one.
+.*-instance-id
+.*-worker-id
