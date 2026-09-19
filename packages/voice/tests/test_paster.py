@@ -72,12 +72,19 @@ class TestPasteText:
         assert h1 == h2
 
     def test_terminal_focus_uses_ctrl_shift_v(self, monkeypatch):
-        """Dictating into a terminal must send the terminal paste chord."""
+        """Dictating into a terminal must send the terminal paste chord.
+
+        Platform pinned, like the darwin cases below. Without it this asserted
+        the Windows branch while running on whatever host CI happened to use,
+        so it failed on macOS runners against a paster that was behaving
+        correctly -- the Cmd+V branch is the right answer there.
+        """
         import pyautogui
         import pyperclip
         pyperclip.copy = MagicMock()
         hotkey = MagicMock()
         monkeypatch.setattr(pyautogui, "hotkey", hotkey)
+        monkeypatch.setattr(paster_module.sys, "platform", "win32")
         monkeypatch.setattr(paster_module, "_focused_is_terminal", lambda: True)
 
         ts, _ = paste_text("into terminal")
@@ -85,12 +92,14 @@ class TestPasteText:
         hotkey.assert_called_once_with("ctrl", "shift", "v")
 
     def test_non_terminal_focus_uses_ctrl_v(self, monkeypatch):
-        """Normal apps keep the plain Ctrl+V paste chord."""
+        """Normal apps keep the plain Ctrl+V paste chord. Platform pinned for
+        the same reason as the terminal case above."""
         import pyautogui
         import pyperclip
         pyperclip.copy = MagicMock()
         hotkey = MagicMock()
         monkeypatch.setattr(pyautogui, "hotkey", hotkey)
+        monkeypatch.setattr(paster_module.sys, "platform", "win32")
         monkeypatch.setattr(paster_module, "_focused_is_terminal", lambda: False)
 
         ts, _ = paste_text("into editor")
