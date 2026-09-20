@@ -13,9 +13,11 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+from contextpulse_core.config import _DEFAULTS
+from contextpulse_core.config import get as cfg_get
 from contextpulse_core.redact import redact_sensitive
 
-from contextpulse_sight.config import ACTIVITY_DB_PATH, ACTIVITY_MAX_AGE
+from contextpulse_sight.config import ACTIVITY_DB_PATH
 
 logger = logging.getLogger("contextpulse.sight.activity")
 
@@ -253,8 +255,17 @@ class ActivityDB:
         return dict(row) if row else None
 
     def prune(self, max_age_seconds: int | None = None):
-        """Delete records older than max_age_seconds."""
-        age = max_age_seconds if max_age_seconds is not None else ACTIVITY_MAX_AGE
+        """Delete records older than max_age_seconds.
+
+        The fallback is read per call rather than bound at import: the capture
+        loop calls prune() on every cycle, so a changed activity_max_age takes
+        effect on the next capture instead of the next daemon restart.
+        """
+        age = (
+            max_age_seconds
+            if max_age_seconds is not None
+            else cfg_get("activity_max_age", _DEFAULTS["activity_max_age"])
+        )
         cutoff = time.time() - age
         with self._lock:
             self._conn.execute("DELETE FROM activity WHERE timestamp < ?", (cutoff,))
