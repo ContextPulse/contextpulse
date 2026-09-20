@@ -13,6 +13,8 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+from contextpulse_core.redact import redact_sensitive
+
 from contextpulse_sight.config import ACTIVITY_DB_PATH, ACTIVITY_MAX_AGE
 
 logger = logging.getLogger("contextpulse.sight.activity")
@@ -286,18 +288,51 @@ class ActivityDB:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    # How many rows the clipboard search is willing to redact and scan in
+    # Python before giving up on the window. Generous relative to a clipboard
+    # history (the store is one row per distinct copy) and bounded so a caller
+    # cannot ask for a full-table scan by passing a huge minutes_ago.
+    _SEARCH_SCAN_LIMIT = 2000
+
     def search_clipboard(self, query: str, minutes_ago: int = 60) -> list[dict]:
-        """Search clipboard history by text content."""
+        """Search clipboard history by text content, MATCHING REDACTED TEXT.
+
+        This used to be `WHERE text LIKE ?` against the raw stored column, with
+        the MCP tool redacting the rendered rows afterwards. That is an
+        extraction oracle, and the adversarial review proved it: a client that
+        can call search_clipboard issues "sk-", "sk-a", "sk-ab" ... and reads
+        the result COUNT to recover a pre-fix secret one character at a time,
+        while every response it sees is correctly redacted.
+
+        Output redaction cannot close a query oracle. The fix is that no count
+        and no match is ever computed against raw text: rows are fetched by
+        time window, redacted, and matched in Python. A caller therefore
+        learns exactly what it could learn from reading the redacted rows,
+        which is the guarantee the product claims.
+
+        The scan is bounded by _SEARCH_SCAN_LIMIT so a large minutes_ago
+        cannot turn this into a full-table scan, and the returned rows carry
+        the REDACTED text, so a caller of this method cannot reintroduce the
+        leak by rendering what it got back.
+        """
         cutoff = time.time() - (minutes_ago * 60)
-        like_query = f"%{query}%"
+        needle = query.lower()
         with self._lock:
             rows = self._conn.execute(
                 "SELECT id, timestamp, text FROM clipboard "
-                "WHERE text LIKE ? AND timestamp >= ? "
-                "ORDER BY timestamp DESC LIMIT 20",
-                (like_query, cutoff),
+                "WHERE timestamp >= ? ORDER BY timestamp DESC LIMIT ?",
+                (cutoff, self._SEARCH_SCAN_LIMIT),
             ).fetchall()
-        return [dict(row) for row in rows]
+
+        out: list[dict] = []
+        for row in rows:
+            entry = dict(row)
+            entry["text"] = redact_sensitive(entry.get("text") or "")
+            if needle in entry["text"].lower():
+                out.append(entry)
+            if len(out) >= 20:
+                break
+        return out
 
     # -- MCP call tracking -------------------------------------------------
 
