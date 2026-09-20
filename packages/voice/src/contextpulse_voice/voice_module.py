@@ -26,7 +26,7 @@ from pynput import keyboard as kb
 
 from contextpulse_voice.cleanup import clean
 from contextpulse_voice.config import get_voice_config, has_api_key
-from contextpulse_voice.paster import paste_text
+from contextpulse_voice.paster import paste_text, set_drop_notifier
 from contextpulse_voice.recorder import Recorder
 from contextpulse_voice.vocabulary import apply_punctuation, apply_vocabulary
 
@@ -76,6 +76,10 @@ class VoiceModule(ModalityModule):
         self._transcriber = None
         self._listener: kb.Listener | None = None
         self._overlay = None  # Recording overlay (lazy init)
+        # Hash of the most recent paste the paster had to drop. Compared
+        # against the paste about to be reported so a dropped paste's overlay
+        # message is not immediately overwritten by "Ready".
+        self._last_dropped_hash: str | None = None
 
         self._recording = False
         # True from the moment we decide to open the recorder's stream
@@ -132,6 +136,11 @@ class VoiceModule(ModalityModule):
             logger.debug("Overlay failed to initialize — running headless")
             self._overlay = None
 
+        # A paste the paster has to drop (clipboard lock contention) is
+        # otherwise invisible to the user. The paster owns no UI, so it calls
+        # back here and this module puts it on the overlay it already owns.
+        set_drop_notifier(self._on_paste_dropped)
+
         self._running = True
         self._error = None
 
@@ -149,10 +158,24 @@ class VoiceModule(ModalityModule):
         if not self._running:
             return
         self._running = False
+        set_drop_notifier(None)
         if self._listener:
             self._listener.stop()
             self._listener = None
         logger.info("VoiceModule stopped")
+
+    def _on_paste_dropped(self, text_hash: str) -> None:
+        """Surface a dropped paste on the surfaces this module already has.
+
+        The transcription is NOT lost — it is emitted before the paste, so it
+        is in the DB and reachable over MCP — but the user speaks, waits and
+        sees nothing appear. `_error` puts it in get_status(); the overlay is
+        the part they actually see.
+        """
+        self._last_dropped_hash = text_hash
+        self._error = f"Paste dropped (hash={text_hash}) — transcription saved"
+        if self._overlay:
+            self._overlay.show_paste_failed()
 
     def is_alive(self) -> bool:
         # On Windows, pynput's keyboard Listener thread can report is_alive()=False
@@ -475,7 +498,9 @@ class VoiceModule(ModalityModule):
             ))
 
             paste_text(text)
-            if self._overlay:
+            # "Ready" would overwrite the drop message _on_paste_dropped just
+            # put on the overlay, and would be a lie: nothing was pasted.
+            if self._overlay and self._last_dropped_hash != paste_hash:
                 self._overlay.show_ready()
             logger.info("Dictated: %s", text[:100])
 

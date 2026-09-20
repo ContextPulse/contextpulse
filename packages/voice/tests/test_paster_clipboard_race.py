@@ -178,6 +178,8 @@ class TestClipboardRaceIsSerialised:
         copied: list[str] = []
         monkeypatch.setattr(paster.pyperclip, "copy", lambda t="": copied.append(t))
         monkeypatch.setattr(paster, "CLIPBOARD_LOCK_TIMEOUT", 0.05, raising=False)
+        # The retry too, or the paste outlives the holder and succeeds.
+        monkeypatch.setattr(paster, "CLIPBOARD_RETRY_TIMEOUT", 0.05, raising=False)
 
         held = threading.Event()
         release = threading.Event()
@@ -212,6 +214,115 @@ class TestClipboardRaceIsSerialised:
         assert got == [True]
 
 
+class TestDroppedPasteIsVisible:
+    """A dropped paste used to be a logger.error in a file nobody watches.
+
+    The transcription itself survives — the voice module emits the
+    TRANSCRIPTION event before pasting, so the text is in the DB and
+    reachable over MCP — but the user speaks, waits, and sees nothing
+    appear. Dropping the paste is still the right call; dropping it
+    silently is not.
+    """
+
+    @pytest.fixture
+    def contended(self, monkeypatch, fast_paster):
+        """The clipboard lock held by another thread, with short timeouts."""
+        from contextpulse_core.clipboard_lock import clipboard_lock
+
+        paster = fast_paster
+        monkeypatch.setattr(paster, "CLIPBOARD_LOCK_TIMEOUT", 0.02, raising=False)
+        monkeypatch.setattr(paster, "CLIPBOARD_RETRY_TIMEOUT", 0.05, raising=False)
+        monkeypatch.setattr(paster, "_drop_notifier", None, raising=False)
+
+        held = threading.Event()
+        release = threading.Event()
+
+        def holder():
+            with clipboard_lock:
+                held.set()
+                release.wait(timeout=5)
+
+        t = threading.Thread(target=holder)
+        t.start()
+        assert held.wait(timeout=5)
+        yield paster, release
+        release.set()
+        t.join(timeout=5)
+
+    def test_the_acquire_is_retried_before_giving_up(self, monkeypatch, contended, caplog):
+        import logging
+
+        paster, _release = contended
+        attempts = []
+        real_acquire = paster.clipboard_lock.acquire
+
+        def counting_acquire(*a, **kw):
+            attempts.append(kw.get("timeout"))
+            return real_acquire(*a, **kw)
+
+        monkeypatch.setattr(paster, "clipboard_lock", _LockProxy(paster.clipboard_lock, counting_acquire))
+
+        with caplog.at_level(logging.WARNING, logger=paster.logger.name):
+            ts, digest = paster.paste_text("some transcription")
+
+        assert (ts, digest) == (0.0, "")
+        assert attempts == [0.02, 0.05], "expected one retry at the longer timeout"
+        assert any("retrying once" in r.getMessage() for r in caplog.records)
+
+    def test_a_retry_that_succeeds_pastes_normally(self, monkeypatch, contended):
+        paster, release = contended
+        copied: list[str] = []
+        monkeypatch.setattr(paster.pyperclip, "copy", lambda t="": copied.append(t))
+        monkeypatch.setattr(paster, "CLIPBOARD_RETRY_TIMEOUT", 5.0, raising=False)
+
+        # Free the lock while the retry is waiting on it.
+        threading.Timer(0.15, release.set).start()
+
+        ts, digest = paster.paste_text("some transcription")
+
+        assert ts > 0.0 and digest
+        assert copied == ["", "some transcription", ""]
+
+    def test_the_user_is_told_through_the_registered_notifier(self, monkeypatch, contended):
+        paster, _release = contended
+        told: list[str] = []
+        paster.set_drop_notifier(told.append)
+        try:
+            ts, _ = paster.paste_text("some transcription")
+        finally:
+            paster.set_drop_notifier(None)
+
+        assert ts == 0.0
+        assert len(told) == 1 and len(told[0]) == 16, "notified with the text hash"
+
+    def test_a_broken_notifier_cannot_break_the_paste_path(self, monkeypatch, contended):
+        paster, _release = contended
+
+        def explode(_hash):
+            raise RuntimeError("the UI is gone")
+
+        paster.set_drop_notifier(explode)
+        try:
+            assert paster.paste_text("some transcription") == (0.0, "")
+        finally:
+            paster.set_drop_notifier(None)
+
+    def test_no_notifier_registered_is_fine(self, contended):
+        paster, _release = contended
+        assert paster.paste_text("some transcription") == (0.0, "")
+
+
+class _LockProxy:
+    """An RLock wrapper that can count acquires (RLock attrs are read-only)."""
+
+    def __init__(self, lock, acquire):
+        self._lock = lock
+        self.acquire = acquire
+
+    def release(self):
+        self._lock.release()
+
+
 def _capture_fd2(tmp_path, fn):
     """Run fn() with fd 2 redirected to a file; return the file's lines.
 
@@ -239,9 +350,12 @@ class TestPhaseBreadcrumbs:
     pyperclip.copy(""). These name the phase instead.
     """
 
-    def test_paste_writes_ordered_phases_to_fd_2(self, monkeypatch, fast_paster, tmp_path):
+    def test_verbose_mode_writes_every_ordered_phase_to_fd_2(
+        self, monkeypatch, fast_paster, tmp_path
+    ):
         paster = fast_paster
         monkeypatch.setattr(paster, "_BREADCRUMBS", True, raising=False)
+        monkeypatch.setattr(paster, "_VERBOSE_BREADCRUMBS", True, raising=False)
         monkeypatch.setattr(paster.pyperclip, "copy", lambda _t="": None)
 
         lines = _capture_fd2(tmp_path, lambda: paster.paste_text("hello"))
@@ -257,6 +371,58 @@ class TestPhaseBreadcrumbs:
             "paste_final_clear_enter",
             "paste_final_clear_exit",
         ]
+
+    def test_default_mode_writes_one_line_per_paste(
+        self, monkeypatch, fast_paster, tmp_path
+    ):
+        """daemon_stderr.log is only rotated on daemon RESTART.
+
+        Eight lines per dictation at ~30 dictations an hour accumulates in
+        the one log family this branch did not bound. One line per paste
+        keeps the forensics (it names the last phase reached) at an eighth
+        of the volume.
+        """
+        paster = fast_paster
+        monkeypatch.setattr(paster, "_BREADCRUMBS", True, raising=False)
+        monkeypatch.setattr(paster, "_VERBOSE_BREADCRUMBS", False, raising=False)
+        monkeypatch.setattr(paster.pyperclip, "copy", lambda _t="": None)
+
+        lines = _capture_fd2(tmp_path, lambda: paster.paste_text("hello"))
+
+        crumbs = [ln for ln in lines if ln.startswith("CLIPBOARD_PHASE")]
+        assert len(crumbs) == 1
+        assert "outcome=completed" in crumbs[0]
+        assert "last_phase=paste_final_clear_exit" in crumbs[0]
+
+    def test_a_dropped_paste_names_its_outcome(self, monkeypatch, fast_paster, tmp_path):
+        from contextpulse_core.clipboard_lock import clipboard_lock
+
+        paster = fast_paster
+        monkeypatch.setattr(paster, "_BREADCRUMBS", True, raising=False)
+        monkeypatch.setattr(paster, "_VERBOSE_BREADCRUMBS", False, raising=False)
+        monkeypatch.setattr(paster, "CLIPBOARD_LOCK_TIMEOUT", 0.02, raising=False)
+        monkeypatch.setattr(paster, "CLIPBOARD_RETRY_TIMEOUT", 0.02, raising=False)
+
+        held = threading.Event()
+        release = threading.Event()
+
+        def holder():
+            with clipboard_lock:
+                held.set()
+                release.wait(timeout=5)
+
+        t = threading.Thread(target=holder)
+        t.start()
+        try:
+            assert held.wait(timeout=5)
+            lines = _capture_fd2(tmp_path, lambda: paster.paste_text("hello"))
+        finally:
+            release.set()
+            t.join(timeout=5)
+
+        crumbs = [ln for ln in lines if ln.startswith("CLIPBOARD_PHASE")]
+        assert len(crumbs) == 1
+        assert "outcome=dropped_lock_timeout" in crumbs[0]
 
     def test_breadcrumbs_can_be_silenced(self, monkeypatch, fast_paster, tmp_path):
         paster = fast_paster

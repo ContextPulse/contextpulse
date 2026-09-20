@@ -10,6 +10,7 @@ import logging
 import sys
 import threading
 import time
+from collections.abc import Callable
 
 import pyautogui
 import pyperclip
@@ -26,21 +27,57 @@ pyautogui.FAILSAFE = False
 
 logger = logging.getLogger(__name__)
 
-# Paste-path breadcrumbs default ON; set CONTEXTPULSE_PASTE_BREADCRUMBS=0 to
-# silence. Five extra lines per dictation against ~30 dictations an hour is
-# noise next to what daemon_stderr.log already carries, and a defect that
-# fired twice in two weeks needs the instrument running continuously to catch
-# a third. Today daemon_stderr.log.1 ends at "Pasted 100 characters"
-# (12:32:14) and the watchdog records 0xC0000374 at 12:32:19 — a five-second
-# hole covering the hotkey, a 0.5s sleep and the trailing pyperclip.copy("").
-# These turn that hole into a named phase.
+# Paste-path breadcrumbs default ON — they are the crash forensics for
+# cp-daemon-heap-corruption-after-paste, and a defect that fired twice in two
+# weeks needs the instrument running continuously to catch a third. Today
+# daemon_stderr.log.1 ends at "Pasted 100 characters" (12:32:14) and the
+# watchdog records 0xC0000374 at 12:32:19 — a five-second hole covering the
+# hotkey, a 0.5s sleep and the trailing pyperclip.copy(""). These turn that
+# hole into a named phase.
+#
+# But they write to fd 2 -> daemon_stderr.log, which the watchdog only
+# rotates on RESTART: a long-running daemon accumulates, and that is the same
+# file that once reached 20MB. So the DEFAULT is one line per paste, not one
+# per phase: _phase() overwrites a single in-memory marker and the whole
+# paste emits one "last phase reached" line when it ends — which is all the
+# forensics needs, because a crash mid-paste leaves the marker unflushed and
+# the LAST line in the file is then the previous paste's, with the current
+# one named by its absence.
+#
+# Set CONTEXTPULSE_CLIPBOARD_READ_BREADCRUMBS=1 for the full per-phase trace
+# (8 lines per paste), which is what you want while actively hunting a
+# reproduction; CONTEXTPULSE_PASTE_BREADCRUMBS=0 silences both.
 _BREADCRUMBS = breadcrumbs_enabled("CONTEXTPULSE_PASTE_BREADCRUMBS")
+_VERBOSE_BREADCRUMBS = breadcrumbs_enabled("CONTEXTPULSE_CLIPBOARD_READ_BREADCRUMBS", "0")
+
+# The phase most recently entered, kept per-paste. Read by _flush_phases().
+_current_phase = ""
 
 
 def _phase(name: str) -> None:
-    """Emit a crash-survivable marker naming the native call now in flight."""
-    if _BREADCRUMBS:
+    """Mark the native call now in flight.
+
+    Verbose mode writes it immediately (crash-survivable, one syscall). The
+    default records it and lets :func:`_flush_phases` emit a single line per
+    paste, so continuous instrumentation costs daemon_stderr.log one line per
+    dictation instead of eight.
+    """
+    global _current_phase
+    if not _BREADCRUMBS:
+        return
+    if _VERBOSE_BREADCRUMBS:
         write_breadcrumb(name)
+    else:
+        _current_phase = name
+
+
+def _flush_phases(outcome: str) -> None:
+    """Emit the one-line-per-paste summary naming the last phase reached."""
+    global _current_phase
+    if not _BREADCRUMBS or _VERBOSE_BREADCRUMBS:
+        return
+    write_breadcrumb(f"paste_done outcome={outcome} last_phase={_current_phase or 'none'}")
+    _current_phase = ""
 
 # Terminal emulators do NOT treat Ctrl+V as paste (there it is a literal /
 # no-op); their paste chord is Ctrl+Shift+V. Dictating into a terminal — e.g. a
@@ -82,6 +119,67 @@ def _focused_is_terminal() -> bool:
 _paste_lock = threading.Lock()
 _last_paste_time = 0.0
 _last_paste_hash = ""
+
+# One retry, at a longer timeout, before a paste is given up on. The first
+# 2s window can be lost to a single slow clipboard owner (a poll reading a
+# large clip, another application holding the clipboard open); a second,
+# longer wait costs the user a pause and saves the dictation.
+CLIPBOARD_RETRY_TIMEOUT = 5.0
+
+# Set by the voice module so a dropped paste reaches the user instead of only
+# a log file nobody watches. Left as None everywhere else, which keeps the
+# paster importable and testable with no UI at all.
+_drop_notifier: Callable[[str], None] | None = None
+
+
+def set_drop_notifier(notifier: Callable[[str], None] | None) -> None:
+    """Register the callback that surfaces a dropped paste to the user.
+
+    Takes the dropped text's hash. The paster deliberately does not know what
+    the UI is: the voice module owns the recording overlay and wires it here.
+    """
+    global _drop_notifier
+    _drop_notifier = notifier
+
+
+def _acquire_clipboard_for_paste(text_hash: str) -> bool:
+    """Take the clipboard lock, retrying once, or give up loudly.
+
+    Dropping the paste is the right call — losing one dictation is
+    recoverable, corrupting the heap takes the daemon down mid-session — but
+    dropping it SILENTLY is not: the user speaks, waits, and sees nothing
+    appear. The transcription itself survives (the voice module emits the
+    TRANSCRIPTION event before pasting, so the text is in the DB and
+    reachable over MCP); what is missing is any sign that it happened.
+    """
+    if clipboard_lock.acquire(timeout=CLIPBOARD_LOCK_TIMEOUT):
+        return True
+
+    logger.warning(
+        "Clipboard busy after %.1fs (hash=%s) — retrying once at %.1fs",
+        CLIPBOARD_LOCK_TIMEOUT,
+        text_hash,
+        CLIPBOARD_RETRY_TIMEOUT,
+    )
+    if clipboard_lock.acquire(timeout=CLIPBOARD_RETRY_TIMEOUT):
+        logger.info("Clipboard lock acquired on retry (hash=%s)", text_hash)
+        return True
+
+    logger.error(
+        "Could not acquire clipboard lock in %.1fs + %.1fs — dropping paste "
+        "(hash=%s) rather than racing another clipboard user. The "
+        "transcription is still recorded and searchable.",
+        CLIPBOARD_LOCK_TIMEOUT,
+        CLIPBOARD_RETRY_TIMEOUT,
+        text_hash,
+    )
+    _flush_phases("dropped_lock_timeout")
+    if _drop_notifier is not None:
+        try:
+            _drop_notifier(text_hash)
+        except Exception:  # noqa: BLE001 — the UI must not break the paste path
+            logger.debug("Drop notifier failed", exc_info=True)
+    return False
 
 
 def paste_text(text: str) -> tuple[float, str]:
@@ -134,16 +232,7 @@ def paste_text(text: str) -> tuple[float, str]:
         # copies: the 0.5s window before the final copy("") is when the target
         # application is reading the clipboard, and a poll landing in the
         # middle of it is the same race.
-        if not clipboard_lock.acquire(timeout=CLIPBOARD_LOCK_TIMEOUT):
-            # Fail loud and drop the paste rather than race the clipboard.
-            # Losing one dictation is recoverable; corrupting the heap takes
-            # the daemon down mid-session.
-            logger.error(
-                "Could not acquire clipboard lock in %.1fs — dropping paste "
-                "(hash=%s) rather than racing another clipboard user",
-                CLIPBOARD_LOCK_TIMEOUT,
-                text_hash,
-            )
+        if not _acquire_clipboard_for_paste(text_hash):
             return (0.0, "")
         try:
             _phase("paste_copy_clear_enter")
@@ -184,6 +273,7 @@ def paste_text(text: str) -> tuple[float, str]:
             _phase("paste_final_clear_exit")
         finally:
             clipboard_lock.release()
+            _flush_phases("completed")
 
         return (_last_paste_time, text_hash)
     finally:
