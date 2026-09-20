@@ -562,6 +562,119 @@ class TestTheOffSwitchIsNotReachableFromADotEnvFile:
         assert env_guard.process_env("DEFINITELY_NOT_SET_ANYWHERE") == ""
 
 
+class TestTheDotEnvGuardReadsTheFilesConfigActuallyLoaded:
+    """R2-1. The guard and config.py used to search different places.
+
+    `config.py` calls `load_dotenv()` with no path, i.e. `find_dotenv(usecwd=False)`:
+    a walk up from **config.py's own directory**. The guard called
+    `find_dotenv(usecwd=True)`: a walk up from the **cwd**. With a `.env` in each
+    tree they resolve different files, so the guard could clear a file that set
+    nothing while never reading the one that set the off switch.
+
+    These tests deliberately do NOT let `monkeypatch.chdir` stand in for
+    config.py's resolution -- the two locations are kept distinct and the guard
+    is asked about each in turn.
+    """
+
+    @staticmethod
+    def _dotenv(path: Path, value: str) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{mcp_auth.AUTH_ENV_VAR}={value}\n", encoding="utf-8")
+        return path
+
+    @staticmethod
+    def _as_if_dotenv_had_won(monkeypatch):
+        """os.environ as load_dotenv(override=True) leaves it: value present,
+        real process environment clean, snapshot trustworthy."""
+        monkeypatch.setenv(mcp_auth.AUTH_ENV_VAR, "off")
+        monkeypatch.setattr(mcp_auth.env_guard, "SNAPSHOT_IS_PRE_DOTENV", True)
+        monkeypatch.setattr(mcp_auth.env_guard, "PROCESS_ENV", {})
+
+    def _two_trees(self, tmp_path, monkeypatch, loaded_value, cwd_value):
+        loaded = self._dotenv(tmp_path / "module_tree" / ".env", loaded_value)
+        cwd = tmp_path / "cwd_tree"
+        self._dotenv(cwd / ".env", cwd_value)
+        monkeypatch.chdir(cwd)
+        monkeypatch.setattr(mcp_auth.config, "LOADED_DOTENV_PATHS", [str(loaded)])
+        self._as_if_dotenv_had_won(monkeypatch)
+
+    def test_off_in_the_file_config_loaded_keeps_auth_on(self, tmp_path, monkeypatch, caplog):
+        """The drift case. Only the file config.py loaded says off; the cwd's
+        .env is innocent. A cwd-only search sees nothing and opens the endpoint."""
+        self._two_trees(tmp_path, monkeypatch, loaded_value="off", cwd_value="on")
+        caplog.set_level("WARNING")
+
+        assert mcp_auth._dotenv_sets_off() is True
+        assert mcp_auth.auth_disabled() is False
+        assert any(".env" in r.message for r in caplog.records)
+
+    def test_off_in_a_cwd_dotenv_keeps_auth_on(self, tmp_path, monkeypatch):
+        """The mirror case. The cwd stays an EXTRA candidate rather than being
+        dropped: a hit here only ever leaves auth ON, so a false positive costs
+        a warning while a false negative opens the endpoint."""
+        self._two_trees(tmp_path, monkeypatch, loaded_value="on", cwd_value="off")
+
+        assert mcp_auth._dotenv_sets_off() is True
+        assert mcp_auth.auth_disabled() is False
+
+    def test_neither_file_sets_it_so_the_environment_is_believed(self, tmp_path, monkeypatch):
+        self._two_trees(tmp_path, monkeypatch, loaded_value="on", cwd_value="on")
+
+        assert mcp_auth._dotenv_sets_off() is False
+        assert mcp_auth.auth_disabled() is True
+
+    def test_the_workspace_dotenv_env_var_is_still_consulted(self, tmp_path, monkeypatch):
+        """CONTEXTPULSE_DOTENV can be set after config.py imported, so it is read
+        live as well as through LOADED_DOTENV_PATHS."""
+        workspace = self._dotenv(tmp_path / "workspace" / ".env", "off")
+        self._two_trees(tmp_path, monkeypatch, loaded_value="on", cwd_value="on")
+        monkeypatch.setenv("CONTEXTPULSE_DOTENV", str(workspace))
+
+        assert mcp_auth._dotenv_sets_off() is True
+        assert mcp_auth.auth_disabled() is False
+
+
+_CONFIG_PROBE = """\
+import json, os
+from contextpulse_core import config
+
+print(json.dumps({
+    "paths": [os.path.abspath(p) for p in config.LOADED_DOTENV_PATHS],
+    "value": os.environ.get("CONTEXTPULSE_MCP_AUTH", ""),
+}))
+"""
+
+
+def test_config_publishes_the_dotenv_it_loaded_and_never_the_cwds(tmp_path):
+    """R2-1, the config half: LOADED_DOTENV_PATHS must be what load_dotenv()
+    really resolved. Out of process, because config.py resolves once at import.
+
+    The probe runs with a `.env` sitting in its cwd that sets the off switch.
+    config.py's no-argument search is module-relative, so that file must not
+    appear in the published list and must not reach os.environ -- which is
+    exactly why a cwd-only guard was looking in the wrong place.
+    """
+    (tmp_path / ".env").write_text("CONTEXTPULSE_MCP_AUTH=off\n", encoding="utf-8")
+    probe = tmp_path / "probe.py"
+    probe.write_text(_CONFIG_PROBE, encoding="utf-8")
+
+    env = dict(os.environ)
+    env.pop("CONTEXTPULSE_MCP_AUTH", None)
+    env.pop("CONTEXTPULSE_DOTENV", None)
+    result = subprocess.run(
+        [sys.executable, str(probe)], cwd=tmp_path, env=env,
+        capture_output=True, text=True, timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+    published = json.loads(result.stdout.strip().splitlines()[-1])
+
+    assert published["value"] != "off", "config.py must not read the cwd's .env"
+    cwd_marker = os.path.normcase(str(tmp_path))
+    assert not [
+        p for p in published["paths"] if os.path.normcase(p).startswith(cwd_marker)
+    ], f"LOADED_DOTENV_PATHS leaked a cwd-relative file: {published['paths']}"
+
+
 def test_build_http_app_wraps_when_auth_enabled(monkeypatch, tmp_path):
     monkeypatch.delenv("CONTEXTPULSE_MCP_AUTH", raising=False)
     target = tmp_path / "mcp_token"

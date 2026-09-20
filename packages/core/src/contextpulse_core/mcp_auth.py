@@ -41,6 +41,7 @@ from pathlib import Path
 # environment, and importing config runs load_dotenv(override=True), after
 # which a .env file has already overwritten os.environ. See auth_disabled().
 from contextpulse_core import env_guard
+from contextpulse_core import config
 from contextpulse_core.config import APPDATA_DIR
 
 # isort: on
@@ -81,18 +82,40 @@ _READ_RETRY_SLEEP = 0.02
 def _dotenv_sets_off() -> bool:
     """Would a .env file, on its own, have set the off switch?
 
-    Reads the same files config.py feeds to load_dotenv: the path named by
-    CONTEXTPULSE_DOTENV, and the nearest .env walking up from the cwd.
+    Reads config.LOADED_DOTENV_PATHS -- the files config.py really fed to
+    load_dotenv -- instead of repeating the search here. Repeating it was the
+    bug: config.py calls load_dotenv() with no path, which is
+    find_dotenv(usecwd=False), a walk up from config.py's OWN directory, while
+    this function called find_dotenv(usecwd=True), a walk up from the cwd. With
+    a .env in each tree the two layers resolve different files, so the guard
+    could clear a file that set nothing while never opening the one that set
+    the switch.
+
+    Two further candidates are consulted on top of that list, not instead of
+    it: CONTEXTPULSE_DOTENV as it stands NOW (it can be set after config.py
+    imported), and the cwd's .env (a caller may have loaded it itself, and a
+    future import order may run this before config.py). Every extra candidate
+    can only make the answer True, and True leaves auth ON -- so a false
+    positive costs a warning and a working endpoint, while a false negative
+    opens the endpoint. That asymmetry is why the union is the safe shape.
     """
     try:
         from dotenv import dotenv_values, find_dotenv
     except ImportError:  # pragma: no cover - python-dotenv is a hard dependency
         return False
 
-    candidates = [os.environ.get("CONTEXTPULSE_DOTENV", ""), find_dotenv(usecwd=True)]
+    candidates: list[str] = list(config.LOADED_DOTENV_PATHS)
+    candidates.append(os.environ.get("CONTEXTPULSE_DOTENV", ""))
+    candidates.append(find_dotenv(usecwd=True))
+
+    seen: set[str] = set()
     for candidate in candidates:
         if not candidate:
             continue
+        key = os.path.normcase(os.path.abspath(candidate))
+        if key in seen:
+            continue
+        seen.add(key)
         try:
             values = dotenv_values(candidate)
         except OSError:
