@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "contextpulse"
-version = "0.1.0"
+version = "0.1.1"
 description = "Always-on context for AI agents"
 readme = "README.md"
 license = "AGPL-3.0-or-later"

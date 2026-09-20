@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-19
+
+### Security
+
+- Clipboard text is now redacted before storage and at the MCP boundary; the
+  `clipboard_enabled` setting is now honoured. Reported by Yevhen Tienkaiev.
+
+### Added
+
+- `scripts/purge_clipboard_secrets.py` — scrubs secrets from clipboard and
+  event rows written before this release. Dry run by default; reports counts
+  by category only.
+
 ## [0.1.0] - 2026-04-11
 
 Initial public release.
