@@ -21,6 +21,7 @@ Every value below is SYNTHETIC.
 import json
 import sqlite3
 import time
+from pathlib import Path
 
 import pytest
 from contextpulse_core import purge
@@ -282,6 +283,111 @@ class TestEnsureMigrated:
             ).fetchone()[0] == 1
         finally:
             conn.close()
+
+
+def _markers(db_path):
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return {r[0] for r in conn.execute("SELECT name FROM cp_migrations")}
+    finally:
+        conn.close()
+
+
+def _probe_text(db_path):
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return " ".join(
+            f"{r[0]} {r[1]}" for r in conn.execute("SELECT entity, fact FROM facts")
+        )
+    finally:
+        conn.close()
+
+
+class TestOneMarkerPerStore:
+    """Review B-3: one marker, written before the derived stores were swept.
+
+    The marker INSERT sat inside the activity.db block and the probe/knowledge
+    loop ran afterwards, warning and continuing on failure. So a locked probe.db
+    -- or a tray quit during the multi-minute sweep, which kills it outright
+    because start_secret_migration runs on a daemon thread -- left those stores
+    unswept FOREVER: the next start saw the marker, returned immediately, and
+    nothing ever said so again.
+    """
+
+    def test_a_failed_store_leaves_no_marker_and_is_retried(self, tmp_path, monkeypatch):
+        db_path = _activity_db(tmp_path)
+        knowledge_db = _knowledge_db(tmp_path)
+        broken = tmp_path / "broken.db"
+        broken.write_bytes(b"this is not a database")
+
+        purge.ensure_migrated(db_path, probe_db=broken, knowledge_db=knowledge_db)
+
+        markers = _markers(db_path)
+        assert purge.MIGRATION_NAME in markers, "activity.db was not marked"
+        assert f"{purge.MIGRATION_NAME}:knowledge" in markers, (
+            "a store that swept cleanly was not marked, so it will be re-swept"
+        )
+        assert f"{purge.MIGRATION_NAME}:probe" not in markers, (
+            "the failed store was marked done -- it will never be retried"
+        )
+
+        # Second start, with a probe.db that works this time.
+        probe_db = _probe_db(tmp_path)
+        calls = []
+        real = purge.purge_derived_store
+
+        def spy(path, spec, apply):
+            calls.append(Path(path).name)
+            return real(path, spec, apply)
+
+        monkeypatch.setattr(purge, "purge_derived_store", spy)
+        purge.ensure_migrated(db_path, probe_db=probe_db, knowledge_db=knowledge_db)
+
+        assert "probe.db" in calls, "the failed store was not retried"
+        assert "knowledge.db" not in calls, (
+            "a completed store was swept again -- the marker is not per-store"
+        )
+        assert FACT_SECRET not in _probe_text(probe_db)
+        assert f"{purge.MIGRATION_NAME}:probe" in _markers(db_path)
+
+    def test_the_activity_marker_is_not_written_when_verification_fails(
+        self, tmp_path, monkeypatch
+    ):
+        """A marker means "this store is clean", not "the code ran"."""
+        db_path = _activity_db(tmp_path)
+        monkeypatch.setattr(purge, "apply_activity_updates", lambda conn, updates: None)
+
+        purge.ensure_migrated(db_path)
+
+        assert purge.MIGRATION_NAME not in _markers(db_path), (
+            "the sweep left secrets behind and still claimed to be done"
+        )
+
+        # Unpatched, the retry completes and marks.
+        monkeypatch.undo()
+        purge.ensure_migrated(db_path)
+        assert OCR_SECRET not in _activity_text(db_path)
+        assert purge.MIGRATION_NAME in _markers(db_path)
+
+    def test_a_clean_store_is_marked_for_every_store(self, tmp_path):
+        """Otherwise every start rescans the derived stores as well."""
+        db_path = _activity_db(tmp_path)
+        probe_db = _probe_db(tmp_path)
+        knowledge_db = _knowledge_db(tmp_path)
+
+        purge.ensure_migrated(db_path, probe_db=probe_db, knowledge_db=knowledge_db)
+
+        assert _markers(db_path) == {
+            purge.MIGRATION_NAME,
+            f"{purge.MIGRATION_NAME}:probe",
+            f"{purge.MIGRATION_NAME}:knowledge",
+        }
+
+    def test_a_missing_derived_store_is_marked_rather_than_retried_forever(self, tmp_path):
+        """A store that does not exist is clean, not failed."""
+        db_path = _activity_db(tmp_path)
+        purge.ensure_migrated(db_path, probe_db=tmp_path / "absent.db")
+        assert f"{purge.MIGRATION_NAME}:probe" in _markers(db_path)
 
 
 class TestDaemonAndMcpBothCallIt:
