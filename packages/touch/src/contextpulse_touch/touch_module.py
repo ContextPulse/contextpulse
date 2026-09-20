@@ -120,26 +120,6 @@ class TouchModule(ModalityModule):
             "watching_correction": self._correction_detector.is_watching,
         }
 
-    def get_config_schema(self) -> dict[str, Any]:
-        return {
-            "touch_burst_timeout": {
-                "type": "number", "default": 1.5,
-                "description": "Seconds of silence to end a typing burst",
-            },
-            "touch_correction_window": {
-                "type": "number", "default": 15.0,
-                "description": "Seconds after paste to watch for corrections",
-            },
-            "touch_min_burst_chars": {
-                "type": "number", "default": 3,
-                "description": "Minimum characters for a burst event",
-            },
-            "touch_mouse_debounce": {
-                "type": "number", "default": 0.1,
-                "description": "Seconds between mouse events (debounce)",
-            },
-        }
-
     def _emit(self, event: ContextEvent) -> None:
         """Emit event via registered callback."""
         if not self._callback or not self._running:

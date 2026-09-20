@@ -20,32 +20,39 @@ script, all specified there:
   looks alive from the outside. Excluding the dialog makes those keys read as
   zero-reader, which is the truth about the daemon.
 
-WHY THESE TESTS ARE `xfail(strict=True)` RIGHT NOW
---------------------------------------------------
-This file lands in step 1/2 of the spec, before any reader is rewired. The
-guard is therefore *expected to fail*, and strict xfail is what proves it can
-detect the defect it exists to catch: if someone wires the readers, the test
-starts passing and strict xfail turns that into a hard XPASS failure, forcing
-the marker to be removed rather than quietly leaving a dead guard behind.
+WHY TWO OF THESE TESTS ARE `xfail(strict=True)` RIGHT NOW
+---------------------------------------------------------
+The end-state assertions -- every key has a reader, only core config reads
+CONTEXTPULSE_* -- cannot hold until spec steps 3 and 4 wire the SIGHT readers
+and shrink `contextpulse_sight/config.py`. Strict xfail is what proves the
+guard can still detect the defect it exists to catch: when the sight work
+lands, the tests start passing and strict xfail turns that into a hard XPASS
+failure, forcing the markers off rather than leaving two dead guards behind.
 
-Pre-fix baseline, measured on branch feat/config-unification-core at the
-commit that added this file (printed by the tests themselves, see the
-`BASELINE` output line):
+Strict xfail alone is a weak guard DURING the transition, though: it fires
+when everything is fixed and says nothing when a 22nd dead key appears. So
+each xfail is paired with a subset test that passes today and fails the
+moment anything joins the baseline. That pair is the working guard; the xfail
+is the finish line.
 
-* dead keys: the MISLEADING rows 7-17 of `.internal/audit-2026-09-19/
-  dead-controls.md` -- `auto_interval`, `storage_mode`, `jpeg_quality`,
-  `buffer_max_age`, the four `hotkey_*`, `blocklist_patterns`,
-  `always_both_apps`, `blocklist_file` -- plus the keys added in step 1 that
-  have no reader yet (`auto_interval_idle`, `auto_idle_threshold`,
-  `ocr_diff_threshold`) and the sight-side duplicates of row 30
-  (`change_threshold`, `max_width`, `max_height`, `activity_max_age`, the
-  three `event_*`). `memory_enabled`/`memory_tier`/`output_dir` are NOT in the
-  baseline -- step 1 deleted them, which is the first reduction this guard
-  can see.
-* ungoverned env reads: `contextpulse_sight/config.py` (system B, deleted in
-  spec step 4), `contextpulse_voice/config.py` and
-  `contextpulse_touch/config.py` (their `_env`/`os.environ` fallbacks, deleted
-  in step 7), and `daemon.py`'s own `CONTEXTPULSE_ACTIVITY_DB` (step 6).
+BASELINE, measured after spec steps 1, 5, 6 and 7 (branch
+feat/config-unification-modules). Both numbers are printed by the tests
+themselves -- see the `BASELINE` output lines.
+
+* dead keys: 21, and every one of them is a SIGHT key, listed in
+  `SIGHT_KEYS_AWAITING_READERS` below. Steps 5-7 moved none of them, which is
+  correct: the voice and touch keys were already read by their own packages'
+  `get_*_config()`, so they were never dead. Down from the pre-step-1 set by
+  `memory_enabled`, `memory_tier` and `output_dir`, which step 1 deleted.
+* ungoverned env reads: **20**, all of them in `contextpulse_sight/config.py`
+  (system B, deleted in spec step 4). The printed figure counts reads that
+  are NOT allowlisted, so the arithmetic behind it is: 33 before this branch,
+  minus 8 deleted outright (step 6 took `daemon.py`'s own
+  `CONTEXTPULSE_ACTIVITY_DB`; step 7 took the four `CONTEXTPULSE_TOUCH_*` and
+  three `CONTEXTPULSE_VOICE_*` fallbacks out of `contextpulse_touch/config.py`
+  and `contextpulse_voice/config.py`), minus 5 non-tunables newly allowlisted
+  below with reasons -- an MCP token variable, a dotenv path pointer and three
+  crash-diagnostic breadcrumb switches, none of which is a user setting.
 """
 
 from __future__ import annotations
@@ -90,12 +97,64 @@ ENV_READ_ALLOWLIST: dict[str, set[str]] = {
     "packages/knowledge/src/contextpulse_knowledge/mcp_tools.py": {"CONTEXTPULSE_KNOWLEDGE_DB"},
     "packages/memory/src/contextpulse_memory/mcp_server.py": {"CONTEXTPULSE_MEMORY_DIR"},
     # A thread-budget diagnostic, the sibling of _thread_caps' variable --
-    # not a tunable. The spec expected daemon.py to hold no env reads after
-    # step 6; that refers to CONTEXTPULSE_ACTIVITY_DB (line 58), which is
-    # deliberately NOT allowlisted here so it stays visible until step 6
-    # replaces it with an import from core.config.
+    # not a tunable. CONTEXTPULSE_ACTIVITY_DB is deliberately absent: spec
+    # step 6 replaced daemon.py's own copy with an import of
+    # contextpulse_core.config.ACTIVITY_DB_PATH, so a reappearance here is a
+    # regression and must fail.
     "packages/core/src/contextpulse_core/daemon.py": {"CONTEXTPULSE_THREAD_BUDGET_WARN"},
+    # ── Added in spec step 7, each checked against the "is it a tunable?"
+    # test: does it have (or want) a config.json key and a Settings control?
+    # All five answer no. The spec's allowlist was drafted from a partial
+    # survey and did not name them; adding them is the deliberate act the
+    # guard's own docstring asks for, not a way to make a red test green --
+    # none of the five is a setting a user would look for in the dialog.
+    #
+    # The MCP bearer token lives in its own file, never in config.json (see
+    # the "MCP Access" section of settings.py, which is read-only state);
+    # CONTEXTPULSE_DOTENV is a path pointer, the same class as
+    # CONTEXTPULSE_HOME, and core config.py reads it too.
+    "packages/core/src/contextpulse_core/mcp_auth.py": {
+        "CONTEXTPULSE_MCP_AUTH",
+        "CONTEXTPULSE_DOTENV",
+    },
+    # Crash-diagnostic breadcrumbs for the 0xC0000374 clipboard heap
+    # corruption, off by default. Same class as the CONTEXTPULSE_LOG_REPEAT_*
+    # variables already allowlisted above.
+    "packages/core/src/contextpulse_core/platform/windows.py": {
+        "CONTEXTPULSE_CLIPBOARD_READ_BREADCRUMBS",
+    },
+    "packages/voice/src/contextpulse_voice/paster.py": {
+        "CONTEXTPULSE_PASTE_BREADCRUMBS",
+        "CONTEXTPULSE_CLIPBOARD_READ_BREADCRUMBS",
+    },
 }
+
+# The 21 keys that still have no production reader, all of them SIGHT keys
+# wired by spec steps 3-4 (contextpulse_sight: privacy, buffer, ocr_worker,
+# capture, activity, events, app). Named rather than counted so that a NEW
+# dead key fails the subset test below instead of hiding inside an xfail.
+SIGHT_KEYS_AWAITING_READERS = {
+    # privacy.py
+    "blocklist_patterns", "blocklist_file",
+    # buffer.py
+    "buffer_max_age", "change_threshold", "jpeg_quality",
+    # ocr_worker.py
+    "storage_mode", "always_both_apps",
+    # capture.py
+    "max_width", "max_height",
+    # activity.py
+    "activity_max_age",
+    # events.py
+    "event_poll_interval", "event_movement_threshold", "event_idle_threshold",
+    # app.py -- capture loop, OCR gate and hotkeys
+    "auto_interval", "auto_interval_idle", "auto_idle_threshold",
+    "ocr_diff_threshold",
+    "hotkey_capture", "hotkey_all_monitors", "hotkey_region", "hotkey_pause",
+}
+
+# Every remaining ungoverned env read must come from this one file, which
+# spec step 4 deletes outright.
+ENV_FILE_AWAITING_DELETION = "packages/screen/src/contextpulse_sight/config.py"
 
 # config.py declares the variables; it is the one file allowed to read them.
 ENV_SCAN_EXCLUDED = ("packages/core/src/contextpulse_core/config.py",)
@@ -270,12 +329,49 @@ def test_no_two_keys_share_an_env_var():
 # ── The guard proper (expected red until the readers are wired) ─────────
 
 
+def test_no_dead_key_outside_the_known_sight_baseline():
+    """The working guard during the transition.
+
+    The xfail below only fires when EVERY key has a reader, so on its own it
+    would happily absorb a 22nd dead key. This one fails the moment a key
+    joins the baseline -- a new _DEFAULTS entry nothing reads, or a reader
+    deleted out from under an existing key.
+    """
+    dead = set(_keys_without_readers())
+    unexpected = sorted(dead - SIGHT_KEYS_AWAITING_READERS)
+    assert not unexpected, (
+        f"{len(unexpected)} config key(s) have no production reader and are NOT part "
+        f"of the known sight baseline: {unexpected}. Either wire a reader or, if the "
+        f"key is genuinely new sight work, add it to SIGHT_KEYS_AWAITING_READERS with "
+        f"the module that will read it."
+    )
+
+
+def test_the_sight_baseline_has_not_silently_shrunk_to_nothing():
+    """Positive control for the subset test above.
+
+    A subset assertion passes vacuously against an empty `dead` set -- which
+    is exactly what a broken _keys_without_readers() would produce. Pin that
+    the baseline is still being measured, and drop this test together with
+    the xfail markers when the sight readers land.
+    """
+    dead = set(_keys_without_readers())
+    assert dead, (
+        "no dead keys found at all -- either the sight readers have landed (in "
+        "which case remove the xfail markers, this test and "
+        "SIGHT_KEYS_AWAITING_READERS) or _keys_without_readers() has stopped "
+        "measuring anything"
+    )
+    assert dead <= SIGHT_KEYS_AWAITING_READERS
+
+
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "Pre-fix baseline: the MISLEADING rows 7-17 of dead-controls.md plus the "
-        "row-30 sight duplicates and the 3 keys added by spec step 1. Flips to a "
-        "hard XPASS failure -- deliberately -- once spec steps 3-7 wire the readers."
+        "Baseline after spec steps 1/5/6/7: 21 keys, all of them SIGHT keys named in "
+        "SIGHT_KEYS_AWAITING_READERS. Steps 5-7 moved none of them -- the voice and "
+        "touch keys were already read by their own packages. Flips to a hard XPASS "
+        "failure -- deliberately -- once spec steps 3-4 wire the sight readers."
     ),
 )
 def test_every_config_key_has_a_production_reader():
@@ -289,12 +385,35 @@ def test_every_config_key_has_a_production_reader():
     )
 
 
+def test_every_remaining_env_read_is_in_the_file_step_4_deletes():
+    """The working guard: the residue is one file, and it is on its way out.
+
+    Steps 6 and 7 removed daemon.py's CONTEXTPULSE_ACTIVITY_DB and the seven
+    CONTEXTPULSE_TOUCH_*/VOICE_* fallbacks in the touch and voice config
+    modules (33 -> 25). Everything left lives in contextpulse_sight/config.py,
+    which spec step 4 deletes. A read appearing anywhere else -- system B
+    regrowing in a new module -- fails here immediately rather than waiting
+    for the xfail below to stop firing.
+    """
+    hits = _ungoverned_env_reads()
+    strays = sorted(h for h in hits if not h.startswith(f"{ENV_FILE_AWAITING_DELETION}:"))
+    assert not strays, (
+        f"{len(strays)} CONTEXTPULSE_* read(s) outside {ENV_FILE_AWAITING_DELETION}: "
+        f"{strays}. Every tunable belongs in _DEFAULTS/_ENV_MAP; a non-tunable goes in "
+        f"ENV_READ_ALLOWLIST with a reason."
+    )
+    assert hits, (
+        "no ungoverned reads at all -- either step 4 has landed (remove the xfail "
+        "marker and this test) or the scan has stopped examining anything"
+    )
+
+
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "Pre-fix baseline: contextpulse_sight/config.py (system B), the voice/touch "
-        "env fallbacks, and daemon.py's own CONTEXTPULSE_ACTIVITY_DB. Deleted by spec "
-        "steps 4, 6 and 7; strict xfail forces the marker off when they go."
+        "Baseline after spec steps 1/5/6/7: 20 reads, every one of them in "
+        "contextpulse_sight/config.py (system B, deleted by step 4). Strict xfail "
+        "forces the marker off when step 4 lands."
     ),
 )
 def test_only_core_config_reads_contextpulse_env_vars():

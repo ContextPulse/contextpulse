@@ -4,6 +4,7 @@ import threading
 import time
 from unittest.mock import MagicMock, patch
 
+import contextpulse_voice.voice_module as voice_module_mod
 import pytest
 from contextpulse_core.spine import ContextEvent, EventType, Modality
 
@@ -43,11 +44,16 @@ class TestVoiceModuleLifecycle:
         module.stop()
         assert not module.is_alive()
 
-    def test_get_config_schema(self, module):
-        schema = module.get_config_schema()
-        assert "voice_hotkey" in schema
-        assert "voice_whisper_model" in schema
-        assert schema["voice_hotkey"]["type"] == "string"
+    def test_get_config_schema_is_gone(self, module):
+        """It was a third declaration site and it had already drifted.
+
+        Replaces test_get_config_schema. The schema said
+        voice_whisper_model default "base" while
+        contextpulse_core.config._DEFAULTS says "small", and nothing in the
+        project ever called the method -- the settings panel it claimed to
+        feed reads load_config() directly.
+        """
+        assert not hasattr(module, "get_config_schema")
 
     def test_emit_increments_counter(self, module):
         received = []
@@ -179,6 +185,74 @@ class TestVoiceModuleTranscription:
         module._transcriber.transcribe.return_value = ""
         module._transcribe_and_paste(b"fake_wav", "code.exe", "test.py")
         assert len(received) == 0
+
+    def test_always_use_llm_is_read_per_dictation_not_cached(self, module_with_mocks):
+        """T18: the AI-cleanup checkbox must not be a placebo until restart.
+
+        VoiceModule.__init__ used to cache `self._always_use_llm` from
+        get_voice_config(), so ticking "Always use AI cleanup" in Settings
+        changed config.json, changed nothing in the running daemon, and said
+        nothing about it -- the module is constructed once at startup and
+        lives for the life of the process.
+
+        This drives ONE module instance through two dictations with the
+        config answering differently in between, which is the only shape that
+        can tell a live read from a cached one: a test that constructs a
+        second module would pass against the cached version too.
+        """
+        module, _ = module_with_mocks
+        cfg_mock = voice_module_mod.get_voice_config  # the active patch
+        base_cfg = dict(cfg_mock.return_value)
+
+        seen: list[bool] = []
+
+        def _record_clean(text, use_llm=False, profile_context=None):
+            seen.append(use_llm)
+            return text
+
+        with patch("contextpulse_voice.voice_module.paste_text") as mock_paste, \
+             patch("contextpulse_voice.voice_module.has_api_key", return_value=True), \
+             patch("contextpulse_voice.voice_module.clean", side_effect=_record_clean):
+            mock_paste.return_value = (time.time(), "abc123")
+
+            # Distinct audio per call: _transcribe_and_paste hashes the wav
+            # bytes and skips a repeat, so passing the same buffer twice
+            # would silently drop the second dictation and leave this test
+            # asserting on one sample.
+            cfg_mock.return_value = {**base_cfg, "always_use_llm": False}
+            module._transcribe_and_paste(b"fake_wav_one", "code.exe", "test.py")
+
+            cfg_mock.return_value = {**base_cfg, "always_use_llm": True}
+            module._transcribe_and_paste(b"fake_wav_two", "code.exe", "test.py")
+
+        assert seen == [False, True], (
+            f"clean() saw use_llm={seen}; the second dictation on the SAME module "
+            "instance must take the LLM branch after the setting changes"
+        )
+
+    def test_always_use_llm_still_requires_an_api_key(self, module_with_mocks):
+        """Negative control for the test above.
+
+        Reading the flag live must not have dropped the has_api_key() guard --
+        otherwise the LLM branch fires with no key and every dictation fails.
+        """
+        module, _ = module_with_mocks
+        cfg_mock = voice_module_mod.get_voice_config
+        cfg_mock.return_value = {**cfg_mock.return_value, "always_use_llm": True}
+
+        seen: list[bool] = []
+
+        def _record_clean(text, use_llm=False, profile_context=None):
+            seen.append(use_llm)
+            return text
+
+        with patch("contextpulse_voice.voice_module.paste_text") as mock_paste, \
+             patch("contextpulse_voice.voice_module.has_api_key", return_value=False), \
+             patch("contextpulse_voice.voice_module.clean", side_effect=_record_clean):
+            mock_paste.return_value = (time.time(), "abc123")
+            module._transcribe_and_paste(b"fake_wav", "code.exe", "test.py")
+
+        assert seen == [False], f"LLM branch taken with no API key: {seen}"
 
     def test_short_transcription_skipped(self, module_with_mocks):
         module, received = module_with_mocks
