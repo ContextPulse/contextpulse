@@ -934,22 +934,36 @@ def main() -> None:
 
     # Handle --setup flag for MCP config + companion skills
     if "--setup" in sys.argv:
-        from contextpulse_sight.setup import print_config, setup_all
+        from contextpulse_sight.setup import KNOWN_CLIENTS, print_config, setup_all, setup_client
         idx = sys.argv.index("--setup")
-        if idx + 1 < len(sys.argv) and sys.argv[idx + 1] == "print":
+        target = sys.argv[idx + 1].lower() if idx + 1 < len(sys.argv) else ""
+        if target == "print":
             print_config()
+            return
+
+        if target in KNOWN_CLIENTS:
+            # `--setup claude-code` configures claude-code and NOTHING else.
+            # It used to fall through to setup_all(), which also configured
+            # Cursor -- whose path was cwd-relative, so running this from a
+            # checkout wrote the live token into the working tree of a public
+            # repo. Naming a client now means that client only.
+            setup_client(target)
+        elif target and not target.startswith("-"):
+            print(f"Unknown client: {target}")
+            print(f"Supported: {', '.join(KNOWN_CLIENTS)}, print")
+            return
         else:
-            # Configure MCP servers
             setup_all()
-            # Install companion skills
-            print("\n--- Companion Skills ---")
-            from contextpulse_core.skill_setup import install_skills
-            force = "--force" in sys.argv
-            install_skills("claude-code", force=force)
-            install_skills("gemini", force=force)
-            # Show ecosystem status
-            from contextpulse_core.skill_setup import print_ecosystem_status
-            print_ecosystem_status()
+
+        # Install companion skills (both the all-clients and single-client paths)
+        print("\n--- Companion Skills ---")
+        from contextpulse_core.skill_setup import install_skills
+        force = "--force" in sys.argv
+        install_skills("claude-code", force=force)
+        install_skills("gemini", force=force)
+        # Show ecosystem status
+        from contextpulse_core.skill_setup import print_ecosystem_status
+        print_ecosystem_status()
         return
 
     # Handle --status flag

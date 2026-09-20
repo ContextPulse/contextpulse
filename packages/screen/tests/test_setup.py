@@ -10,10 +10,139 @@ reads and creates the REAL token file under %APPDATA% and rewrites the real
 """
 
 import json
+import os
+from pathlib import Path
 
-from contextpulse_sight.setup import SERVER_NAME, print_config, setup_client
+from contextpulse_sight import setup as setup_mod
+from contextpulse_sight.setup import (
+    _CLIENTS,
+    BACKUP_SUFFIX,
+    KNOWN_CLIENTS,
+    SERVER_NAME,
+    print_config,
+    setup_client,
+)
 
 TOKEN = "test-token-abc"
+
+
+class TestNothingIsWrittenRelativeToCwd:
+    """B1-1. Cursor's path was `Path.cwd() / ".cursor" / "mcp.json"`, so
+    `contextpulse --setup claude-code` run from the ContextPulse checkout
+    dropped a live bearer token into the working tree of a public AGPL repo.
+    """
+
+    def test_every_declared_client_path_is_under_home(self):
+        home = str(Path.home().resolve()).lower()
+        for name, client in _CLIENTS.items():
+            for path in client["paths"]:
+                assert path.is_absolute(), f"{name}: {path} is relative"
+                assert str(path.resolve()).lower().startswith(home + os.sep), (
+                    f"{name}: {path} is outside the user's home directory"
+                )
+
+    def test_no_declared_client_path_is_under_the_cwd(self, monkeypatch, tmp_path):
+        """The paths are resolved at import, so cwd must not appear in them."""
+        monkeypatch.chdir(tmp_path)
+        for name, client in _CLIENTS.items():
+            for path in client["paths"]:
+                assert Path.cwd() not in path.parents, f"{name}: {path} is under cwd"
+
+    def test_cursor_uses_the_global_config_not_the_project_one(self):
+        assert _CLIENTS["cursor"]["paths"] == [Path.home() / ".cursor" / "mcp.json"]
+
+    def test_a_cwd_relative_path_is_refused_and_writes_nothing(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        target = Path(".cursor") / "mcp.json"
+        assert setup_client("cursor", token=TOKEN, paths=[target]) is False
+        assert list(tmp_path.iterdir()) == [], "a refused write still created something"
+
+    def test_an_absolute_path_inside_the_cwd_is_refused(self, tmp_path, monkeypatch):
+        """The real B1-1 shape: an absolute path that happens to be the cwd."""
+        work = tmp_path / "checkout"
+        work.mkdir()
+        monkeypatch.chdir(work)
+        target = work / ".cursor" / "mcp.json"
+        assert setup_client("cursor", token=TOKEN, paths=[target]) is False
+        assert not target.exists()
+        assert list(work.iterdir()) == []
+
+    def test_a_home_relative_path_is_allowed_when_run_from_home(self, tmp_path, monkeypatch):
+        """Running from ~ must not lock the user out of their own config."""
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+        monkeypatch.chdir(home)
+        target = home / ".claude.json"
+        assert setup_client("claude-code", token=TOKEN, paths=[target]) is True
+        assert target.exists()
+
+    def test_known_clients_is_what_the_cli_dispatches_on(self):
+        assert set(KNOWN_CLIENTS) == set(_CLIENTS)
+        assert "claude-code" in KNOWN_CLIENTS
+
+
+class TestAtomicWriteWithBackup:
+    """B1-2. ~/.claude.json is Claude Code's entire user state."""
+
+    def test_existing_config_is_backed_up_before_being_replaced(self, tmp_path):
+        cfg = tmp_path / ".claude.json"
+        original = json.dumps({"mcpServers": {"other": {"command": "x"}}, "keep": 1})
+        cfg.write_text(original, encoding="utf-8")
+
+        setup_client("claude-code", token=TOKEN, paths=[cfg])
+
+        backups = list(tmp_path.glob(f".claude.json.*{BACKUP_SUFFIX}"))
+        assert len(backups) == 1, backups
+        assert json.loads(backups[0].read_text(encoding="utf-8")) == json.loads(original)
+
+    def test_only_one_backup_generation_is_kept(self, tmp_path):
+        cfg = tmp_path / ".claude.json"
+        cfg.write_text("{}", encoding="utf-8")
+        for i in range(3):
+            cfg.write_text(json.dumps({"round": i}), encoding="utf-8")
+            setup_client("claude-code", token=TOKEN, paths=[cfg])
+        assert len(list(tmp_path.glob(f".claude.json.*{BACKUP_SUFFIX}"))) == 1
+
+    def test_no_backup_is_made_when_there_was_no_file(self, tmp_path):
+        cfg = tmp_path / ".claude.json"
+        setup_client("claude-code", token=TOKEN, paths=[cfg])
+        assert list(tmp_path.glob(f"*{BACKUP_SUFFIX}")) == []
+
+    def test_the_write_goes_through_os_replace_and_leaves_no_tmp(self, tmp_path, monkeypatch):
+        cfg = tmp_path / ".claude.json"
+        cfg.write_text("{}", encoding="utf-8")
+        replaced: list[tuple] = []
+        real_replace = os.replace
+
+        def spy(src, dst):
+            replaced.append((str(src), str(dst)))
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(setup_mod.os, "replace", spy)
+        setup_client("claude-code", token=TOKEN, paths=[cfg])
+
+        assert len(replaced) == 1, "config was not written through os.replace"
+        src, dst = replaced[0]
+        assert Path(src).parent == Path(dst).parent, (
+            "os.replace is only atomic within one directory"
+        )
+        assert not list(tmp_path.glob("*.tmp"))
+
+    def test_a_failed_write_leaves_the_original_intact(self, tmp_path, monkeypatch):
+        cfg = tmp_path / ".claude.json"
+        cfg.write_text('{"precious": true}', encoding="utf-8")
+
+        def boom(src, dst):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(setup_mod.os, "replace", boom)
+        try:
+            setup_client("claude-code", token=TOKEN, paths=[cfg])
+        except OSError:
+            pass
+        assert json.loads(cfg.read_text(encoding="utf-8")) == {"precious": True}
+        assert not list(tmp_path.glob("*.tmp"))
 
 
 def _read(path):
