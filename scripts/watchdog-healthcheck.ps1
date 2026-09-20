@@ -87,11 +87,43 @@ $HeartbeatStaleSeconds = 120
 # "David stepped away" -- which is why it only ever logs, never acts.
 $ActivityStaleSeconds = 1800
 
+# logs\healthcheck.log had no bound of any kind until 2026-09-19: no size cap,
+# no generation shift, written by a task that runs every 2 minutes forever. It
+# reached 6.5MB, 3,025 of its 4,183 WARN lines a single repeated message ("MCP
+# port 8420 is down - relaunching MCP server directly") -- the same
+# one-stuck-loop-fills-the-log shape that grew daemon_stderr.log.2 to 20MB.
+# Mirrors log_rotation.py's naming (x.log -> x.log.1 -> ...) and
+# daemon-watchdog.ps1's Rotate-StderrLog shape, so all three of this project's
+# log families rotate the same way rather than inventing a third mechanism.
+$LogMaxBytes = 5MB
+$LogBackups  = 3
+
+function Rotate-HealthcheckLog {
+    if (-not (Test-Path $LogFile)) { return }
+    try {
+        if ((Get-Item $LogFile -ErrorAction Stop).Length -lt $LogMaxBytes) { return }
+    } catch {
+        return
+    }
+    $oldest = "$LogFile.$LogBackups"
+    if (Test-Path $oldest) {
+        Remove-Item $oldest -Force -ErrorAction SilentlyContinue
+    }
+    for ($g = $LogBackups - 1; $g -ge 1; $g--) {
+        $source = "$LogFile.$g"
+        if (Test-Path $source) {
+            Move-Item $source "$LogFile.$($g + 1)" -Force -ErrorAction SilentlyContinue
+        }
+    }
+    Move-Item $LogFile "$LogFile.1" -Force -ErrorAction SilentlyContinue
+}
+
 function Write-Log {
     param([string]$Message, [string]$Level = "INFO")
     $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $line = "[$ts] [$Level] $Message"
     Write-Host $line
+    Rotate-HealthcheckLog
     Add-Content -Path $LogFile -Value $line -ErrorAction SilentlyContinue
 }
 
