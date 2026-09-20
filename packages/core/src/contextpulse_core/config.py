@@ -238,9 +238,14 @@ def _read_json_layer() -> dict:
     cache = _CACHE
     if cache is not None and cache[0] == key:
         return cache[1]
+    # "Last good" is scoped to the same FILE. Without the path check, a
+    # caller that repoints CONFIG_FILE (the test fixture does; a future
+    # multi-profile daemon could) would be handed the previous file's values
+    # as its own last-good.
+    last_good = cache[1] if cache is not None and cache[0][0] == key[0] else None
     if key == _FAILED_KEY:
         # Same bytes we already failed on and already warned about.
-        return cache[1] if cache is not None else {}
+        return last_good if last_good is not None else {}
 
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -248,9 +253,9 @@ def _read_json_layer() -> dict:
             raise ValueError(f"top-level JSON value is {type(data).__name__}, expected object")
     except (OSError, ValueError) as exc:
         _FAILED_KEY = key
-        if cache is not None:
+        if last_good is not None:
             logger.warning("config.json unreadable (%s) — keeping the last good values", exc)
-            return cache[1]
+            return last_good
         logger.warning("config.json unreadable (%s) — falling back to defaults", exc)
         return {}
 

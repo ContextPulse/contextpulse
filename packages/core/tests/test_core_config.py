@@ -402,6 +402,25 @@ class TestLastGoodOnParseFailure:
         warnings = [r for r in caplog.records if "unreadable" in r.getMessage()]
         assert len(warnings) == 1, f"{len(warnings)} warnings for one failure"
 
+    def test_last_good_does_not_cross_config_files(self, isolated_config, tmp_path, monkeypatch):
+        """Last-good is scoped to one file. A corrupt file must not inherit a
+        different file's values just because that one parsed cleanly.
+        """
+        import contextpulse_core.config as cfg_mod
+
+        appdata, config_file = isolated_config
+        appdata.mkdir(parents=True, exist_ok=True)
+        config_file.write_text(json.dumps({"auto_interval": 11}))
+        assert load_config()["auto_interval"] == 11
+
+        other = tmp_path / "other" / "config.json"
+        other.parent.mkdir(parents=True, exist_ok=True)
+        other.write_text("{ broken")
+        monkeypatch.setattr(cfg_mod, "CONFIG_FILE", other)
+        assert load_config()["auto_interval"] == _DEFAULTS["auto_interval"]
+        # ... and again, on the already-warned path
+        assert load_config()["auto_interval"] == _DEFAULTS["auto_interval"]
+
     def test_non_object_json_is_treated_as_a_failure(self, isolated_config):
         appdata, config_file = isolated_config
         appdata.mkdir(parents=True, exist_ok=True)
