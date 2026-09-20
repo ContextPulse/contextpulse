@@ -205,6 +205,20 @@ class ContextPulseSightApp:
             key: parse_hotkey(cfg_get(key, _DEFAULTS[key]), _DEFAULTS[key])
             for key in _HOTKEY_KEYS
         }
+        # Logged HERE rather than at tray-ready, because this is where the
+        # chords are decided and because a headless/watchdog launch that never
+        # reaches the tray still needs to say what it bound. Modifier matching
+        # is EXACT (see _check_hotkeys), which is the one change on this
+        # branch a user can feel without opening Settings: Ctrl+Shift+Alt+S no
+        # longer fires Quick Capture the way a subset test let it. The
+        # semantics stay -- a subset test lets one chord fire two bindings and
+        # dict order decides which -- so the fix for "why did my muscle memory
+        # stop working" is a line naming the four effective bindings.
+        logger.info(
+            "Hotkeys bound (modifiers must match exactly): %s",
+            ", ".join(f"{k.removeprefix('hotkey_')}={format_hotkey(*v)}"
+                      for k, v in self._hotkeys.items()),
+        )
         self._hotkey_actions = {
             "hotkey_capture": lambda: self._in_thread(self.do_quick_capture),
             "hotkey_all_monitors": lambda: self._in_thread(self.do_all_capture),
@@ -852,11 +866,9 @@ class ContextPulseSightApp:
             title="ContextPulse Sight - Active",
             menu=self._create_tray_menu(),
         )
-        logger.info(
-            "Tray icon ready. Hotkeys: %s",
-            ", ".join(f"{k.removeprefix('hotkey_')}={format_hotkey(*v)}"
-                      for k, v in self._hotkeys.items()),
-        )
+        # The chords themselves are logged once in __init__, where they are
+        # parsed; repeating them here would be two lines saying one thing.
+        logger.info("Tray icon ready.")
         self.tray.run()
 
 

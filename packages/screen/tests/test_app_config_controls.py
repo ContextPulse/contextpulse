@@ -291,6 +291,33 @@ class TestHotkeysComeFromConfig:
             _close(app)
 
 
+    def test_startup_logs_the_four_effective_bindings(
+        self, tmp_path, monkeypatch, isolated_config, caplog
+    ):
+        """Exact modifier matching is the one change on this branch a user can
+        feel without opening Settings: Ctrl+Shift+Alt+S no longer fires Quick
+        Capture the way the old subset test let it. The semantics stay -- a
+        subset test lets one chord fire two bindings, and dict order picks the
+        winner -- so what is owed is a line saying what IS bound.
+
+        Asserted rather than eyeballed because a log line nothing reads is
+        exactly the sort of thing that silently stops firing.
+        """
+        save_config({"hotkey_capture": "ctrl+alt+k"})
+        with caplog.at_level("INFO", logger="contextpulse.sight"):
+            app = _make_app(tmp_path, monkeypatch)
+        try:
+            lines = [r.getMessage() for r in caplog.records if "Hotkeys bound" in r.getMessage()]
+            assert len(lines) == 1, lines
+            assert "capture=Ctrl+Alt+K" in lines[0]          # the saved one
+            assert "all_monitors=Ctrl+Shift+A" in lines[0]   # and the defaults
+            assert "region=Ctrl+Shift+Z" in lines[0]
+            assert "pause=Ctrl+Shift+P" in lines[0]
+            assert "exactly" in lines[0]
+        finally:
+            _close(app)
+
+
 class TestHotkeyParsing:
     """The pure parser, away from the app."""
 
