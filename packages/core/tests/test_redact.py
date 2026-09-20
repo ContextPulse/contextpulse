@@ -290,6 +290,84 @@ class TestSecondReviewFalsePositives:
         assert secret[3:] not in redact_sensitive(f"deploynotesx{secret} trailing")
 
 
+class TestCardNumbersAreLuhnChecked:
+    """A 16-digit run is not a card number. A 16-digit run that passes Luhn is.
+
+    The CC pattern was pure shape -- four groups of four digits -- so any long
+    identifier or concatenated date was rewritten as [REDACTED:CC]. Every card
+    network issues numbers with a Luhn check digit and a registered IIN prefix,
+    which is what Presidio's CreditCardRecognizer validates and what the
+    prior-art pass measured at 10/10 against six real test PANs and four benign
+    digit runs.
+
+    The trade, named so it is not a surprise: a card whose digits were MISREAD
+    by OCR now fails Luhn and is no longer redacted. Presidio makes the same
+    trade; the alternative is scrubbing every invoice number on screen.
+
+    Every PAN below is a published network TEST number, not a real card.
+    """
+
+    VALID_PANS = [
+        ("visa", "4111111111111111"),
+        ("visa_spaced", "4111 1111 1111 1111"),
+        ("visa_hyphenated", "4111-1111-1111-1111"),
+        ("mastercard", "5555555555554444"),
+        ("mastercard_2series", "2223003122003222"),
+        ("amex", "378282246310005"),
+        ("amex_spaced", "3782 822463 10005"),
+        ("discover", "6011111111111117"),
+    ]
+
+    @pytest.mark.parametrize(
+        "family,pan", VALID_PANS, ids=[p[0] for p in VALID_PANS]
+    )
+    def test_a_real_test_card_is_still_redacted(self, family, pan):
+        cleaned, counts = redact_with_counts(f"card {pan} on file")
+        assert pan not in cleaned, f"{family}: a valid PAN stopped being redacted"
+        assert counts.get("CC") == 1
+
+    @pytest.mark.parametrize(
+        "benign",
+        [
+            # Reported by the coordinator: a concatenated date-plus-counter.
+            "build 2026091912345678",
+            # One digit changed from the Visa test PAN, so the IIN is still
+            # valid and only the checksum fails -- this is the case a
+            # prefix-only check would miss.
+            "order4111111111111112",
+            # Valid Luhn is not enough either -- no network issues a 9xxx IIN.
+            # (Constructed from the Visa test PAN by changing the leading digit
+            # and rebalancing the check digit, so the checksum really does pass;
+            # the test below asserts that rather than assuming it.)
+            "ref 9111111111111110 filed",
+            # Ordinary 16-digit identifiers.
+            "session 1234567890123456 expired",
+        ],
+    )
+    def test_a_digit_run_that_is_not_a_card_survives(self, benign):
+        assert redact_sensitive(benign) == benign, f"over-redacted: {benign!r}"
+
+    def test_the_checksum_and_the_prefix_are_both_required(self):
+        """Neither gate alone explains the negatives above, so both are pinned.
+
+        "4111111111111112" has a valid Visa IIN and a broken checksum;
+        "9111111111111110" has a valid checksum and no issuer prefix. If either
+        check were dropped, one of these would start being redacted again.
+        """
+        from contextpulse_core.redact import _has_card_iin, _luhn_checksum
+
+        # The mechanism, asserted rather than assumed: if "9111111111111110"
+        # did not actually pass Luhn, this class would prove nothing about the
+        # IIN check and the docstring above would be false.
+        assert _has_card_iin("4111111111111112") is True
+        assert _luhn_checksum("4111111111111112") != 0
+        assert _luhn_checksum("9111111111111110") == 0
+        assert _has_card_iin("9111111111111110") is False
+
+        for not_a_card in ("4111111111111112", "9111111111111110"):
+            assert not_a_card in redact_sensitive(f"id {not_a_card} here")
+
+
 class TestUnterminatedPrivateKeyHeader:
     """Review S-7: a BEGIN armour with no END matched nothing at all.
 
