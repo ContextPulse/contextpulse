@@ -638,6 +638,37 @@ class TestSessionGuardOrdering:
 # Clipboard monitor is optional (clipboard_enabled=False)
 # ---------------------------------------------------------------------------
 
+@pytest.fixture
+def pynput_importable(monkeypatch):
+    """Make `from pynput import keyboard` succeed on a headless machine.
+
+    contextpulse_sight.app does that import at module level, and pynput
+    resolves its backend AT IMPORT TIME -- on Linux that means opening an X
+    connection, so on a headless CI runner the import raises
+    `ImportError: this platform is not supported: failed to acquire X
+    connection` and every test below dies before it reaches the daemon.
+
+    packages/screen/tests/conftest.py already solves this for the screen
+    suite by putting a MagicMock in sys.modules; that conftest is not loaded
+    for packages/core, which is why the cross-platform CI job (core + memory
+    + project only) failed on Linux and macOS while the Windows job passed.
+    Same shim, scoped to the tests that need it, and installed only when the
+    real import genuinely cannot happen -- so on a desktop the real pynput is
+    still what the app imports.
+
+    Deliberately NOT a skip: the unified daemon runs on Linux too, and these
+    tests exercise the real daemon -> real sight-app call path. A MagicMock
+    app would pass no matter what the daemon did.
+    """
+    try:
+        import pynput.keyboard  # noqa: F401
+    except ImportError:
+        stub = MagicMock()
+        monkeypatch.setitem(sys.modules, "pynput", stub)
+        monkeypatch.setitem(sys.modules, "pynput.keyboard", stub.keyboard)
+    yield
+
+
 def _sight_app_with_clipboard(tmp_path, monkeypatch, enabled):
     """A REAL ContextPulseSightApp, with only its heavy parts mocked.
 
@@ -681,6 +712,10 @@ class TestClipboardMonitorMayBeAbsent:
     taking Sight, Voice and Touch down with it. Verified failing against the
     unguarded call sites before the fix.
     """
+
+    @pytest.fixture(autouse=True)
+    def _headless_safe(self, pynput_importable):
+        """Every test in this class imports contextpulse_sight.app."""
 
     def _daemon_with(self, tmp_path, monkeypatch, enabled):
         daemon, _ = _make_daemon(tmp_path)
