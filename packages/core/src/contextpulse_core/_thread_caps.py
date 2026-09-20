@@ -35,6 +35,27 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_CAP = 2
 
+# Whisper is deliberately NOT capped at _DEFAULT_CAP. The 2026-04-29 incident
+# this module exists for was four libraries each allocating ~cpu_count() IDLE
+# workers; ctranslate2's pool is the one that does user-visible, latency-
+# critical work, and capping it at the idle-pool number conflated "bound the
+# idle footprint" with "throttle the hot path".
+#
+# The cost of that conflation was measured 2026-09-20 against David's report
+# that long dictations "get stuck for a while". Whisper small/int8 on CPU,
+# a real 75.0s clip, median of 3 runs, AMD Ryzen AI MAX+ 395 (32 logical):
+#
+#     cpu_threads=2  ->  8.74s  (0.117x realtime)  10 OS threads
+#     cpu_threads=6  ->  6.32s  (0.084x realtime)  18 OS threads
+#     cpu_threads=8  ->  6.33s  (0.084x realtime)  22 OS threads
+#
+# 6 is the knee: 28% faster than 2, while 8 buys nothing measurable and costs
+# 4 more threads. Transcript output was byte-identical (1176 chars) at every
+# setting, so this buys latency with threads and changes nothing else. The
+# +8 threads land against a daemon baseline the module's own docstring puts
+# at ~30-50, well clear of the 163 that triggered the original incident.
+_DEFAULT_WHISPER_CAP = 6
+
 _ENV_VARS: tuple[str, ...] = (
     "OMP_NUM_THREADS",        # OpenMP (numpy, scipy, ctranslate2 intra-op)
     "MKL_NUM_THREADS",        # Intel MKL (numpy on Intel builds)
@@ -58,6 +79,29 @@ def get_cap() -> int:
         return max(1, int(raw))
     except ValueError:
         return _DEFAULT_CAP
+
+
+def get_whisper_cap() -> int:
+    """Return the intra-op thread budget for the Whisper model specifically.
+
+    Read by :class:`contextpulse_voice.transcriber.LocalTranscriber` for
+    ``WhisperModel(cpu_threads=...)``. Deliberately a SEPARATE knob from
+    :func:`get_cap`: this value is passed straight to ctranslate2 and is
+    never written into ``OMP_NUM_THREADS`` and friends, so raising it
+    cannot re-inflate the idle pools :func:`apply_caps` exists to bound.
+
+    Overridable via ``CONTEXTPULSE_WHISPER_THREADS``. It does not read
+    ``CONTEXTPULSE_CPU_THREADS`` — that var has a history of lingering as a
+    stale persistent Windows user variable (see :func:`apply_caps`), and
+    the hot path must not inherit a stray benchmark value.
+    """
+    raw = os.environ.get("CONTEXTPULSE_WHISPER_THREADS")
+    if raw is None:
+        return _DEFAULT_WHISPER_CAP
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return _DEFAULT_WHISPER_CAP
 
 
 def apply_caps(

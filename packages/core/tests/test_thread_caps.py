@@ -106,3 +106,86 @@ class TestApplyCaps:
             "NUMEXPR_NUM_THREADS",
         ):
             assert var in os.environ, f"{var} not set after _thread_caps import"
+
+
+class TestGetWhisperCap:
+    """Whisper gets its own, larger budget than the idle-pool cap.
+
+    Measured 2026-09-20 on a 75.0s dictation (Whisper small/int8, CPU,
+    AMD Ryzen AI MAX+ 395, 32 logical cores), median of 3 runs:
+
+        cpu_threads=2  ->  8.74s   (ratio 0.117)   10 OS threads
+        cpu_threads=6  ->  6.32s   (ratio 0.084)   18 OS threads
+        cpu_threads=8  ->  6.33s   (ratio 0.084)   22 OS threads
+
+    6 is the knee: 28% faster than 2, and 8 buys nothing more while
+    costing 4 further threads. Transcript was byte-identical (1176 chars)
+    at every setting, so this trades threads for latency and nothing else.
+    """
+
+    @pytest.fixture(autouse=True)
+    def clean_whisper_env(self) -> Iterator[None]:
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CONTEXTPULSE_WHISPER_THREADS", None)
+            yield
+
+    def test_default_is_6(self):
+        assert _thread_caps.get_whisper_cap() == 6
+
+    def test_is_larger_than_the_idle_pool_cap(self):
+        # The whole point: the 163-thread incident was four libraries each
+        # allocating cpu_count() IDLE workers. Whisper is the one pool doing
+        # user-visible latency-critical work, so it must not inherit the
+        # idle-pool number.
+        assert _thread_caps.get_whisper_cap() > _thread_caps.get_cap()
+
+    def test_override_via_env_var(self):
+        with patch.dict(os.environ, {"CONTEXTPULSE_WHISPER_THREADS": "4"}):
+            assert _thread_caps.get_whisper_cap() == 4
+
+    def test_invalid_override_falls_back_to_default(self):
+        with patch.dict(os.environ, {"CONTEXTPULSE_WHISPER_THREADS": "not-a-number"}):
+            assert _thread_caps.get_whisper_cap() == 6
+
+    def test_minimum_is_1(self):
+        for raw in ("0", "-3"):
+            with patch.dict(os.environ, {"CONTEXTPULSE_WHISPER_THREADS": raw}):
+                assert _thread_caps.get_whisper_cap() == 1
+
+    def test_does_not_read_the_cpu_threads_var(self):
+        # Two distinct knobs. CONTEXTPULSE_CPU_THREADS=8 sat as a stray
+        # persistent Windows user env var for months (see apply_caps'
+        # override warning); the whisper budget must not be steerable by
+        # that same stale var.
+        with patch.dict(os.environ, {"CONTEXTPULSE_CPU_THREADS": "16"}):
+            assert _thread_caps.get_whisper_cap() == 6
+
+
+class TestWhisperCapDoesNotLeakIntoIdlePools:
+    """What could have BROKEN, not just what was added.
+
+    Raising Whisper's budget must leave OMP/MKL/OPENBLAS/NUMEXPR at the
+    idle-pool cap. If the new number leaked into apply_caps() it would
+    re-inflate exactly the baseline the 2026-04-29 incident was about,
+    and every one of the tests above would still pass.
+    """
+
+    def test_apply_caps_still_writes_the_idle_cap_not_the_whisper_cap(self):
+        target: dict[str, str] = {}
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CONTEXTPULSE_CPU_THREADS", None)
+            os.environ.pop("CONTEXTPULSE_WHISPER_THREADS", None)
+            _thread_caps.apply_caps(target)
+        assert target == {
+            "OMP_NUM_THREADS": "2",
+            "MKL_NUM_THREADS": "2",
+            "OPENBLAS_NUM_THREADS": "2",
+            "NUMEXPR_NUM_THREADS": "2",
+        }
+
+    def test_whisper_override_does_not_move_the_idle_pools(self):
+        target: dict[str, str] = {}
+        with patch.dict(os.environ, {"CONTEXTPULSE_WHISPER_THREADS": "12"}):
+            os.environ.pop("CONTEXTPULSE_CPU_THREADS", None)
+            _thread_caps.apply_caps(target)
+        assert set(target.values()) == {"2"}
