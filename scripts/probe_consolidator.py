@@ -61,6 +61,21 @@ logger = logging.getLogger("probe.consolidator")
 # a property of THIS prompt size and model, and both will change.
 MIN_PLAUSIBLE_ELAPSED_S = 15.0
 
+# ...and the floor only MEANS anything for a prompt big enough to justify it.
+# The 15s above is the cost of reading a ~316KB / ~80K-token prompt, and the
+# prompt is built from the window's events (build_extraction_prompt), so a
+# 4-event window is a few KB and the model legitimately answers [] in ~4s.
+# Gating the floor on `len(events) > 0` would record that healthy run as
+# error="empty result returned implausibly fast" and exit 1 -- the mirror of
+# the defect this whole change exists to fix, and the fastest way to train the
+# signal to be ignored. So gate on the thing the 15s was measured against.
+#
+# 50,000 chars is ~1/6th of the 316KB prompt whose answer took 42-64s. A
+# prompt at or above it is large enough that a single-digit-second reply
+# cannot have involved reading it; below it, no honest inference is available
+# from latency alone and the run is taken at face value.
+MIN_PROMPT_CHARS_FOR_FLOOR = 50_000
+
 
 def call_claude(prompt: str, timeout: int = 600) -> tuple[str, float]:
     """Invoke the Claude CLI headlessly. Return (stdout, elapsed_seconds). Fail loud.
@@ -121,6 +136,16 @@ def main(argv: list[str] | None = None) -> int:
             "Seconds below which an empty result on a non-empty window is "
             "treated as an extractor failure rather than a quiet window "
             f"(default: {MIN_PLAUSIBLE_ELAPSED_S:.0f}s). Set 0 to disable."
+        ),
+    )
+    ap.add_argument(
+        "--min-prompt-chars",
+        type=int,
+        default=MIN_PROMPT_CHARS_FOR_FLOOR,
+        help=(
+            "Prompt size at or above which --min-elapsed applies. Below it a "
+            "fast empty answer is plausible and is taken at face value "
+            f"(default: {MIN_PROMPT_CHARS_FOR_FLOOR})."
         ),
     )
     ap.add_argument("--dry-run", action="store_true", help="Print prompt, no LLM call")
@@ -203,26 +228,30 @@ def main(argv: list[str] | None = None) -> int:
             output_bytes,
         )
         if outcome is probe.ParseOutcome.EMPTY:
-            if len(events) > 0 and elapsed < args.min_elapsed:
-                # A real quiet window still costs the model a full read of a
-                # ~80K-token prompt. Returning [] in single-digit seconds means
-                # it never got there -- a usage-limit reply, a truncated
-                # session, a refused auth handshake. Record it as a fault so
-                # the run is not counted as healthy coverage.
+            if len(prompt) >= args.min_prompt_chars and elapsed < args.min_elapsed:
+                # A big prompt still costs the model a full read before it can
+                # answer []. Returning [] in single-digit seconds means it
+                # never got there -- a usage-limit reply, a truncated session,
+                # a refused auth handshake. Record it as a fault so the run is
+                # not counted as healthy coverage. A SMALL prompt says nothing
+                # either way and is taken at face value.
                 logger.error(
                     "Extraction returned a well-formed EMPTY array after only "
-                    "%.1fs on %d events (floor %.1fs) — too fast to have read "
-                    "the prompt. Treating as extractor failure, not a quiet "
-                    "window. First 800 chars: %r",
+                    "%.1fs on a %d-char prompt (%d events, floor %.1fs above "
+                    "%d chars) — too fast to have read it. Treating as "
+                    "extractor failure, not a quiet window. First 800 chars: %r",
                     elapsed,
+                    len(prompt),
                     len(events),
                     args.min_elapsed,
+                    args.min_prompt_chars,
                     (output.strip()[:800] if output and output.strip() else "(empty output)"),
                 )
                 error_msg = (
                     f"empty result returned implausibly fast: {elapsed:.1f}s "
-                    f"< {args.min_elapsed:.1f}s floor (events={len(events)}, "
-                    f"{output_bytes} bytes); see log for raw excerpt"
+                    f"< {args.min_elapsed:.1f}s floor on a {len(prompt)}-char "
+                    f"prompt (events={len(events)}, {output_bytes} bytes); "
+                    f"see log for raw excerpt"
                 )
                 probe.record_run(
                     pconn,
