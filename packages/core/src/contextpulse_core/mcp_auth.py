@@ -441,9 +441,16 @@ def load_or_create_token(token_file: Path | str | None = None, _attempt: int = 0
             os.close(claim)
             os.replace(tmp, path)
     finally:
-        # Also covers every failure above: never leave a readable secret
-        # lying around under a name nothing will clean up.
-        tmp.unlink(missing_ok=True)
+        # Also covers every failure above: never leave a secret lying around
+        # under a name nothing will clean up. Never raise from here, though --
+        # by this point the token may already be published, and an AV scanner
+        # holding the handle for a moment (a documented hazard in this repo)
+        # must not turn a successful creation into a crash. The stray file
+        # carries the same user-only permissions as the real one.
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("Could not remove the temporary token file %s", tmp)
 
     logger.info("Created MCP access token at %s", path)
     return token
