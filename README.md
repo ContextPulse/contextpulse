@@ -22,7 +22,11 @@
 
 ContextPulse is a desktop daemon that captures your screen, voice, and keyboard/mouse activity in real time, then delivers it to AI agents through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). One tray-icon daemon does the capture, a companion MCP process serves it to your agent. 37 MCP tools, zero cloud dependency.
 
-Capture, storage and search all run on your machine, and ContextPulse itself uploads nothing. There is no telemetry. The one network call it makes on its own is a one-time download of the embedding model from huggingface.co, and only if you use semantic memory search.
+Capture, storage and search all run on your machine, and there is no telemetry. ContextPulse sends nothing off the machine until you switch on one of three network features, each off by default:
+
+- Semantic memory search downloads its embedding model from huggingface.co the first time you use it. One file, once, then it runs offline.
+- Voice LLM cleanup sends the text of a dictation to Anthropic's API to fix grammar and strip filler words. It needs an API key in `voice_anthropic_api_key` (or `ANTHROPIC_API_KEY`) and `voice_always_use_llm` turned on. The same key lets the vocabulary learner send recent transcript pairs to Anthropic to find words that speech recognition keeps mishearing.
+- The fact consolidator, `scripts/probe_consolidator.py`, pipes recent captured events to the Claude CLI to distill them into facts. That prompt carries app names, window titles and the captured text itself. It runs only when you run the script or schedule it.
 
 **A note on MCP clients.** Once your agent reads a tool result, what happens to it next is that client's decision, not ours. A local model keeps it on the machine. A cloud-backed client sends it to its provider like any other prompt. That applies to every context tool you give an agent, and ContextPulse cannot see or control the hop.
 
@@ -102,7 +106,7 @@ Claude calls get_activity_summary(hours=4) → search_history("auth"):
 
 AI coding assistants are powerful but blind. They can't see your screen, hear your voice notes, or know what you were just doing. ContextPulse bridges this gap:
 
-- **Local-first.** Capture, storage and search run on your machine, and ContextPulse sends nothing anywhere on its own. Core features need no account. Pro is an optional paid tier unlocked by a license key that verifies offline. The only third-party server ContextPulse contacts is huggingface.co, once, to fetch the embedding model that semantic search runs locally.
+- **Local-first.** Capture, storage and search run on your machine. Core features need no account. Pro is an optional paid tier unlocked by a license key that verifies offline. ContextPulse contacts no third-party server until you switch on one of the opt-in network features listed above, two of which send captured text to Anthropic and are off by default.
 - **MCP-native from day one.** ContextPulse exposes all context as MCP tools over streamable HTTP, so any standards-compliant MCP client can read it without a custom integration. Ready-made config snippets for Claude Code, Cursor and Continue are in [docs/mcp-configs](docs/mcp-configs/README.md).
 - **True multi-modal in a single daemon.** Screen capture, voice dictation and keyboard/mouse input all run in one background process. No stitching multiple tools together.
 - **Open source (AGPL-3.0).** Fully auditable, self-hostable, and extensible. No vendor lock-in, no SaaS dependency, no risk of acquisition-driven shutdowns.
@@ -117,7 +121,7 @@ AI coding assistants are powerful but blind. They can't see your screen, hear yo
 | **Semantic memory** | Yes, three-tier with hybrid search | Rare |
 | **All capture in one daemon** | Yes, single background process | No, usually separate tools |
 | **MCP-native** | Yes, 37 tools | Emerging |
-| **Local capture and storage** | Yes, with one optional model download | Uncommon |
+| **Local capture and storage** | Yes, with three opt-in network features, all off by default | Uncommon |
 | **Open source** | AGPL-3.0 | Varies |
 
 ### Platform Support
