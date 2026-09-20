@@ -20,23 +20,27 @@ script, all specified there:
   looks alive from the outside. Excluding the dialog makes those keys read as
   zero-reader, which is the truth about the daemon.
 
-STATE AFTER SPEC STEPS 3-4 (the sight readers), measured, not asserted
-----------------------------------------------------------------------
-The dead-key half is now a REAL guard: it passes, with no marker. Every key
-in `_DEFAULTS` has a production reader outside `config.py`/`settings.py`,
-except the one documented in `CORE_ONLY_KEYS` below -- which is not dead,
-it is consumed inside the loader itself.
+STATE AFTER SPEC STEPS 3-4 AND 7 (both halves live), measured, not asserted
+---------------------------------------------------------------------------
+BOTH halves are now REAL guards: they pass, with no markers, and every
+transitional scaffold around them has been removed.
 
-The env-read half is still `xfail(strict=True)`, and the reason is now
-specific rather than a whole-system baseline. Twelve reads remain; five are
-genuinely not tunables and have moved into `ENV_READ_ALLOWLIST` with their
-reasons, leaving SEVEN, all in `contextpulse_voice/config.py` (3) and
-`contextpulse_touch/config.py` (4). Those are spec step 7, which is the
-sibling branch `feat/config-unification-modules`; the marker comes off when
-that lands. Strict xfail alone would only fire once the count reached zero
-and would say nothing about a NEW stray read appearing elsewhere, so
-`test_every_remaining_env_read_is_in_voice_or_touch_config` sits beside it
-as the guard that works during the transition.
+* Dead keys: zero. Every key in `_DEFAULTS` has a production reader outside
+  `config.py`/`settings.py`, except the one documented in `CORE_ONLY_KEYS`
+  below -- which is not dead, it is consumed inside the loader itself. The
+  marker came off when spec steps 3-4 wired the sight readers.
+* Ungoverned env reads: zero. Twelve remained after steps 3-4; five were
+  genuinely not tunables and moved into `ENV_READ_ALLOWLIST` with their
+  reasons, and the last SEVEN -- the `_env()` fallbacks in
+  `contextpulse_voice/config.py` (3) and `contextpulse_touch/config.py` (4)
+  -- were deleted by spec step 7. Merging that work turned the strict xfail
+  into an XPASS, which is what took the marker off.
+
+Each half briefly carried a companion "subset" test naming its known
+baseline, because a strict xfail only fires when the count reaches zero and
+would say nothing about a NEW defect appearing meanwhile. Both companions
+are gone now that both counts ARE zero: with the real assertion live, the
+subset test is strictly weaker than the guard beside it.
 
 Pre-fix baseline this replaces, for the record: 21 dead keys (the MISLEADING
 rows 7-17 of `.internal/audit-2026-09-19/dead-controls.md` plus the row-30
@@ -50,7 +54,6 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-import pytest
 from contextpulse_core.config import _DEFAULTS, _ENV_MAP
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -71,14 +74,6 @@ EXCLUDED_FROM_READER_SCAN = (
 # blocklist_patterns, so what every reader downstream sees is the merged
 # blocklist. A second reader would be a second implementation of the merge.
 CORE_ONLY_KEYS: set[str] = {"blocklist_file"}
-
-# The file the seven remaining ungoverned reads live in belongs to spec step
-# 7 (branch feat/config-unification-modules). Named here so a stray read in
-# any OTHER file fails immediately instead of hiding behind the xfail.
-ENV_FILES_AWAITING_STEP_7 = (
-    "packages/voice/src/contextpulse_voice/config.py",
-    "packages/touch/src/contextpulse_touch/config.py",
-)
 
 # Env vars that are legitimately NOT user tunables: paths, diagnostics and
 # per-process overrides that have no config.json key and no Settings control.
@@ -336,40 +331,22 @@ def test_the_core_only_exemption_is_not_a_back_door():
     )
 
 
-def test_every_remaining_env_read_is_in_voice_or_touch_config():
-    """The working half of the env guard, during the transition.
-
-    The xfail below only fires when the count reaches zero, so on its own it
-    would happily absorb a brand-new ungoverned read in a brand-new module --
-    system B regrowing, which is the thing this file exists to prevent. This
-    one fails the moment a read appears anywhere except the two files spec
-    step 7 rewrites.
-    """
-    strays = sorted(
-        hit for hit in _ungoverned_env_reads()
-        if not hit.startswith(tuple(f"{f}:" for f in ENV_FILES_AWAITING_STEP_7))
-    )
-    assert not strays, (
-        f"{len(strays)} CONTEXTPULSE_* read(s) outside {list(ENV_FILES_AWAITING_STEP_7)}: "
-        f"{strays}. Every tunable belongs in _DEFAULTS/_ENV_MAP; anything that is not a "
-        f"tunable goes in ENV_READ_ALLOWLIST with a reason."
-    )
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Baseline after spec steps 3-4: SEVEN reads, all of them the _env() "
-        "fallbacks in contextpulse_voice/config.py (CONTEXTPULSE_VOICE_HOTKEY, "
-        "_VOICE_FIX_HOTKEY, _VOICE_MODEL) and contextpulse_touch/config.py "
-        "(CONTEXTPULSE_TOUCH_BURST_TIMEOUT, _CORRECTION_WINDOW, _MIN_BURST_CHARS, "
-        "_MOUSE_DEBOUNCE). Deleted by spec step 7 on branch "
-        "feat/config-unification-modules; strict xfail forces the marker off when "
-        "that lands. contextpulse_sight/config.py and daemon.py's own "
-        "CONTEXTPULSE_ACTIVITY_DB are gone from this list."
-    ),
-)
 def test_only_core_config_reads_contextpulse_env_vars():
+    """No marker: this passes as of spec step 7.
+
+    It was xfail(strict=True) against a seven-read baseline -- the `_env()`
+    fallbacks in contextpulse_voice/config.py (CONTEXTPULSE_VOICE_HOTKEY,
+    _VOICE_FIX_HOTKEY, _VOICE_MODEL) and contextpulse_touch/config.py
+    (CONTEXTPULSE_TOUCH_BURST_TIMEOUT, _CORRECTION_WINDOW, _MIN_BURST_CHARS,
+    _MOUSE_DEBOUNCE) -- until branch feat/config-unification-modules deleted
+    them. Merging that branch turned the strict xfail into an XPASS, which is
+    what forced this marker off; the measured count is now zero.
+
+    The transitional companion test that named those two files is gone with
+    it, for the same reason its dead-key twin went when the sight readers
+    landed: a guard that is allowed to fail cannot report the NEXT stray
+    read, and catching that one is the whole point of this file.
+    """
     hits = _ungoverned_env_reads()
     by_file: dict[str, int] = {}
     for hit in hits:
