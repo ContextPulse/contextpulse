@@ -98,7 +98,14 @@ ENV_READ_ALLOWLIST: dict[str, set[str]] = {
         "CONTEXTPULSE_KNOWLEDGE_DB",
     },
     "packages/knowledge/src/contextpulse_knowledge/mcp_tools.py": {"CONTEXTPULSE_KNOWLEDGE_DB"},
-    "packages/memory/src/contextpulse_memory/mcp_server.py": {"CONTEXTPULSE_MEMORY_DIR"},
+    # A store location, not a tunable: no config.json key, no Settings
+    # control, same class as CONTEXTPULSE_KNOWLEDGE_DB above. This entry was
+    # keyed to mcp_server.py until the startup secret sweep landed on main,
+    # which moved the read into storage.py's default_memory_dir() as the ONE
+    # definition -- mcp_server.py and daemon.py now both import it. The entry
+    # MOVES with the read rather than being duplicated, so a re-appearance in
+    # mcp_server.py would be a second definition and must fail.
+    "packages/memory/src/contextpulse_memory/storage.py": {"CONTEXTPULSE_MEMORY_DIR"},
     # A token's env-var NAME and the .env search path. Neither is a setting
     # with a config.json key; the first is where the MCP auth token is read
     # from, the second is the dotenv location core config itself honours.
