@@ -342,6 +342,19 @@ class ActivityDB:
     # cannot ask for a full-table scan by passing a huge minutes_ago.
     _SEARCH_SCAN_LIMIT = 2000
 
+    def clipboard_rows_in_window(self, minutes_ago: int = 60) -> int:
+        """How many clipboard rows the window holds, ignoring the scan cap.
+
+        Lets a caller tell "no matches" from "no matches in the part I looked
+        at". A COUNT over a time range says nothing about any row's CONTENT, so
+        this is not a way back into the oracle search_clipboard closed.
+        """
+        cutoff = time.time() - (minutes_ago * 60)
+        with self._lock:
+            return self._conn.execute(
+                "SELECT COUNT(*) FROM clipboard WHERE timestamp >= ?", (cutoff,)
+            ).fetchone()[0]
+
     def search_clipboard(self, query: str, minutes_ago: int = 60) -> list[dict]:
         """Search clipboard history by text content, MATCHING REDACTED TEXT.
 

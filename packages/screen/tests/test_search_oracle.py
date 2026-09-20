@@ -267,6 +267,76 @@ class TestHistorySearchIsNotAPrefixOracle:
         )
 
 
+class TestClipboardScanCapIsDeclared:
+    """Review S-8: the 2000-row cap was a silent behaviour change.
+
+    Matching against REDACTED text is what closed the count oracle, and a
+    bounded scan is what makes it affordable -- but the tool said nothing when
+    the bound bit, so "no clipboard entries matching X" could mean "none in the
+    2000 rows I looked at" while the answer sat in row 2001.
+    """
+
+    def _store_with(self, tmp_path, rows):
+        from contextpulse_sight.activity import ActivityDB
+
+        db_path = tmp_path / "activity.db"
+        db = ActivityDB(db_path=db_path)
+        now = time.time()
+        for i in range(rows):
+            db.record_clipboard(timestamp=now - i, text=f"{CONTROL_WORD} note {i}")
+        return db
+
+    def test_the_flag_appears_when_the_cap_binds(self, tmp_path, monkeypatch):
+        from contextpulse_sight import mcp_server
+        from contextpulse_sight.activity import ActivityDB
+
+        monkeypatch.setattr(ActivityDB, "_SEARCH_SCAN_LIMIT", 2)
+        db = self._store_with(tmp_path, 5)
+        monkeypatch.setattr(mcp_server, "_activity_db", db)
+        try:
+            out = mcp_server.search_clipboard(CONTROL_WORD, minutes_ago=60)
+            miss = mcp_server.search_clipboard("zqabsent", minutes_ago=60)
+        finally:
+            db.close()
+
+        assert "truncated: true" in out
+        assert "2 most recent of 5" in out
+        assert "truncated: true" in miss, (
+            "a zero-result answer is exactly where the caller needs to know "
+            "the scan was partial"
+        )
+
+    def test_no_flag_when_the_whole_window_was_scanned(self, tmp_path, monkeypatch):
+        from contextpulse_sight import mcp_server
+
+        db = self._store_with(tmp_path, 3)
+        monkeypatch.setattr(mcp_server, "_activity_db", db)
+        try:
+            out = mcp_server.search_clipboard(CONTROL_WORD, minutes_ago=60)
+        finally:
+            db.close()
+        assert "truncated" not in out
+
+    def test_the_cap_is_documented_in_the_tool_description(self):
+        """The description is what an MCP client reads before calling."""
+        from contextpulse_sight import mcp_server
+
+        doc = mcp_server.search_clipboard.__doc__
+        assert "2000" in doc and "truncated: true" in doc
+
+    def test_the_window_count_does_not_reveal_content(self, tmp_path):
+        """The count is over a TIME RANGE, so it cannot be used as an oracle."""
+        from contextpulse_sight.activity import ActivityDB
+
+        db_path = _raw_store(tmp_path)
+        db = ActivityDB(db_path=db_path)
+        try:
+            assert db.clipboard_rows_in_window(60) == 1
+            assert db.clipboard_rows_in_window(0) == 0
+        finally:
+            db.close()
+
+
 class TestEventSearchIsNotATokenOracle:
     def test_a_redacted_token_returns_no_rows(self, tmp_path):
         from contextpulse_core.spine import EventBus
