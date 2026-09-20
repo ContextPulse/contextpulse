@@ -305,7 +305,11 @@ cd contextpulse
 uv venv
 .venv\Scripts\activate
 uv pip install -e "packages/core[dev]" -e packages/screen -e packages/voice -e packages/touch -e packages/project
-pytest packages/ -x -q
+
+# Mirrors what GitHub Actions runs. `pytest packages/` alone misses the guards
+# in the root tests/ directory, which is how a pull request goes red after a
+# clean-looking local run. --fast does lint plus those guards in ~2s.
+bash scripts/ci-tests.sh
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
