@@ -18,6 +18,7 @@ import stat
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from unittest import mock
 
@@ -386,6 +387,93 @@ def test_load_or_create_token_is_race_safe_across_threads(tmp_path):
     assert len(set(results)) == 1, f"threads disagreed on the token: {set(results)}"
     assert target.read_text(encoding="utf-8").strip() == results[0]
     assert not list(tmp_path.glob("*.tmp")), "temp files left behind"
+
+
+def test_the_final_path_is_never_observable_empty(tmp_path, monkeypatch):
+    """The mechanism the barrier test above depends on, pinned directly.
+
+    The barrier test is the OUTCOME, and it is timing-dependent: eight threads
+    produced three different tokens on ubuntu-latest and macos (PR #17) and
+    passed every time on Windows. Widening the window with a sleep does not
+    make it fail on Windows either -- a sleep inside restrict_to_user releases
+    the GIL, so every racer reaches its retrying read AFTER the file appears
+    and waits the winner out. The interleaving that actually loses (read the
+    absent path, get preempted, come back to find it created-but-empty) cannot
+    be forced from the test side.
+
+    So pin the property instead: a concurrent observer must never see the
+    final path exist while holding no token. That state is exactly what the
+    empty-file rule reads as malformed and DELETES, and the old writer -- claim
+    the final name with O_EXCL, restrict it, then write the secret -- published
+    it on every single creation. Polling at 5 ms against a 250 ms window turns
+    "likely" into "certain" in both directions.
+    """
+    target = tmp_path / "mcp_token"
+    real_restrict = mcp_auth.restrict_to_user
+
+    def slow_restrict(path):
+        # A fair model of the real cost, not just a delay: on Windows
+        # restrict_to_user spawns two icacls subprocesses.
+        time.sleep(0.25)
+        return real_restrict(path)
+
+    monkeypatch.setattr(mcp_auth, "restrict_to_user", slow_restrict)
+
+    empty_sightings: list[float] = []
+    stop = threading.Event()
+
+    def observer():
+        while not stop.is_set():
+            try:
+                if not target.read_text(encoding="utf-8").strip():
+                    empty_sightings.append(time.monotonic())
+            except OSError:
+                pass  # absent is the correct state before publication
+            time.sleep(0.005)
+
+    watcher = threading.Thread(target=observer, daemon=True)
+    watcher.start()
+    try:
+        token = mcp_auth.load_or_create_token(target)
+    finally:
+        stop.set()
+        watcher.join(timeout=5)
+
+    assert token
+    assert target.read_text(encoding="utf-8").strip() == token
+    assert not empty_sightings, (
+        f"the final path existed and held no token on {len(empty_sightings)} "
+        "polls -- a racer arriving in that window deletes it as malformed"
+    )
+    assert not list(tmp_path.glob("*.tmp")), "temp files left behind"
+
+
+def test_the_token_is_published_by_link_not_by_the_rename_fallback(tmp_path, monkeypatch):
+    """Prove the primary path RUNS here, rather than trusting that it does.
+
+    os.link is what makes publication atomic and non-clobbering; the
+    os.replace fallback beneath it exists only for filesystems that have no
+    hard links (FAT, some network shares) and reopens a one-rename-wide empty
+    window. A silent degradation to the fallback -- os.link raising OSError on
+    some platform and nobody noticing -- would put the race back with every
+    test still green, because the outcome tests cannot tell the two apart.
+    """
+    calls: list[tuple] = []
+    real_link = os.link
+
+    def link_spy(src, dst, **kwargs):
+        calls.append((str(src), str(dst)))
+        return real_link(src, dst, **kwargs)
+
+    monkeypatch.setattr(os, "link", link_spy)
+
+    target = tmp_path / "mcp_token"
+    token = mcp_auth.load_or_create_token(target)
+
+    assert token == target.read_text(encoding="utf-8").strip()
+    assert len(calls) == 1, f"os.link was not the publish step: {calls}"
+    assert calls[0][1] == str(target)
+    assert calls[0][0].endswith(mcp_auth.TMP_SUFFIX)
 
 
 def test_empty_token_file_is_replaced_not_refused(tmp_path, caplog):

@@ -51,6 +51,11 @@ logger = logging.getLogger(__name__)
 TOKEN_FILENAME = "mcp_token"
 TOKEN_FILE = APPDATA_DIR / TOKEN_FILENAME
 
+# Suffix for the private name a new token is written under before it is
+# published. Kept next to the real file so the publish is a same-directory
+# link, which is the only kind hard links and renames are guaranteed to allow.
+TMP_SUFFIX = ".tmp"
+
 # Tokens carry a fixed prefix so ContextPulse's own OCR redaction can
 # recognise one on sight. Without it a bare token_urlsafe string matches no
 # pattern in contextpulse_sight.redact, so a screenshot taken while the
@@ -282,18 +287,45 @@ def _read_existing(path: Path) -> str | None:
     return None
 
 
+def _lost_the_race(path: Path, _attempt: int) -> str:
+    """Another writer published the name first. Read theirs, or start over."""
+    lost = _read_existing(path)
+    if lost:
+        return lost
+    if _attempt >= 1:
+        raise RuntimeError(
+            f"MCP token file {path} keeps coming back empty. Delete it and "
+            "restart the MCP server."
+        ) from None
+    return load_or_create_token(path, _attempt=_attempt + 1)
+
+
 def load_or_create_token(token_file: Path | str | None = None, _attempt: int = 0) -> str:
     """Return this install's MCP bearer token, creating it on first use.
 
-    Race-safe against a second process (the daemon watchdog and a hand-started
-    MCP server can both reach this within milliseconds of each other): the name
-    is claimed with O_CREAT|O_EXCL on the FINAL path, which is the only
-    primitive that fails rather than clobbers on both Windows and POSIX. The
-    loser of that race re-reads. os.replace() from a temp file would NOT do --
-    it overwrites, so two racers would end up serving different tokens.
+    Race-safe against a second process -- the daemon watchdog and a
+    hand-started MCP server can both reach this within milliseconds of each
+    other. The secret is written to a PRIVATE name first and published with
+    os.link(), which is the only primitive that installs a COMPLETE file under
+    a new name and fails rather than clobbers on both Windows and POSIX.
+    os.replace() would not do: it overwrites, so two racers would end up
+    serving different tokens.
 
-    Permissions are applied to the empty claimed file BEFORE the secret bytes
-    are written, so the token never exists on disk under a permissive ACL.
+    The final path used to be claimed directly with O_CREAT|O_EXCL and written
+    afterwards, which is race-safe on the NAME and not on the CONTENT: for as
+    long as the permission call took, the final path existed holding no token.
+    A racer that looked in that window saw a file the empty-file rule below
+    reads as malformed, deleted the winner's file, and generated its own.
+    Eight threads produced three different tokens on ubuntu-latest and macos
+    (PR #17). Measured on Windows with a 250 ms permission call: the empty
+    state was observable on 52 consecutive 5 ms polls, and is now observable
+    on none.
+
+    Permissions are applied to the temp file BEFORE the secret bytes are
+    written and before it is published, so the token never exists on disk
+    under a permissive ACL -- a hard link shares the underlying file, so the
+    mode/DACL set on the temp name is the one the final name has from the
+    instant it appears.
 
     A file that exists but holds no usable token is replaced, not refused.
     Raising there bricked the endpoint permanently: uvicorn never started, the
@@ -311,6 +343,20 @@ def load_or_create_token(token_file: Path | str | None = None, _attempt: int = 0
         return existing
 
     if path.exists():
+        # One last look, without the retry loop, before deleting anything.
+        # _read_existing returns None both for "absent" and for "still empty
+        # after the full window", and those want opposite handling: under the
+        # protocol below a file that APPEARS holds a complete token, so a
+        # racer that published while we waited must be read, not deleted.
+        try:
+            arrived = path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            arrived = ""
+        except OSError:
+            logger.exception("Could not read token file %s", path)
+            raise
+        if arrived:
+            return arrived
         logger.warning(
             "MCP token file %s exists but holds no token -- generating a new one. "
             "Any client configured with the previous token must be re-run through "
@@ -321,36 +367,43 @@ def load_or_create_token(token_file: Path | str | None = None, _attempt: int = 0
 
     path.parent.mkdir(parents=True, exist_ok=True)
     token = TOKEN_PREFIX + secrets.token_urlsafe(32)
+    tmp = path.with_name(f"{path.name}.{secrets.token_hex(8)}{TMP_SUFFIX}")
     try:
-        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError:
-        # Someone else claimed the name between our read and our create.
-        lost = _read_existing(path)
-        if lost:
-            return lost
-        if _attempt >= 1:
-            raise RuntimeError(
-                f"MCP token file {path} keeps coming back empty. Delete it and "
-                "restart the MCP server."
-            ) from None
-        return load_or_create_token(path, _attempt=_attempt + 1)
-
-    os.close(fd)
-    restrict_to_user(path)
-    try:
+        fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(fd)
+        restrict_to_user(tmp)
         # flush + fsync, not write_text: closing the handle hands the bytes to
         # the OS cache, it does not put them on the platter. This function
         # returns the token to a caller that writes it straight into a client
         # config, so a power cut before the cache flushed would leave a
         # configured client pointing at an EMPTY token file.
-        with open(path, "wb") as handle:
+        with open(tmp, "wb") as handle:
             handle.write(token.encode("utf-8"))
             handle.flush()
             os.fsync(handle.fileno())
-    except OSError:
-        # Leave no empty file behind -- it would poison every later read.
-        path.unlink(missing_ok=True)
-        raise
+
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            return _lost_the_race(path, _attempt)
+        except OSError:
+            # No hard links here -- FAT, some network shares. Fall back to
+            # claiming the final name with O_EXCL, then replacing our own
+            # empty claim with the file that is already fully written. The
+            # empty window comes back, but it is now one rename wide rather
+            # than one permission call wide.
+            logger.debug("Hard links unavailable in %s; claiming %s directly", path.parent, path)
+            try:
+                claim = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            except FileExistsError:
+                return _lost_the_race(path, _attempt)
+            os.close(claim)
+            os.replace(tmp, path)
+    finally:
+        # Also covers every failure above: never leave a readable secret
+        # lying around under a name nothing will clean up.
+        tmp.unlink(missing_ok=True)
+
     logger.info("Created MCP access token at %s", path)
     return token
 
