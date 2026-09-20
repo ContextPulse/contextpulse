@@ -33,10 +33,38 @@ import pytest
 # alongside packages/screen/tests which mock heavy platform dependencies).
 # These are integration tests that require real screen capture hardware.
 _mss_is_mocked = isinstance(sys.modules.get("mss"), MagicMock)
-pytestmark = pytest.mark.skipif(
-    _mss_is_mocked,
-    reason="screen capture deps are mocked — run this file in isolation for full UAT",
-)
+
+# Two independent reasons to skip, and the second was missing until 2026-09-20.
+#
+# The mocked-mss guard below only fires when this file is collected ALONGSIDE
+# packages/screen/tests. Run in isolation -- which is exactly what wiring the
+# root tests/ directory into CI does -- mss is real, the guard passes, and the
+# file executes against whatever desktop happens to be there. Measured that day:
+# test_privacy read the live foreground window title and asserted a blocklist
+# pattern matched it, and test_daemon_lifecycle started the real daemon as a
+# subprocess, wrote to the user's screenshot directory, and then collided with
+# the already-running instance. 92 of the 94 root-level tests are deterministic;
+# these 2 are a live-desktop acceptance harness wearing a pytest costume.
+#
+# So this file now requires an explicit opt-in. That is what the module
+# docstring always said -- "Run: python tests/test_user_acceptance.py" -- it
+# simply was not enforced, which left the file in the worst state available: not
+# run by any CI job, and red for anyone who ran the directory by hand.
+_ACCEPTANCE_OPT_IN = os.environ.get("CONTEXTPULSE_ACCEPTANCE") == "1"
+
+pytestmark = [
+    pytest.mark.skipif(
+        _mss_is_mocked,
+        reason="screen capture deps are mocked — run this file in isolation for full UAT",
+    ),
+    pytest.mark.skipif(
+        not _ACCEPTANCE_OPT_IN,
+        reason="live-desktop acceptance harness: starts the real daemon, reads the "
+               "foreground window title and writes to the user's screenshot dir. "
+               "Opt in with CONTEXTPULSE_ACCEPTANCE=1, or run it directly as "
+               "`python tests/test_user_acceptance.py`.",
+    ),
+]
 
 # ---------------------------------------------------------------------------
 # Helpers

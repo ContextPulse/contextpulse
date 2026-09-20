@@ -70,14 +70,27 @@ jobs:
           pip install pytest pytest-timeout
 
       - name: Run cross-platform tests
-        # tests/test_config_readers.py is named explicitly because no job ran
-        # the root tests/ directory: test-windows and test-macos run
-        # `pytest packages/`, test-integration runs `tests/integration/`. The
-        # config guard is a pure AST scan of the checked-out tree with no
-        # display or hardware dependency, so it belongs on the cheapest job
-        # that runs on both OSes -- a guard nothing executes is decoration.
+        # The root tests/ directory ran on NO job: test-windows and test-macos
+        # run `pytest packages/`, test-integration runs `tests/integration/`.
+        # test_config_readers.py was named explicitly here as a one-off fix for
+        # that, which left the other seven root files still orphaned -- a guard
+        # nothing executes is decoration.
+        #
+        # Corrected 2026-09-20 (cp-seven-test-files-run-by-no-ci-job): point the
+        # job at the DIRECTORY, so a root test file added later is covered by
+        # construction instead of needing someone to remember this line. All
+        # eight were run locally first; 92 tests pass and are pure text/AST/
+        # sqlite scans of the checked-out tree with no display or hardware
+        # dependency. test_watchdog_stderr_rotation.py carries its own
+        # `sys.platform != "win32"` skipif, so it self-skips on ubuntu.
+        #
+        # tests/integration/ stays excluded: it is windows-only by design and
+        # test-integration owns it. tests/test_user_acceptance.py is not
+        # excluded here -- it now carries its own opt-in skipif, because a file
+        # that needs a live desktop should announce that itself rather than rely
+        # on every caller remembering to skip it.
         run: |
-          python -m pytest packages/core/tests packages/memory/tests packages/project/tests tests/test_config_readers.py -v --tb=short
+          python -m pytest packages/core/tests packages/memory/tests packages/project/tests tests/ --ignore=tests/integration -v --tb=short
 
   test-windows:
     runs-on: windows-latest
