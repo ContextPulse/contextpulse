@@ -19,6 +19,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+from unittest import mock
 
 import pytest
 from contextpulse_core import mcp_auth, mcp_unified
@@ -244,9 +245,15 @@ class TestRegenerateTakesEffectWithoutARestart:
             )
             assert _post(client, {"Authorization": f"Bearer {new}"}).status_code == 200
 
-    def test_an_unchanged_file_is_not_re_read(self, tmp_path, monkeypatch):
-        """One stat per request, not one read -- the file is only opened when
-        its stamp moved."""
+    def test_an_unchanged_file_costs_exactly_one_read_per_request(self, tmp_path, monkeypatch):
+        """One read per request, and an unchanged file must not rotate anything.
+
+        This used to assert the opposite -- that the file is NOT read while a
+        (mtime_ns, st_ino, st_size) stamp is unchanged. That stamp is not a
+        change signal on either platform (see the test below), so the read is
+        now unconditional. The property still worth pinning is that it is ONE
+        small read, not a re-parse or a re-stat storm.
+        """
         token_file, token, client = self._client(tmp_path)
         reads: list[str] = []
         real_read = Path.read_text
@@ -259,7 +266,10 @@ class TestRegenerateTakesEffectWithoutARestart:
         with client:
             for _ in range(3):
                 assert _post(client, {"Authorization": f"Bearer {token}"}).status_code == 200
-        assert str(token_file) not in reads
+        assert reads.count(str(token_file)) == 3, (
+            f"expected one read per request over 3 requests, got {reads.count(str(token_file))}"
+        )
+        assert client.app.current_token() == token, "an unchanged file rotated the token"
 
     def test_a_deleted_token_file_keeps_the_running_token(self, tmp_path):
         """Rotation unlinks before it creates; a request in that window must
@@ -270,28 +280,27 @@ class TestRegenerateTakesEffectWithoutARestart:
             assert _post(client, {"Authorization": f"Bearer {token}"}).status_code == 200
             assert _post(client).status_code == 401
 
-    def test_the_stamp_carries_the_file_index(self, tmp_path):
-        """The stamp's own contents, so the behavioural test below cannot pass
-        for the wrong reason on a filesystem that happens not to tunnel."""
-        token_file, _token, client = self._client(tmp_path)
-        gate = client.app
-        st = os.stat(token_file)
-        assert st.st_ino, "this filesystem reports no file index; the stamp needs one"
-        assert st.st_ino in gate._file_stamp(), (
-            f"st_ino is not in the stamp: {gate._file_stamp()}"
-        )
+    def test_a_recreated_file_is_re_read_even_when_every_stat_field_matches(self, tmp_path):
+        """No stat triple is a change signal, on either platform.
 
-    def test_a_recreated_file_with_an_identical_stamp_is_still_re_read(self, tmp_path):
-        """`ctime` was put in the stamp to cover delete-and-recreate. On NTFS,
-        file-system tunneling restores the creation time of a name deleted and
-        recreated within ~15 s, and a replacement token is always the same
-        length -- so on exactly the path it was widened for, the triple
-        collapsed to `mtime_ns` alone. `st_ino` (the NTFS file index) does
-        change, so it is what actually carries the case.
+        The gate used to skip the read while (mtime_ns, st_ino, st_size) was
+        unchanged, and both halves of that have a defeat:
 
-        mtime is forced back with os.utime, which removes the accident that
-        made the old stamp look adequate: a regenerate landing hundreds of
-        milliseconds after the original write.
+          - NTFS file-system tunneling restores the timestamps of a name
+            deleted and recreated within ~15 s, which is why st_ino was added.
+          - ext4 and APFS hand the SAME inode straight back to the next
+            create, which is why st_ino was not enough either -- this is what
+            failed on ubuntu-latest and macos-latest in PR #17.
+
+        A replacement token is always exactly as long as the one it replaces,
+        so st_size never moves. mtime is forced back with os.utime; st_ino is
+        forced back by freezing os.stat for this one path, which reproduces
+        the POSIX inode-reuse case deterministically and makes this test red
+        on Windows too instead of only on the runner that found it.
+
+        After the fix the gate does not stat at all, so the freeze is inert
+        and the assertions pass on the content comparison alone. Delete that
+        comparison and this goes red again everywhere.
         """
         token_file, old, client = self._client(tmp_path)
         before = os.stat(token_file)
@@ -303,15 +312,26 @@ class TestRegenerateTakesEffectWithoutARestart:
         token_file.write_text(new, encoding="utf-8")
         os.utime(token_file, ns=(before.st_atime_ns, before.st_mtime_ns))
 
-        after = os.stat(token_file)
-        assert after.st_size == before.st_size, "the two tokens must be the same length"
-        assert after.st_mtime_ns == before.st_mtime_ns, "os.utime did not take"
+        real_stat = os.stat
 
-        with client:
-            assert _post(client, {"Authorization": f"Bearer {old}"}).status_code == 401, (
-                "a token replaced under an unchanged mtime/size is still served"
-            )
-            assert _post(client, {"Authorization": f"Bearer {new}"}).status_code == 200
+        def frozen_stat(path, *args, **kwargs):
+            try:
+                is_token = os.fspath(path) == str(token_file)
+            except TypeError:  # an open fd, never this path
+                is_token = False
+            return before if is_token else real_stat(path, *args, **kwargs)
+
+        with mock.patch.object(os, "stat", frozen_stat):
+            after = os.stat(token_file)
+            assert (after.st_mtime_ns, after.st_ino, after.st_size) == (
+                before.st_mtime_ns, before.st_ino, before.st_size
+            ), "the stat freeze did not take"
+
+            with client:
+                assert _post(client, {"Authorization": f"Bearer {old}"}).status_code == 401, (
+                    "a token replaced under identical stat metadata is still served"
+                )
+                assert _post(client, {"Authorization": f"Bearer {new}"}).status_code == 200
 
     def test_an_empty_token_file_keeps_the_running_token(self, tmp_path):
         """Seen mid-write: zero bytes must never mean 'no auth'."""

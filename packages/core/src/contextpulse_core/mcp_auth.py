@@ -402,51 +402,50 @@ class BearerAuthASGI:
         self.app = app
         self._token = token
         self._token_file = Path(token_file) if token_file is not None else TOKEN_FILE
-        self._stamp = self._file_stamp()
-
-    def _file_stamp(self) -> tuple | None:
-        """Cheap identity of the token file: one stat, no read."""
-        try:
-            st = os.stat(self._token_file)
-        except OSError:
-            return None
-        # st_ino as well as mtime: regeneration unlinks and recreates, and the
-        # replacement is always the same length, so size alone proves nothing.
-        #
-        # st_ctime_ns used to hold this position and did nothing. NTFS
-        # file-system tunneling restores the creation time of a name deleted
-        # and recreated within ~15 s, so across a regenerate the measured
-        # result was ctime unchanged, size unchanged -- the triple collapsed to
-        # mtime_ns alone on exactly the path it was widened for. st_ino, which
-        # Python fills from the NTFS file index, does change.
-        return (st.st_mtime_ns, st.st_ino, st.st_size)
 
     def current_token(self) -> str:
-        """The live token, re-read when the file underneath has changed.
+        """The live token, re-read from disk on every request.
 
         Without this, "Regenerate token" in the Settings dialog left the OLD
         token working and the NEW one dead until someone restarted the MCP
         server -- the exact opposite of what a user clicking Regenerate
         because they think a token leaked is asking for.
 
+        The read is unconditional, and that is the fix rather than the cost.
+        It used to be skipped while a (st_mtime_ns, st_ino, st_size) stamp was
+        unchanged, and no stat triple is a change signal on either platform:
+
+          - On NTFS, file-system tunneling restores the timestamps of a name
+            deleted and recreated within ~15 s. st_ino was added to cover it.
+          - On ext4 and APFS, the create after an unlink is routinely handed
+            the SAME inode back, so st_ino covers nothing there.
+          - A replacement token is always exactly as long as the one it
+            replaces, so st_size never moves on any platform.
+
+        Each of those makes the gate answer "unchanged" for a file whose
+        contents were replaced, which means a revoked token keeps working --
+        the precise failure this class exists to prevent. The file is ~49
+        bytes; one read plus the stat the open already does is invisible next
+        to the MCP tool call the request is carrying.
+
         Every failure path keeps the token already in hand. A file that is
         missing, unreadable, or momentarily empty mid-rotation must not open
         the endpoint or lock out a working client.
         """
-        stamp = self._file_stamp()
-        if stamp is None or stamp == self._stamp:
-            return self._token
         try:
-            rotated = self._token_file.read_text(encoding="utf-8").strip()
+            on_disk = self._token_file.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            # regenerate_token() unlinks before it creates; a request landing
+            # in that window is normal and must not log on every retry.
+            return self._token
         except OSError:
             logger.warning("Could not re-read %s; keeping the token in memory", self._token_file)
             return self._token
-        if not rotated:
-            return self._token  # mid-write; the writer will bump the stamp again
-        if rotated != self._token:
+        if not on_disk:
+            return self._token  # mid-write; the writer has not flushed yet
+        if not hmac.compare_digest(on_disk, self._token):
             logger.info("MCP access token changed on disk -- now serving the new one")
-        self._token = rotated
-        self._stamp = stamp
+            self._token = on_disk
         return self._token
 
     async def __call__(self, scope, receive, send) -> None:
