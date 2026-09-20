@@ -38,6 +38,24 @@ class TestDownscale:
         assert result.width == 1280
         assert result.height == 720
 
+    def test_a_garbage_max_width_does_not_raise_per_frame(self, isolated_config):
+        """SF-5 consequence check.
+
+        max_width/max_height had no clamp and therefore no type coercion, so
+        a hand-edited `{"max_width": "not-a-number"}` reached _max_size() as
+        the string and int() raised inside _downscale() on every single
+        frame -- absorbed by the capture loop's generic error counter, which
+        backs off and keeps failing rather than saying anything useful. The
+        clamp now coerces it back to the declared default at load time.
+        """
+        appdata, config_file = isolated_config
+        appdata.mkdir(parents=True, exist_ok=True)
+        config_file.write_text('{"max_width": "not-a-number"}', encoding="utf-8")
+        from contextpulse_sight.capture import _downscale
+        result = _downscale(_make_image(3840, 2160))
+        assert result.width <= 1280
+        assert result.height <= 720
+
     def test_large_image_downscaled(self):
         from contextpulse_sight.capture import _downscale
         img = _make_image(3840, 2160)

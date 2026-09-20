@@ -271,6 +271,62 @@ class TestClampsAndNormalisation:
         assert load_config()["blocklist_patterns"] == _DEFAULTS["blocklist_patterns"]
 
 
+class TestDownscaleBoundsAreClamped:
+    """SF-5: max_width / max_height had no clamp and so no type coercion.
+
+    They were left out of _CLAMPS on the grounds that contextpulse_sight never
+    bounded them either. The consequence was not "no bound", it was "no type
+    guard": `{"max_width": "not-a-number"}` reached capture._max_size() as the
+    string and `int()` raised inside _downscale() -- on EVERY frame, caught
+    only by the capture loop's generic error counter, which backs off and
+    keeps failing. Under the old system this was `int(_env(...))` at import:
+    one loud crash at startup. The branch turned a fail-loud into a
+    fail-quiet-and-repeat.
+
+    The bound itself (16..16384) is documented beside _CLAMPS; it is wide
+    enough that it cannot change a value anyone was actually using.
+    """
+
+    def _write(self, isolated_config, payload: dict) -> None:
+        appdata, config_file = isolated_config
+        appdata.mkdir(parents=True, exist_ok=True)
+        config_file.write_text(json.dumps(payload), encoding="utf-8")
+
+    @pytest.mark.parametrize("key", ["max_width", "max_height"])
+    def test_a_non_numeric_value_falls_back_to_the_default(self, isolated_config, key):
+        self._write(isolated_config, {key: "not-a-number"})
+        loaded = load_config()[key]
+        assert loaded == _DEFAULTS[key]
+        assert isinstance(loaded, int)
+
+    @pytest.mark.parametrize("key", ["max_width", "max_height"])
+    def test_a_numeric_string_is_coerced_rather_than_passed_through(self, isolated_config, key):
+        """A JSON string that IS a number used to reach capture.py as a str."""
+        self._write(isolated_config, {key: "800"})
+        assert load_config()[key] == 800
+
+    @pytest.mark.parametrize("key,stored,expected", [
+        ("max_width", 0, 16),
+        ("max_width", -100, 16),
+        ("max_height", 0, 16),
+        ("max_width", 99999, 16384),
+        ("max_height", 99999, 16384),
+    ])
+    def test_out_of_range_values_are_clamped(self, isolated_config, key, stored, expected):
+        self._write(isolated_config, {key: stored})
+        assert load_config()[key] == expected
+
+    @pytest.mark.parametrize("key", ["max_width", "max_height"])
+    def test_an_ordinary_value_is_untouched(self, isolated_config, key):
+        """Negative control: the bound must not move a realistic value."""
+        self._write(isolated_config, {key: 1920})
+        assert load_config()[key] == 1920
+
+    @pytest.mark.parametrize("key", ["max_width", "max_height"])
+    def test_the_bound_is_declared_in_the_clamp_table(self, isolated_config, key):
+        assert _CLAMPS[key] == (16, 16384)
+
+
 class TestNonFiniteJsonNumbers:
     """SF-1/SF-2: a hand-edited config.json can hold Infinity and NaN.
 

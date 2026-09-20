@@ -209,10 +209,23 @@ _CLAMPS: dict[str, tuple[float | None, float | None]] = {
     "event_movement_threshold": (50, None),
     "event_idle_threshold": (5, None),
     "activity_max_age": (0, None),
+    # 16..16384 px. These were left out on the grounds that
+    # contextpulse_sight.config never clamped them either -- but the clamp
+    # table is also the only place a value gets COERCED, so leaving them out
+    # meant a hand-edited {"max_width": "not-a-number"} travelled all the way
+    # to capture._max_size(), where int() raised inside _downscale() once per
+    # frame, absorbed by the capture loop's generic error counter. The old
+    # system read these as int(_env(...)) at import: one loud crash at
+    # startup, not a silent per-frame one.
+    #
+    # The bound is deliberately far wider than any real display: 16 px is
+    # below any useful thumbnail, 16384 px is 2x the widest shipping monitor
+    # (8K is 7680) and above the max texture size of current GPUs. It cannot
+    # change a value anyone was actually using; it exists to make a garbage
+    # value fail at load, once, with a WARNING naming the key.
+    "max_width": (16, 16384),
+    "max_height": (16, 16384),
 }
-# max_width / max_height are deliberately absent: contextpulse_sight.config
-# never clamped them either, and inventing a bound here would be a behaviour
-# change this step is not allowed to make.
 
 _STORAGE_MODES = ("smart", "visual", "both", "text")
 
