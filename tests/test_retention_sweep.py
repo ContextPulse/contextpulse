@@ -20,6 +20,15 @@ import pytest
 
 _SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "retention_sweep.py"
 
+# send_to_recycle_bin() calls ctypes.windll.shell32.SHFileOperationW, so on any
+# other platform it returns False by contract and every test that moves a real
+# file fails. The classification, reporting and dry-run tests are portable and
+# stay unmarked; only the ones that need a Recycle Bin carry this.
+windows_recycle_only = pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="moves go to the Windows Recycle Bin (SHFileOperationW)",
+)
+
 
 def _load_retention_sweep():
     spec = importlib.util.spec_from_file_location("retention_sweep_under_test", _SCRIPT_PATH)
@@ -154,6 +163,7 @@ class TestFormatReport:
 # ---------------------------------------------------------------------------
 
 class TestSendToRecycleBin:
+    @windows_recycle_only
     def test_moves_real_file_out_of_place(self, tmp_path, rs):
         target = tmp_path / "throwaway.txt"
         target.write_text("delete me")
@@ -161,6 +171,7 @@ class TestSendToRecycleBin:
         assert ok is True
         assert not target.exists()
 
+    @windows_recycle_only
     def test_moves_real_directory_out_of_place(self, tmp_path, rs):
         target = tmp_path / "throwaway_dir"
         target.mkdir()
@@ -189,6 +200,7 @@ class TestMain:
         out = capsys.readouterr().out
         assert "DRY RUN" in out
 
+    @windows_recycle_only
     def test_execute_sweeps_stale_and_spares_protected(self, tmp_path, rs, capsys):
         now = time.time()
         stale = tmp_path / "working" / "stale.log"
@@ -203,6 +215,7 @@ class TestMain:
         assert not stale.exists(), "stale item must be swept under --execute"
         assert protected.exists(), "protected item must survive --execute regardless of age"
 
+    @windows_recycle_only
     def test_env_protect_patterns_merged_with_cli_protect(self, tmp_path, rs, capsys, monkeypatch):
         """CP_RETENTION_PROTECT env var patterns must be merged with --protect,
         not override it -- both sources of protection apply together."""
@@ -244,6 +257,7 @@ class TestExecuteSafetyNet:
         err = capsys.readouterr().err
         assert "REFUSING TO EXECUTE" in err
 
+    @windows_recycle_only
     def test_execute_with_cli_protect_proceeds(self, tmp_path, rs, monkeypatch):
         monkeypatch.delenv("CP_RETENTION_PROTECT", raising=False)
         now = time.time()
@@ -256,6 +270,7 @@ class TestExecuteSafetyNet:
         assert rc == 0
         assert not f.exists(), "with --protect configured (even matching nothing here), execute proceeds"
 
+    @windows_recycle_only
     def test_execute_with_env_protect_proceeds(self, tmp_path, rs, monkeypatch):
         now = time.time()
         f = tmp_path / "working" / "stale.log"
@@ -265,6 +280,7 @@ class TestExecuteSafetyNet:
         assert rc == 0
         assert not f.exists()
 
+    @windows_recycle_only
     def test_execute_with_allow_empty_protect_flag_proceeds(self, tmp_path, rs, monkeypatch):
         monkeypatch.delenv("CP_RETENTION_PROTECT", raising=False)
         now = time.time()
