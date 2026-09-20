@@ -71,7 +71,25 @@ _PATTERNS: list[tuple[re.Pattern, str]] = [
     # OpenAI / Anthropic API keys
     (re.compile(r"(?<![A-Za-z0-9])sk-[a-zA-Z0-9_-]{20,}"), "[REDACTED:API_KEY]"),
     # Glued form: no leading anchor, higher length bar (see ANCHORING above).
-    (re.compile(r"sk-[a-zA-Z0-9_-]{32,}"), "[REDACTED:API_KEY]"),
+    #
+    # The 32-character bar alone was not enough. "task-oriented-dialogue-
+    # system-evaluation" carries a 35-character tail of [A-Za-z0-9_-] after the
+    # "sk-" inside "task-", so an OCR'd slug or job description was rewritten
+    # mid-word as "ta[REDACTED:API_KEY]" (review S-6) -- and because the startup
+    # sweep rewrites stored rows, that corruption is permanent.
+    #
+    # A real key also carries a digit AND an unbroken alphanumeric run; a
+    # hyphenated English phrase carries neither (its longest unhyphenated
+    # segment is a word). Both are now required. This narrows only the GLUED
+    # rule: the anchored 20+ rule above is untouched, so the ordinary
+    # whitespace-delimited case keeps its original sensitivity.
+    (re.compile(
+        r"sk-"
+        r"(?=[A-Za-z0-9_-]{32,})"          # still 32+ characters
+        r"(?=[A-Za-z0-9_-]*[0-9])"         # ... containing a digit
+        r"(?=[A-Za-z0-9_-]*[A-Za-z0-9]{16})"  # ... and a 16-char unbroken run
+        r"[A-Za-z0-9_-]{32,}"
+    ), "[REDACTED:API_KEY]"),
     (re.compile(r"sk-ant-[a-zA-Z0-9_-]{20,}"), "[REDACTED:API_KEY]"),
 
     # GitHub tokens
@@ -98,6 +116,23 @@ _PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"-----BEGIN\s+[A-Z0-9 ]*PRIVATE\s+KEY-----[\s\S]*?-----END\s+[A-Z0-9 ]*PRIVATE\s+KEY-----"),
      "[REDACTED:PRIVATE_KEY]"),
 
+    # The same armour with NO closing block. OCR of a scrolled terminal, a
+    # clipboard cut at _MAX_LENGTH and a screenshot of the top half of a key all
+    # produce a header plus body and no footer, and the paired rule above
+    # requires the pair -- so nothing fired at all and the visible key material
+    # was stored verbatim (review S-7).
+    #
+    # ORDER IS LOAD-BEARING: this runs after the paired rule, so a complete
+    # block has already been replaced and still counts exactly once.
+    #
+    # The body is consumed only while it looks like base64 armour -- runs of 16+
+    # base64 characters separated by whitespace -- so prose following a
+    # truncated key is kept rather than swallowed to end-of-text. Consuming the
+    # body matters: redacting the header alone would mark the secret and leave
+    # it on disk.
+    (re.compile(r"-----BEGIN\s+[A-Z0-9 ]*PRIVATE\s+KEY-----(?:\s*[A-Za-z0-9+/=]{16,})*\s*"),
+     "[REDACTED:PRIVATE_KEY]"),
+
     # Connection strings with passwords -- any scheme, not a fixed list of
     # four. https://admin:pw@host and ssh://user:pw@host leak the same way
     # postgres:// does. The userinfo character classes exclude "/" and "@" so
@@ -107,7 +142,23 @@ _PATTERNS: list[tuple[re.Pattern, str]] = [
     # Bearer tokens
     (re.compile(r"(?i)bearer\s+[a-zA-Z0-9_.-]{20,}"), "[REDACTED:BEARER]"),
     # HTTP Basic -- the base64 decodes to user:password.
-    (re.compile(r"(?i)basic\s+[A-Za-z0-9+/]{16,}={0,2}"), "[REDACTED:BASIC_AUTH]"),
+    #
+    # The token has to LOOK like base64, not merely be 16+ letters: the first
+    # version rewrote "Basic responsibilities of the role" (review S-6), which
+    # is an ordinary sentence in any OCR'd job description. Base64 of a
+    # "user:password" pair carries at least one of a digit, a "+"/"/" character,
+    # or an internal lowercase->uppercase flip; an English word carries none of
+    # the three. "basic" itself must also start a word, so "Nonbasic ..." does
+    # not arm the rule.
+    #
+    # The case-flip test cannot live under a global (?i) -- that would make
+    # [a-z][A-Z] match anything -- so the keyword carries a scoped (?i:...)
+    # instead and the rest of the pattern stays case-sensitive.
+    (re.compile(
+        r"(?<![A-Za-z0-9])(?i:basic)\s+"
+        r"(?=[A-Za-z0-9+/]*(?:[0-9+/]|[a-z][A-Z]))"
+        r"[A-Za-z0-9+/]{16,}={0,2}"
+    ), "[REDACTED:BASIC_AUTH]"),
 
     # Vendor token prefixes. Each is distinctive enough to need no anchor,
     # which also gives the glued case for free.

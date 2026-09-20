@@ -234,6 +234,109 @@ class TestBenignStringsAreNotRedacted:
         assert redact_sensitive(text) == text
 
 
+class TestSecondReviewFalsePositives:
+    """Two patterns rewrote ordinary English; both were reproduced by review S-6.
+
+    "Basic responsibilities of the role" became "[REDACTED:BASIC_AUTH] of the
+    role" because any 16+-letter word satisfied the base64 character class, and
+    "task-oriented-dialogue-system-evaluation" became "ta[REDACTED:API_KEY]"
+    because the glued sk- rule asked only for 32 characters of
+    [A-Za-z0-9_-] -- which a hyphenated phrase supplies.
+
+    Over-redaction is not cosmetic here: the startup sweep REWRITES the stored
+    row, so a false positive is permanent.
+    """
+
+    @pytest.mark.parametrize(
+        "benign",
+        [
+            # Reproduced verbatim from the review.
+            "Basic responsibilities of the role",
+            "the task-oriented-dialogue-system-evaluation suite",
+            # Same shape, so a fix that special-cases the two reported strings
+            # rather than the pattern fails here.
+            "Basic Responsibilities Of The Role",
+            "basic understanding of distributed systems",
+            "Basic authentication documentation index",
+            "risk-weighted-capital-adequacy-assessment",
+            "desk-reservation-system-integration-guide",
+            "disk-encryption-configuration-instructions",
+        ],
+    )
+    def test_ordinary_text_survives(self, benign):
+        assert redact_sensitive(benign) == benign, f"over-redacted: {benign!r}"
+
+    def test_http_basic_still_matches(self):
+        """The negative cases must not have been bought by disabling the rule."""
+        cleaned, counts = redact_with_counts(
+            "Authorization: Basic enFiYXNpY25lZWRsZTAxMjM0NTY3"
+        )
+        assert "enFiYXNpY25lZWRsZTAxMjM0NTY3" not in cleaned
+        assert counts.get("BASIC_AUTH") == 1
+
+    def test_http_basic_without_a_digit_still_matches(self):
+        """Discriminator is base64 SHAPE, not the presence of a digit.
+
+        "dXNlcjpwYXNzd29yZA==" is base64("user:password") and carries no digit
+        at all; what marks it is the internal lowercase->uppercase flip and the
+        "=" padding.
+        """
+        assert "dXNlcjpwYXNzd29yZA" not in redact_sensitive(
+            "Authorization: Basic dXNlcjpwYXNzd29yZA=="
+        )
+
+    def test_glued_sk_key_still_matches(self):
+        secret = "sk-A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6"
+        assert secret[3:] not in redact_sensitive(f"deploynotesx{secret} trailing")
+
+
+class TestUnterminatedPrivateKeyHeader:
+    """Review S-7: a BEGIN armour with no END matched nothing at all.
+
+    OCR of a scrolled terminal, a clipboard cut at the 10,000-character limit
+    and a screenshot of the top half of a key all produce a header plus body
+    and no footer. The paired pattern requires the footer, so the visible key
+    material was stored verbatim.
+    """
+
+    # Synthetic: valid base64 characters, not a real key.
+    UNTERMINATED = (
+        "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+        "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtz\n"
+        "c3Fwcml2YXRlbmVlZGxlMDEyMzQ1Njc4OWFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3\n"
+    )
+
+    def test_header_without_end_armour_is_redacted(self):
+        cleaned, counts = redact_with_counts("pasted:\n" + self.UNTERMINATED)
+        assert "PRIVATE_KEY" in counts, "the truncated key matched nothing"
+        assert "BEGIN OPENSSH PRIVATE KEY" not in cleaned
+        assert "b3BlbnNzaC1rZXktdjEAAAAABG5vbmU" not in cleaned, (
+            "the header was marked but the key material was left on disk"
+        )
+        assert "pasted:" in cleaned, "context before the key was destroyed"
+
+    def test_bare_header_with_no_body_is_redacted(self):
+        assert "PRIVATE KEY" not in redact_sensitive("-----BEGIN PRIVATE KEY-----")
+
+    def test_prose_after_a_truncated_key_survives(self):
+        cleaned = redact_sensitive(
+            self.UNTERMINATED + "then I closed the terminal window."
+        )
+        assert "then I closed the terminal window." in cleaned, (
+            "the unterminated rule swallowed everything to end-of-text"
+        )
+
+    def test_a_complete_block_still_counts_once(self):
+        """The new rule runs after the paired one, so a normal key is not
+        matched twice and its count stays honest."""
+        cleaned, counts = redact_with_counts(
+            "-----BEGIN RSA PRIVATE KEY-----\nzqpairedneedle0123456789abcdef\n"
+            "-----END RSA PRIVATE KEY-----"
+        )
+        assert counts["PRIVATE_KEY"] == 1
+        assert "zqpairedneedle0123456789abcdef" not in cleaned
+
+
 class TestBareAwsSecretIsContextual:
     """A bare AWS secret is 40 base64 characters with no prefix and no label.
 
