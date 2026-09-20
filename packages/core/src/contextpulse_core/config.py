@@ -79,6 +79,12 @@ _DEFAULTS: dict = {
     # Privacy — OCR redaction (masks API keys, passwords, etc. before storage)
     "redact_ocr_text": True,
 
+    # Privacy — clipboard capture on/off. There is deliberately no
+    # "redact_clipboard_text" companion: clipboard redaction is unconditional
+    # (see contextpulse_sight.clipboard). The only clipboard choice a user has
+    # is whether it is captured at all.
+    "clipboard_enabled": True,
+
     # Activity tracking
     "activity_max_age": 86400,    # seconds (24h)
 

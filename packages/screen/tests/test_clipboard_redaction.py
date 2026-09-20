@@ -502,8 +502,34 @@ class TestClipboardEnabledIsHonoured:
                 "contextpulse_sight.app.ClipboardMonitor",
                 side_effect=AssertionError("watchdog must not restart a disabled monitor"),
             ):
-                app._restart_clipboard_monitor_if_dead()
+                app._reconcile_clipboard_monitor()
         assert app._clipboard_monitor is None
+
+    def test_watchdog_stops_a_running_monitor_when_setting_flips_off(
+        self, tmp_path, monkeypatch
+    ):
+        # Enabled at construction, then switched off mid-session. A privacy
+        # control that only takes effect on restart is not honoured.
+        app = self._make_app(tmp_path, monkeypatch)
+        assert app._clipboard_monitor is not None
+        live = app._clipboard_monitor
+
+        with patch("contextpulse_sight.app.cfg_get") as cfg_get:
+            cfg_get.side_effect = lambda key, default=None: (
+                False if key == "clipboard_enabled" else default
+            )
+            app._reconcile_clipboard_monitor()
+
+        assert app._clipboard_monitor is None
+        assert live._stop.is_set(), "the running monitor was not told to stop"
+
+    def test_watchdog_revives_a_dead_monitor_when_enabled(self, tmp_path, monkeypatch):
+        # The reconcile must still do its original job in the enabled case.
+        app = self._make_app(tmp_path, monkeypatch)
+        app._clipboard_monitor = None
+        app._reconcile_clipboard_monitor()
+        assert app._clipboard_monitor is not None
+        app._clipboard_monitor.stop()
 
     def test_stop_tolerates_absent_monitor(self, tmp_path, monkeypatch):
         with patch("contextpulse_sight.app.cfg_get") as cfg_get:

@@ -252,6 +252,25 @@ def _build_and_run() -> None:
         highlightthickness=0, bd=1,
     ).pack(anchor="w", pady=(8, 0))
 
+    clipboard_var = tk.StringVar(
+        master=root, value="1" if cfg.get("clipboard_enabled", True) else "0"
+    )
+    tk.Checkbutton(
+        frame, text="  Capture clipboard contents",
+        variable=clipboard_var, onvalue="1", offvalue="0",
+        font=("Segoe UI", 10),
+        fg=gui_theme.TEXT, bg=gui_theme.BG, selectcolor=gui_theme.BG,
+        activebackground=gui_theme.BG, activeforeground=gui_theme.TEXT,
+        highlightthickness=0, bd=1,
+    ).pack(anchor="w", pady=(4, 0))
+
+    gui_theme.make_label(
+        frame,
+        "Clipboard text is always scanned for secrets before it is stored — "
+        "that is not optional. This switch controls capture itself.",
+        font=("Segoe UI", 8), fg=gui_theme.TEXT_MUTED,
+    ).pack(anchor="w", pady=(2, 0))
+
     # ── License Section ───────────────────────────────────────────
     _section_header(frame, "License")
 
@@ -345,6 +364,7 @@ def _build_and_run() -> None:
             "blocklist_patterns": [p.strip() for p in blocklist_var.get().split(",") if p.strip()],
             "always_both_apps": [p.strip() for p in always_both_var.get().split(",") if p.strip()],
             "redact_ocr_text": redact_var.get() == "1",
+            "clipboard_enabled": clipboard_var.get() == "1",
         })
         save_config(new_cfg)
         logger.info("Settings saved")

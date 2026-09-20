@@ -12,6 +12,7 @@ from pathlib import Path
 import pystray
 
 # Core productization imports (settings, first-run, licensing)
+from contextpulse_core.config import get as cfg_get
 from contextpulse_core.first_run import is_first_run, show_welcome_dialog
 from contextpulse_core.license_dialog import show_nag_dialog
 from contextpulse_core.log_rotation import rotating_file_handler
@@ -122,7 +123,14 @@ class ContextPulseSightApp:
         self.activity_db = ActivityDB()
         self._event_detector = EventDetector()
         self._ocr_worker = OCRWorker(self.activity_db, self.buffer)
-        self._clipboard_monitor = ClipboardMonitor(self.activity_db)
+        # `clipboard_enabled` was declared in SightModule.get_config_schema and
+        # read nowhere: the monitor was constructed here unconditionally and
+        # restarted unconditionally by the watchdog, so the toggle a user could
+        # see did nothing. None means "user turned clipboard capture off" and
+        # every lifecycle site below is written to tolerate it.
+        self._clipboard_monitor = (
+            ClipboardMonitor(self.activity_db) if self._clipboard_enabled() else None
+        )
 
         # Spine dual-write: EventBus + SightModule
         self._event_bus = EventBus(self.activity_db.db_path)
@@ -130,7 +138,57 @@ class ContextPulseSightApp:
         self._sight_module.register(self._event_bus.emit)
         self._sight_module.start()
         self._ocr_worker.set_sight_module(self._sight_module)
-        self._clipboard_monitor.set_sight_module(self._sight_module)
+        if self._clipboard_monitor is not None:
+            self._clipboard_monitor.set_sight_module(self._sight_module)
+
+    # -- Clipboard monitor lifecycle ---------------------------------------
+    # All four sites (construct, start, watchdog restart, stop) go through
+    # these so the setting cannot be honoured in one place and ignored in
+    # another -- which is how it came to be dead in the first place.
+
+    def _clipboard_enabled(self) -> bool:
+        """Whether clipboard capture is switched on. Defaults to on."""
+        return bool(cfg_get("clipboard_enabled", True))
+
+    def _start_clipboard_monitor(self) -> None:
+        """Start the clipboard monitor, if the user has it enabled."""
+        if not self._clipboard_enabled():
+            logger.info("Clipboard capture disabled by setting -- monitor not started")
+            self._clipboard_monitor = None
+            return
+        if self._clipboard_monitor is None:
+            self._clipboard_monitor = ClipboardMonitor(self.activity_db)
+            self._clipboard_monitor.set_sight_module(self._sight_module)
+        self._clipboard_monitor.start()
+
+    def _reconcile_clipboard_monitor(self) -> None:
+        """Watchdog hook: make the running state match the setting.
+
+        Reconciles in BOTH directions. Only restarting a dead monitor would
+        leave the setting half-honoured -- unticking the box mid-session would
+        not stop capture until the next daemon restart, which is the wrong way
+        round for a privacy control.
+        """
+        if not self._clipboard_enabled():
+            if self._clipboard_monitor is not None:
+                logger.info("Clipboard capture switched off — stopping monitor")
+                self._clipboard_monitor.stop()
+                self._clipboard_monitor = None
+            return
+        if self._clipboard_monitor is not None and self._clipboard_monitor.is_alive():
+            return
+        logger.warning("Clipboard monitor died — restarting")
+        try:
+            self._clipboard_monitor = ClipboardMonitor(self.activity_db)
+            self._clipboard_monitor.set_sight_module(self._sight_module)
+            self._clipboard_monitor.start()
+        except Exception:
+            logger.exception("Failed to restart clipboard monitor")
+
+    def _stop_clipboard_monitor(self) -> None:
+        """Stop the clipboard monitor. Safe when it was never constructed."""
+        if self._clipboard_monitor is not None:
+            self._clipboard_monitor.stop()
 
     # -- Privacy guard -----------------------------------------------------
 
@@ -412,14 +470,8 @@ class ContextPulseSightApp:
                     except Exception:
                         logger.exception("Failed to restart OCR worker")
             # Clipboard monitor
-            if hasattr(self, "_clipboard_monitor") and self._clipboard_monitor is not None:
-                if not self._clipboard_monitor.is_alive():
-                    logger.warning("Clipboard monitor died — restarting")
-                    try:
-                        self._clipboard_monitor = ClipboardMonitor(self.activity_db)
-                        self._clipboard_monitor.start()
-                    except Exception:
-                        logger.exception("Failed to restart clipboard monitor")
+            if hasattr(self, "_clipboard_monitor"):
+                self._reconcile_clipboard_monitor()
             # Hotkey listener
             if hasattr(self, "hotkey_listener") and not self.hotkey_listener.is_alive():
                 logger.warning("Hotkey listener died — restarting")
@@ -533,7 +585,7 @@ class ContextPulseSightApp:
         self.stop_event.set()
         self._event_detector.stop()
         self._ocr_worker.stop()
-        self._clipboard_monitor.stop()
+        self._stop_clipboard_monitor()
         self._sight_module.stop()
         self._event_bus.close()
         self.activity_db.close()
@@ -585,7 +637,7 @@ class ContextPulseSightApp:
 
         self._event_detector.start()
         self._ocr_worker.start()
-        self._clipboard_monitor.start()
+        self._start_clipboard_monitor()
 
         if AUTO_INTERVAL > 0:
             self._capture_thread = threading.Thread(
