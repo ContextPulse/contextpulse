@@ -558,6 +558,34 @@ class TestDaemonAndMcpBothCallIt:
         assert "threading.Thread" in source
         assert "daemon=True" in source
 
+    def test_the_unified_server_triggers_the_sweep_when_it_starts(self, monkeypatch):
+        """Review S-5: mcp_unified.main() never called it.
+
+        This is the LIVE transport. The sight stdio server is not started by
+        the shipped configuration, and the only other trigger on that side --
+        _get_event_bus() -- is reached solely by two Pro-gated tools. So on a
+        machine where the daemon is not running, nothing swept at all.
+
+        Asserted by running main() against a stubbed FastMCP rather than by
+        grepping its source, so the call has to actually execute.
+        """
+        import sys
+        from unittest.mock import MagicMock
+
+        from contextpulse_core import daemon, mcp_unified
+
+        calls = []
+        monkeypatch.setattr(daemon, "start_secret_migration", lambda: calls.append("swept"))
+        monkeypatch.setattr(mcp_unified, "_register_all", lambda: None)
+        fake_app = MagicMock()
+        monkeypatch.setattr(mcp_unified, "FastMCP", lambda *a, **k: fake_app)
+        monkeypatch.setattr(sys, "argv", ["mcp_unified", "--stdio"])
+
+        mcp_unified.main()
+
+        assert fake_app.run.called, "the server never started -- vacuous"
+        assert calls == ["swept"], "the unified server served without sweeping"
+
     def test_mcp_entry_point_is_wired(self):
         import inspect
 
