@@ -410,9 +410,16 @@ class BearerAuthASGI:
             st = os.stat(self._token_file)
         except OSError:
             return None
-        # ctime as well as mtime: regeneration unlinks and recreates, and the
+        # st_ino as well as mtime: regeneration unlinks and recreates, and the
         # replacement is always the same length, so size alone proves nothing.
-        return (st.st_mtime_ns, st.st_ctime_ns, st.st_size)
+        #
+        # st_ctime_ns used to hold this position and did nothing. NTFS
+        # file-system tunneling restores the creation time of a name deleted
+        # and recreated within ~15 s, so across a regenerate the measured
+        # result was ctime unchanged, size unchanged -- the triple collapsed to
+        # mtime_ns alone on exactly the path it was widened for. st_ino, which
+        # Python fills from the NTFS file index, does change.
+        return (st.st_mtime_ns, st.st_ino, st.st_size)
 
     def current_token(self) -> str:
         """The live token, re-read when the file underneath has changed.

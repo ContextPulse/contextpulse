@@ -270,6 +270,49 @@ class TestRegenerateTakesEffectWithoutARestart:
             assert _post(client, {"Authorization": f"Bearer {token}"}).status_code == 200
             assert _post(client).status_code == 401
 
+    def test_the_stamp_carries_the_file_index(self, tmp_path):
+        """The stamp's own contents, so the behavioural test below cannot pass
+        for the wrong reason on a filesystem that happens not to tunnel."""
+        token_file, _token, client = self._client(tmp_path)
+        gate = client.app
+        st = os.stat(token_file)
+        assert st.st_ino, "this filesystem reports no file index; the stamp needs one"
+        assert st.st_ino in gate._file_stamp(), (
+            f"st_ino is not in the stamp: {gate._file_stamp()}"
+        )
+
+    def test_a_recreated_file_with_an_identical_stamp_is_still_re_read(self, tmp_path):
+        """`ctime` was put in the stamp to cover delete-and-recreate. On NTFS,
+        file-system tunneling restores the creation time of a name deleted and
+        recreated within ~15 s, and a replacement token is always the same
+        length -- so on exactly the path it was widened for, the triple
+        collapsed to `mtime_ns` alone. `st_ino` (the NTFS file index) does
+        change, so it is what actually carries the case.
+
+        mtime is forced back with os.utime, which removes the accident that
+        made the old stamp look adequate: a regenerate landing hundreds of
+        milliseconds after the original write.
+        """
+        token_file, old, client = self._client(tmp_path)
+        before = os.stat(token_file)
+
+        new = mcp_auth.TOKEN_PREFIX + "b" * (len(old) - len(mcp_auth.TOKEN_PREFIX))
+        assert len(new) == len(old) and new != old
+
+        token_file.unlink()
+        token_file.write_text(new, encoding="utf-8")
+        os.utime(token_file, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+        after = os.stat(token_file)
+        assert after.st_size == before.st_size, "the two tokens must be the same length"
+        assert after.st_mtime_ns == before.st_mtime_ns, "os.utime did not take"
+
+        with client:
+            assert _post(client, {"Authorization": f"Bearer {old}"}).status_code == 401, (
+                "a token replaced under an unchanged mtime/size is still served"
+            )
+            assert _post(client, {"Authorization": f"Bearer {new}"}).status_code == 200
+
     def test_an_empty_token_file_keeps_the_running_token(self, tmp_path):
         """Seen mid-write: zero bytes must never mean 'no auth'."""
         token_file, token, client = self._client(tmp_path)
