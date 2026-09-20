@@ -26,6 +26,7 @@ privacy blocklist, so both halves are belt and braces.
 
 import json
 import logging
+import math
 import os
 import sys
 from pathlib import Path
@@ -283,13 +284,33 @@ def _read_json_layer() -> dict:
 
 
 def _clamp(key: str, value, default):
-    """Coerce `value` to the default's numeric type and clamp it to _CLAMPS."""
+    """Coerce `value` to the default's numeric type and clamp it to _CLAMPS.
+
+    Two non-finite cases get their own handling because JSON can express both
+    and neither behaves like a bad value:
+
+    * **OverflowError** is an ArithmeticError, NOT a ValueError, so it was not
+      caught below. `json.loads` turns `1e400` (and the bare literal
+      `Infinity`) into `float("inf")`, and `int(float("inf"))` raises it --
+      out of _clamp, out of load_config(), and into every cfg_get() in the
+      process, once per frame and once per MCP result row.
+    * **NaN** raises nothing at all for a float-typed key. `nan < lo` and
+      `nan > hi` are both False, so it passed both comparisons below
+      untouched and reached buffer.add(), where `diff_pct < nan` is likewise
+      always False: the dedup gate silently off and every frame stored.
+      `caster(value)` already rejects it for an int-typed key (ValueError).
+    """
     lo, hi = _CLAMPS[key]
     caster = type(default)
     try:
         coerced = caster(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         logger.warning("config key %s: %r is not a %s — using default %r", key, value, caster.__name__, default)
+        return default
+    # isfinite only for floats: an int is always finite, and math.isfinite()
+    # on an int too large for a double raises OverflowError of its own.
+    if isinstance(coerced, float) and not math.isfinite(coerced):
+        logger.warning("config key %s: %r is not a finite number — using default %r", key, value, default)
         return default
     if lo is not None and coerced < lo:
         coerced = caster(lo)

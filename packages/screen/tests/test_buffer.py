@@ -52,6 +52,25 @@ class TestRollingBuffer:
             assert stored is False
             assert buf.frame_count() == count_after_first
 
+    def test_a_nan_change_threshold_does_not_disable_dedup(self, tmp_buffer_dir, isolated_config):
+        """SF-2 consequence check, one layer below the config unit test.
+
+        `json.loads` accepts the bare literal `NaN`. Before the finiteness
+        guard in `_clamp`, it survived both clamp comparisons and landed here
+        as `diff_pct < nan` -- always False -- so an identical frame was
+        stored every cycle and the buffer filled the disk. The threshold now
+        falls back to its declared default, so this frame is skipped.
+        """
+        appdata, config_file = isolated_config
+        appdata.mkdir(parents=True, exist_ok=True)
+        config_file.write_text('{"change_threshold": NaN}', encoding="utf-8")
+        with patch("contextpulse_sight.buffer.BUFFER_DIR", tmp_buffer_dir):
+            from contextpulse_sight.buffer import RollingBuffer
+            buf = RollingBuffer()
+            img = _make_image(color=(100, 100, 100))
+            buf.add(img)
+            assert buf.add(img) is False
+
     def test_add_different_frame_stored(self, tmp_buffer_dir):
         with patch("contextpulse_sight.buffer.BUFFER_DIR", tmp_buffer_dir):
             from contextpulse_sight.buffer import RollingBuffer

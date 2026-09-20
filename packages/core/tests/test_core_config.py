@@ -271,6 +271,73 @@ class TestClampsAndNormalisation:
         assert load_config()["blocklist_patterns"] == _DEFAULTS["blocklist_patterns"]
 
 
+class TestNonFiniteJsonNumbers:
+    """SF-1/SF-2: a hand-edited config.json can hold Infinity and NaN.
+
+    `json.loads` accepts the bare literals `Infinity`, `-Infinity` and `NaN`
+    by default, and `1e400` overflows to `inf` silently. Neither survived
+    `_clamp` correctly:
+
+    * `int(float("inf"))` raises **OverflowError**, an ArithmeticError and
+      NOT a ValueError, so it escaped `_clamp`, escaped `load_config()`, and
+      took every `cfg_get()` in the process with it -- per frame, per MCP row.
+    * `float("nan")` raised nothing: `nan < lo` and `nan > hi` are both False,
+      so it passed both clamp comparisons untouched and reached
+      `buffer.add()`, where `diff_pct < nan` is always False -- dedup off,
+      every frame stored.
+
+    Both now fall back to the declared default with one WARNING.
+    """
+
+    def _write(self, isolated_config, raw: str) -> None:
+        appdata, config_file = isolated_config
+        appdata.mkdir(parents=True, exist_ok=True)
+        config_file.write_text(raw, encoding="utf-8")
+
+    @pytest.mark.parametrize("raw", ["1e400", "Infinity", "-Infinity"])
+    def test_an_infinite_int_key_falls_back_to_its_default(self, isolated_config, raw):
+        self._write(isolated_config, '{"jpeg_quality": %s}' % raw)
+        assert load_config()["jpeg_quality"] == _DEFAULTS["jpeg_quality"]
+
+    @pytest.mark.parametrize("raw", ["1e400", "Infinity", "-Infinity"])
+    def test_an_infinite_float_key_falls_back_to_its_default(self, isolated_config, raw):
+        """float("inf") does not raise, so this one is caught by the
+        finiteness check rather than by the widened except clause."""
+        self._write(isolated_config, '{"change_threshold": %s}' % raw)
+        assert load_config()["change_threshold"] == _DEFAULTS["change_threshold"]
+
+    def test_infinity_warns_once_per_load_not_zero_times(self, isolated_config, caplog):
+        self._write(isolated_config, '{"jpeg_quality": 1e400}')
+        with caplog.at_level("WARNING", logger="contextpulse_core.config"):
+            load_config()
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 1, [r.getMessage() for r in warnings]
+        assert "jpeg_quality" in warnings[0].getMessage()
+
+    def test_nan_falls_back_instead_of_disabling_the_dedup_gate(self, isolated_config):
+        self._write(isolated_config, '{"change_threshold": NaN}')
+        value = load_config()["change_threshold"]
+        assert value == _DEFAULTS["change_threshold"]
+        # The consequence the fallback exists to prevent: a comparison against
+        # the loaded threshold must be capable of returning True.
+        assert (0.1 < value) is True
+
+    def test_nan_warns_once_per_load_not_zero_times(self, isolated_config, caplog):
+        self._write(isolated_config, '{"change_threshold": NaN}')
+        with caplog.at_level("WARNING", logger="contextpulse_core.config"):
+            load_config()
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 1, [r.getMessage() for r in warnings]
+        assert "change_threshold" in warnings[0].getMessage()
+
+    def test_an_ordinary_finite_value_is_still_honoured(self, isolated_config):
+        """The negative control: the finiteness guard must not eat real values."""
+        self._write(isolated_config, '{"change_threshold": 2.5, "jpeg_quality": 60}')
+        cfg = load_config()
+        assert cfg["change_threshold"] == 2.5
+        assert cfg["jpeg_quality"] == 60
+
+
 # ── T23: cache, last-good, atomic save ──────────────────────────────────
 class _CountingJson:
     """Proxy for the json module that counts loads() calls.
