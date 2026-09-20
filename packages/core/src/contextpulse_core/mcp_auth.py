@@ -36,7 +36,14 @@ import sys
 import time
 from pathlib import Path
 
+# isort: off
+# env_guard FIRST, and before config: it snapshots the real process
+# environment, and importing config runs load_dotenv(override=True), after
+# which a .env file has already overwritten os.environ. See auth_disabled().
+from contextpulse_core import env_guard
 from contextpulse_core.config import APPDATA_DIR
+
+# isort: on
 
 logger = logging.getLogger(__name__)
 
@@ -60,13 +67,63 @@ _READ_RETRY_SLEEP = 0.02
 
 # ── the off switch ───────────────────────────────────────────────────
 
-def auth_disabled() -> bool:
-    """True only for the exact documented off switch.
+def _dotenv_sets_off() -> bool:
+    """Would a .env file, on its own, have set the off switch?
 
-    Fails closed on anything else: a typo in the env var must not silently
-    open the endpoint, so "0", "false" and "no" all leave auth ON.
+    Reads the same files config.py feeds to load_dotenv: the path named by
+    CONTEXTPULSE_DOTENV, and the nearest .env walking up from the cwd.
     """
-    return os.environ.get(AUTH_ENV_VAR, "").strip().lower() == "off"
+    try:
+        from dotenv import dotenv_values, find_dotenv
+    except ImportError:  # pragma: no cover - python-dotenv is a hard dependency
+        return False
+
+    candidates = [os.environ.get("CONTEXTPULSE_DOTENV", ""), find_dotenv(usecwd=True)]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            values = dotenv_values(candidate)
+        except OSError:
+            continue
+        if (values.get(AUTH_ENV_VAR) or "").strip().lower() == "off":
+            return True
+    return False
+
+
+def auth_disabled() -> bool:
+    """True only for the exact documented off switch, set in the real environment.
+
+    Fails closed twice over.
+
+    First on the value: a typo must not open the endpoint, so "0", "false"
+    and "no" all leave auth ON. Only the literal "off" counts.
+
+    Then on the SOURCE. config.py runs load_dotenv(override=True) at import,
+    so a `.env` sitting in whatever directory the server was started from
+    beats the real environment -- which would turn a security switch that was
+    deliberately made env-only into a persisted file setting, the exact thing
+    the spec ruled out. Only the process environment (or --no-auth on the
+    command line) may disable auth. env_guard's pre-dotenv snapshot settles
+    the case where both are set; failing that, a value a .env could account
+    for is refused, with a warning naming why.
+    """
+    if os.environ.get(AUTH_ENV_VAR, "").strip().lower() != "off":
+        return False
+
+    if env_guard.process_env(AUTH_ENV_VAR).strip().lower() == "off":
+        return True
+
+    if _dotenv_sets_off():
+        logger.warning(
+            "Ignoring %s=off: it comes from a .env file, not the environment. "
+            "MCP auth stays ON. Set it in the real environment, or pass "
+            "--no-auth, if you meant it.",
+            AUTH_ENV_VAR,
+        )
+        return False
+
+    return True
 
 
 def disabled_banner(reason: str) -> str:

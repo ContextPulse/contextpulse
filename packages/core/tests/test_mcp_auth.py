@@ -339,6 +339,76 @@ def test_only_the_literal_off_disables_auth(monkeypatch, value, tmp_path):
         assert _post(client).status_code == 401
 
 
+class TestTheOffSwitchIsNotReachableFromADotEnvFile:
+    """B1-3. config.py runs load_dotenv(override=True) at import, so a .env in
+    the working directory beats the real environment. The off switch was made
+    env-only so it could not become a persisted setting; a .env in a checkout
+    is a persisted setting.
+    """
+
+    def _write_dotenv(self, tmp_path, monkeypatch, value="off"):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text(
+            f"CONTEXTPULSE_MCP_AUTH={value}\n", encoding="utf-8"
+        )
+
+    def test_a_dotenv_off_is_refused_and_says_so(self, tmp_path, monkeypatch, caplog):
+        self._write_dotenv(tmp_path, monkeypatch)
+        # Reproduce what load_dotenv(override=True) does to os.environ.
+        monkeypatch.setenv("CONTEXTPULSE_MCP_AUTH", "off")
+        monkeypatch.setattr(mcp_auth.env_guard, "SNAPSHOT_IS_PRE_DOTENV", True)
+        monkeypatch.setattr(mcp_auth.env_guard, "PROCESS_ENV", {})  # not in the real env
+        caplog.set_level("WARNING")
+
+        assert mcp_auth.auth_disabled() is False
+        assert any(".env" in r.message for r in caplog.records)
+
+    def test_a_dotenv_off_does_not_open_the_endpoint(self, tmp_path, monkeypatch):
+        """The end the user actually sees: still 401."""
+        self._write_dotenv(tmp_path, monkeypatch)
+        monkeypatch.setenv("CONTEXTPULSE_MCP_AUTH", "off")
+        monkeypatch.setattr(mcp_auth.env_guard, "SNAPSHOT_IS_PRE_DOTENV", True)
+        monkeypatch.setattr(mcp_auth.env_guard, "PROCESS_ENV", {})
+
+        app = mcp_unified.build_http_app(
+            _dummy_fastmcp(), token_file=tmp_path / "mcp_token"
+        )
+        with TestClient(app, base_url=BASE_URL) as client:
+            assert _post(client).status_code == 401
+
+    def test_the_real_environment_still_wins_when_both_are_set(self, tmp_path, monkeypatch):
+        self._write_dotenv(tmp_path, monkeypatch)
+        monkeypatch.setenv("CONTEXTPULSE_MCP_AUTH", "off")
+        monkeypatch.setattr(mcp_auth.env_guard, "SNAPSHOT_IS_PRE_DOTENV", True)
+        monkeypatch.setattr(
+            mcp_auth.env_guard, "PROCESS_ENV", {"CONTEXTPULSE_MCP_AUTH": "off"}
+        )
+        assert mcp_auth.auth_disabled() is True
+
+    def test_a_dotenv_that_does_not_set_it_changes_nothing(self, tmp_path, monkeypatch):
+        self._write_dotenv(tmp_path, monkeypatch, value="on")
+        monkeypatch.setenv("CONTEXTPULSE_MCP_AUTH", "off")
+        monkeypatch.setattr(mcp_auth.env_guard, "SNAPSHOT_IS_PRE_DOTENV", True)
+        monkeypatch.setattr(mcp_auth.env_guard, "PROCESS_ENV", {})
+        assert mcp_auth.auth_disabled() is True
+
+    def test_the_cli_flag_is_unaffected_by_any_of_this(self, tmp_path, monkeypatch):
+        """--no-auth is a real argument on a real command line; it always wins."""
+        self._write_dotenv(tmp_path, monkeypatch)
+        app = mcp_unified.build_http_app(
+            _dummy_fastmcp(), no_auth=True, token_file=tmp_path / "mcp_token"
+        )
+        with TestClient(app, base_url=BASE_URL) as client:
+            assert _post(client).status_code == 200
+
+    def test_env_guard_reports_its_own_trustworthiness(self):
+        """A polluted snapshot must read as unknown, not as a confident value."""
+        from contextpulse_core import env_guard
+
+        assert isinstance(env_guard.SNAPSHOT_IS_PRE_DOTENV, bool)
+        assert env_guard.process_env("DEFINITELY_NOT_SET_ANYWHERE") == ""
+
+
 def test_build_http_app_wraps_when_auth_enabled(monkeypatch, tmp_path):
     monkeypatch.delenv("CONTEXTPULSE_MCP_AUTH", raising=False)
     target = tmp_path / "mcp_token"

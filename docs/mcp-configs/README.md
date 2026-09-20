@@ -163,4 +163,13 @@ There is one escape hatch, for debugging only:
 contextpulse-mcp --no-auth                 # or: set CONTEXTPULSE_MCP_AUTH=off
 ```
 
-It logs a warning banner at startup and leaves every tool callable by every local process. It is deliberately not a setting in `config.json`, so nothing can persist it by accident.
+It logs a warning banner at startup and leaves every tool callable by every local process.
+
+The switch is deliberately hard to persist. It is not a setting in `config.json`, and **it is ignored when it comes from a `.env` file** — ContextPulse loads `.env` with `override=True`, so a `.env` in whatever directory you started the server from would otherwise beat your real environment, which is the same "persisted setting" this design rules out. A `.env` line that would have disabled auth is logged and ignored:
+
+```
+Ignoring CONTEXTPULSE_MCP_AUTH=off: it comes from a .env file, not the
+environment. MCP auth stays ON.
+```
+
+Set it in the actual environment of the process, or pass `--no-auth`.
