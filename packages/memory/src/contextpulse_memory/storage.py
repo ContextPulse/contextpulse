@@ -652,6 +652,24 @@ class MemoryStore:
         # full to any MCP client.
         value = redact_sensitive(value)
 
+        # And the SAME for key and tags, which memories_fts also indexes
+        # (_WARM_FTS: key, value, tags). Only `value` was scrubbed, so
+        # memory_store(key="sk-ant-...", value="the prod key") put the secret in
+        # a stored column and in a search index while the one field that WAS
+        # cleaned held nothing sensitive (review S-2).
+        #
+        # Redacted here, before the quota check and before any tier sees them,
+        # so the hot dict, the warm row and the FTS index all agree on one
+        # spelling. CONSEQUENCE: the lookup key changes, so a caller that
+        # stored a secret-shaped key cannot recall it under the raw spelling.
+        # That is the correct trade -- the alternative is keeping the secret --
+        # and recall is deliberately NOT given the matching redaction, because
+        # two different secrets redact to the same marker and a lookup that
+        # collapsed them would hand back someone else's memory.
+        tags = tags or []
+        key = redact_sensitive(key)
+        tags = [redact_sensitive(t) for t in tags]
+
         # Quota check: if at capacity and this is a new key, block the write.
         # Upserts (existing key) are always allowed — they don't grow the store.
         if self._max_warm_entries and self.warm.get(key) is None:
@@ -662,7 +680,6 @@ class MemoryStore:
                     "Delete unused memories or increase max_entries."
                 )
 
-        tags = tags or []
         expires_at = time.time() + (ttl_hours * 3600) if ttl_hours else None
         hot_ttl = min(ttl_hours * 3600, self.DEFAULT_HOT_TTL) if ttl_hours else self.DEFAULT_HOT_TTL
         self.hot.put(key, value, tags, ttl=hot_ttl)
