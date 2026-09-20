@@ -123,22 +123,29 @@ class TestOutcomeFacts:
 
 
 class TestOutcomeEmpty:
-    """(b) Valid but EMPTY array — legitimate quiet window, still success."""
+    """(b) Valid but EMPTY array — legitimate quiet window, still success.
+
+    The elapsed times here are deliberately ABOVE the --min-elapsed floor
+    (cp-consolidator-silent-zero-fact-runs, second half). A well-formed []
+    returned in under a second on a non-empty window is no longer a quiet
+    window; it is the failure shape TestFastEmptyIsAFault covers. These
+    cases are the genuine article, so they have to look like it.
+    """
 
     def test_exit_zero_and_error_stays_null(self, consolidator, activity_db, probe_db):
-        with patch.object(consolidator, "call_claude", return_value=("[]", 0.9)):
+        with patch.object(consolidator, "call_claude", return_value=("[]", 42.0)):
             rc = _run(consolidator, activity_db, probe_db)
 
         assert rc == 0
         [(events, facts, error, elapsed_s)] = _probe_runs_rows(probe_db)
         assert (events, facts, error) == (1, 0, None)
-        assert elapsed_s == pytest.approx(0.9)
+        assert elapsed_s == pytest.approx(42.0)
 
     def test_logs_distinctly_from_a_fault(self, consolidator, activity_db, probe_db, caplog):
         import logging
 
         with caplog.at_level(logging.INFO, logger="probe.consolidator"):
-            with patch.object(consolidator, "call_claude", return_value=("[]", 0.9)):
+            with patch.object(consolidator, "call_claude", return_value=("[]", 42.0)):
                 rc = _run(consolidator, activity_db, probe_db)
 
         assert rc == 0
@@ -258,3 +265,170 @@ class TestUnaffectedPaths:
         [(events, facts, error, elapsed_s)] = _probe_runs_rows(probe_db)
         assert facts == 0
         assert error is not None and "boom" in error
+
+
+def _pad_to(activity_db, total: int) -> None:
+    """Grow the fixture DB to `total` events so len(events) matches the incident."""
+    conn = sqlite3.connect(str(activity_db))
+    conn.executemany(
+        "INSERT INTO events VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+            (f"e{i}", 9_999_999_999.0 - i, "sight", "screenshot", "App", "Win", "{}")
+            for i in range(1, total)
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+
+class TestFastEmptyIsAFault:
+    """The ONE case c5ff94c explicitly left open.
+
+    Quoted from that work's own caveat: "If the CLI somehow returned a
+    literal well-formed [] in 6.4s, the new code classifies it EMPTY and
+    would NOT flip the exit code ... That second case cannot be ruled out
+    from surviving evidence."
+
+    It can be ruled out now, from evidence already on disk.
+    logs/probe_consolidator.log holds eleven zero-fact runs on non-empty
+    windows and every one landed in a 5.1-7.7s band; every run that produced
+    facts landed at 31.8-63.7s. The bands are disjoint with no sample
+    between them, because a genuine quiet window still costs the model a
+    full read of a ~316KB / ~80K-token prompt before it can answer []. So
+    latency is the instrument that separates "0 facts, extractor healthy"
+    from "0 facts, extractor failed" in the exact case output SHAPE cannot.
+    """
+
+    def test_fast_empty_array_on_real_events_is_a_fault(
+        self, consolidator, activity_db, probe_db
+    ):
+        """The incident's own numbers, with the output it could have had.
+
+        1500 events, a well-formed `[]`, 6.4s. Against c5ff94c this exits 0
+        with error=None — a silent zero-fact run reported as success. That is
+        what makes this test worth writing.
+        """
+        _pad_to(activity_db, 1500)
+
+        with patch.object(consolidator, "call_claude", return_value=("[]", 6.4)):
+            rc = _run(consolidator, activity_db, probe_db, extra_argv=["--limit", "1500"])
+
+        assert rc == 1, "a 1500-event window answered [] in 6.4s did not read its prompt"
+        [(events, facts, error, elapsed_s)] = _probe_runs_rows(probe_db)
+        assert events == 1500
+        assert facts == 0
+        assert error is not None, "the core regression: this used to be None"
+        assert "implausibly fast" in error
+        assert elapsed_s == pytest.approx(6.4)
+
+    def test_raw_output_is_logged_at_error(self, consolidator, activity_db, probe_db, caplog):
+        import logging
+
+        with caplog.at_level(logging.ERROR, logger="probe.consolidator"):
+            with patch.object(consolidator, "call_claude", return_value=("[]", 6.4)):
+                rc = _run(consolidator, activity_db, probe_db)
+
+        assert rc == 1
+        errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert len(errors) == 1
+        message = errors[0].getMessage()
+        assert "6.4" in message
+        assert "15.0" in message  # the floor it was measured against
+        assert "'[]'" in message  # the raw output, so the next failure names itself
+
+    def test_slow_empty_array_is_still_a_quiet_window(
+        self, consolidator, activity_db, probe_db
+    ):
+        """The guard must not cry wolf on the case it was built to protect."""
+        with patch.object(consolidator, "call_claude", return_value=("[]", 45.0)):
+            rc = _run(consolidator, activity_db, probe_db)
+
+        assert rc == 0
+        [(events, facts, error, elapsed_s)] = _probe_runs_rows(probe_db)
+        assert (events, facts, error) == (1, 0, None)
+        assert elapsed_s == pytest.approx(45.0)
+
+    def test_empty_window_is_exempt_from_the_floor(self, consolidator, tmp_path, probe_db):
+        """Zero events means zero work — it never reaches the CLI at all."""
+        empty_db = tmp_path / "empty_activity.db"
+        conn = sqlite3.connect(str(empty_db))
+        conn.execute(
+            "CREATE TABLE events (event_id TEXT, timestamp REAL, modality TEXT, "
+            "event_type TEXT, app_name TEXT, window_title TEXT, payload TEXT)"
+        )
+        conn.commit()
+        conn.close()
+
+        assert _run(consolidator, empty_db, probe_db) == 0
+
+    @pytest.mark.parametrize(
+        ("elapsed", "expected_exit"),
+        [(0.1, 1), (14.9, 1), (15.0, 0), (60.0, 0)],
+        ids=["instant", "just-under", "at-the-floor", "well-above"],
+    )
+    def test_floor_is_inclusive_at_or_above(
+        self, consolidator, activity_db, probe_db, elapsed, expected_exit
+    ):
+        with patch.object(consolidator, "call_claude", return_value=("[]", elapsed)):
+            rc = _run(consolidator, activity_db, probe_db)
+
+        assert rc == expected_exit
+
+    def test_floor_is_overridable(self, consolidator, activity_db, probe_db):
+        """The floor is a property of THIS prompt size and model; both change."""
+        with patch.object(consolidator, "call_claude", return_value=("[]", 6.4)):
+            rc = _run(consolidator, activity_db, probe_db, extra_argv=["--min-elapsed", "5"])
+        assert rc == 0
+
+    def test_floor_can_be_disabled(self, consolidator, activity_db, probe_db):
+        with patch.object(consolidator, "call_claude", return_value=("[]", 0.1)):
+            rc = _run(consolidator, activity_db, probe_db, extra_argv=["--min-elapsed", "0"])
+        assert rc == 0
+
+    def test_a_fast_run_that_produced_facts_is_untouched(
+        self, consolidator, activity_db, probe_db
+    ):
+        """The floor keys on EMPTY, not on speed. Facts are facts."""
+        canned = json.dumps(
+            [{"entity": "TestApp", "fact": "shipped the fix", "valid_from": 9_999_999_999.0}]
+        )
+        with patch.object(consolidator, "call_claude", return_value=(canned, 1.2)):
+            rc = _run(consolidator, activity_db, probe_db)
+
+        assert rc == 0
+        [(events, facts, error, elapsed_s)] = _probe_runs_rows(probe_db)
+        assert (facts, error) == (1, None)
+
+
+class TestOperatorVisibleLine:
+    """"OK: 0 new facts" is what let this defect hide for eight days.
+
+    The line a scheduled wrapper's operator reads has to say WHICH zero-fact
+    outcome this was, not just report a count.
+    """
+
+    def test_quiet_window_says_so_and_names_the_latency(
+        self, consolidator, activity_db, probe_db, capsys
+    ):
+        with patch.object(consolidator, "call_claude", return_value=("[]", 42.0)):
+            rc = _run(consolidator, activity_db, probe_db)
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "quiet window" in out
+        assert "extractor healthy" in out
+        assert "42.0s" in out
+
+    def test_a_real_result_still_reads_as_before(
+        self, consolidator, activity_db, probe_db, capsys
+    ):
+        canned = json.dumps(
+            [{"entity": "TestApp", "fact": "shipped the fix", "valid_from": 9_999_999_999.0}]
+        )
+        with patch.object(consolidator, "call_claude", return_value=(canned, 33.0)):
+            rc = _run(consolidator, activity_db, probe_db)
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "OK: 1 events -> 1 new facts" in out
+        assert "quiet window" not in out
