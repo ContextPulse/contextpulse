@@ -259,6 +259,10 @@ class TestSpinboxRanges:
         for call in spin_calls:
             keys = [kw.value.value for kw in call.keywords if kw.arg == "config_key"]
             assert keys and keys[0] in _DEFAULTS, ast.dump(call)
+            # And in _CLAMPS, or _spin_range raises KeyError while building
+            # the dialog -- which show_settings() swallows to protect the
+            # daemon, so the whole Settings window would simply never appear.
+            assert keys[0] in settings._CLAMPS, f"spin key {keys[0]!r} has no clamp"
 
 
 class TestAsFloat:
