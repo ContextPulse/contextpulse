@@ -46,6 +46,36 @@ logging.basicConfig(
 )
 logger = logging.getLogger("probe.consolidator")
 
+# Below this many seconds, an events>0 run did not read its prompt, whatever
+# its output looked like. Measured over every run in
+# logs/probe_consolidator.log: the eleven zero-fact runs on non-empty windows
+# cluster at 5.1-7.7s, and every fact-producing run at 31.8-63.7s -- disjoint
+# bands, >4x apart, with no sample between them. 15s sits in the empty middle
+# (~1.9x above the fast band's ceiling, ~2.1x below the slow band's floor).
+#
+# This closes the one case the ParseOutcome work could not: a usage-limit or
+# quota reply that happens to be a well-formed empty array parses as EMPTY,
+# and output SHAPE alone cannot tell it from a genuinely quiet window. Latency
+# can -- a real quiet window still costs the model a full read of a ~316KB /
+# ~80K-token prompt before it can answer []. Overridable because the floor is
+# a property of THIS prompt size and model, and both will change.
+MIN_PLAUSIBLE_ELAPSED_S = 15.0
+
+# ...and the floor only MEANS anything for a prompt big enough to justify it.
+# The 15s above is the cost of reading a ~316KB / ~80K-token prompt, and the
+# prompt is built from the window's events (build_extraction_prompt), so a
+# 4-event window is a few KB and the model legitimately answers [] in ~4s.
+# Gating the floor on `len(events) > 0` would record that healthy run as
+# error="empty result returned implausibly fast" and exit 1 -- the mirror of
+# the defect this whole change exists to fix, and the fastest way to train the
+# signal to be ignored. So gate on the thing the 15s was measured against.
+#
+# 50,000 chars is ~1/6th of the 316KB prompt whose answer took 42-64s. A
+# prompt at or above it is large enough that a single-digit-second reply
+# cannot have involved reading it; below it, no honest inference is available
+# from latency alone and the run is taken at face value.
+MIN_PROMPT_CHARS_FOR_FLOOR = 50_000
+
 
 def call_claude(prompt: str, timeout: int = 600) -> tuple[str, float]:
     """Invoke the Claude CLI headlessly. Return (stdout, elapsed_seconds). Fail loud.
@@ -98,6 +128,26 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--probe-db", default=str(probe.default_probe_db()))
     ap.add_argument("--limit", type=int, default=1500, help="Max events per pass")
     ap.add_argument("--timeout", type=int, default=600, help="Claude CLI timeout (s)")
+    ap.add_argument(
+        "--min-elapsed",
+        type=float,
+        default=MIN_PLAUSIBLE_ELAPSED_S,
+        help=(
+            "Seconds below which an empty result on a non-empty window is "
+            "treated as an extractor failure rather than a quiet window "
+            f"(default: {MIN_PLAUSIBLE_ELAPSED_S:.0f}s). Set 0 to disable."
+        ),
+    )
+    ap.add_argument(
+        "--min-prompt-chars",
+        type=int,
+        default=MIN_PROMPT_CHARS_FOR_FLOOR,
+        help=(
+            "Prompt size at or above which --min-elapsed applies. Below it a "
+            "fast empty answer is plausible and is taken at face value "
+            f"(default: {MIN_PROMPT_CHARS_FOR_FLOOR})."
+        ),
+    )
     ap.add_argument("--dry-run", action="store_true", help="Print prompt, no LLM call")
     args = ap.parse_args(argv)
 
@@ -178,6 +228,39 @@ def main(argv: list[str] | None = None) -> int:
             output_bytes,
         )
         if outcome is probe.ParseOutcome.EMPTY:
+            if len(prompt) >= args.min_prompt_chars and elapsed < args.min_elapsed:
+                # A big prompt still costs the model a full read before it can
+                # answer []. Returning [] in single-digit seconds means it
+                # never got there -- a usage-limit reply, a truncated session,
+                # a refused auth handshake. Record it as a fault so the run is
+                # not counted as healthy coverage. A SMALL prompt says nothing
+                # either way and is taken at face value.
+                logger.error(
+                    "Extraction returned a well-formed EMPTY array after only "
+                    "%.1fs on a %d-char prompt (%d events, floor %.1fs above "
+                    "%d chars) — too fast to have read it. Treating as "
+                    "extractor failure, not a quiet window. First 800 chars: %r",
+                    elapsed,
+                    len(prompt),
+                    len(events),
+                    args.min_elapsed,
+                    args.min_prompt_chars,
+                    (output.strip()[:800] if output and output.strip() else "(empty output)"),
+                )
+                error_msg = (
+                    f"empty result returned implausibly fast: {elapsed:.1f}s "
+                    f"< {args.min_elapsed:.1f}s floor on a {len(prompt)}-char "
+                    f"prompt (events={len(events)}, {output_bytes} bytes); "
+                    f"see log for raw excerpt"
+                )
+                probe.record_run(
+                    pconn,
+                    events=len(events),
+                    facts=0,
+                    error=error_msg[:990],
+                    elapsed_s=elapsed,
+                )
+                return 1
             logger.info(
                 "Valid empty result — legitimate quiet window (%d events, %.1fs), not a fault.",
                 len(events),
@@ -186,7 +269,16 @@ def main(argv: list[str] | None = None) -> int:
         n = probe.write_facts(pconn, facts)
         probe.record_run(pconn, events=len(events), facts=n, error=None, elapsed_s=elapsed)
         logger.info("Wrote %d new facts to %s", n, args.probe_db)
-        print(f"OK: {len(events)} events -> {n} new facts written to {args.probe_db}")
+        # The operator-visible line must distinguish the two zero-fact
+        # outcomes, not just report a count. "OK: 0 new facts" is what let this
+        # defect hide for eight days.
+        if n == 0 and outcome is probe.ParseOutcome.EMPTY:
+            print(
+                f"OK (quiet window): {len(events)} events -> 0 facts; "
+                f"extractor healthy, responded in {elapsed:.1f}s"
+            )
+        else:
+            print(f"OK: {len(events)} events -> {n} new facts written to {args.probe_db}")
         return 0
     finally:
         pconn.close()
