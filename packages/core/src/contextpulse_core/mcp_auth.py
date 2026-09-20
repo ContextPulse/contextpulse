@@ -196,6 +196,52 @@ def parse_icacls_aces(stdout: str, path: Path | str) -> list[str]:
     return aces
 
 
+# Principals whose presence on the token file is not a finding: they already
+# have unrestricted access to every file on the machine, and denying them
+# would not change that -- SYSTEM and the local Administrators group can take
+# ownership at will, and OWNER RIGHTS is the file's own owner, which is us.
+# The module docstring's threat model is "any local caller that is not this
+# user"; none of these is that.
+#
+# They turn up as EXPLICIT (non-inherited) ACEs whenever the parent directory
+# has no inheritable ACEs: Windows then stamps the creating process's default
+# DACL onto the new file, so `/inheritance:r` has nothing to strip and
+# `/grant:r <user>:F` replaces only the user's own entry. Reproduced locally
+# against a directory with inheritance removed, and it is what windows-latest
+# does to a pytest tmp dir -- four ACEs there, and PR #17 went red on a file
+# that was correctly restricted.
+ACL_TOLERATED = ("nt authority\\system", "builtin\\administrators", "owner rights")
+
+# Present on the token file means the restriction did NOT take.
+ACL_FORBIDDEN = ("builtin\\users", "everyone", "authenticated users")
+
+
+def acl_complaints(aces: list[str], user: str) -> list[str]:
+    """What is wrong with this token file's ACL. Empty list means nothing.
+
+    Replaces a `len(aces) == 1` check, which was a property of one machine's
+    ACL layout rather than of the file's reachability, and which failed on a
+    correctly restricted file. Inherited ACEs are rejected here because an
+    inherited entry is the parent's grant showing through: whatever the parent
+    lets in, the token file lets in.
+    """
+    complaints: list[str] = []
+    user_seen = False
+    for ace in aces:
+        low = ace.lower()
+        if "(i)" in low:
+            complaints.append(f"inherited ACE: {ace}")
+        elif any(bad in low for bad in ACL_FORBIDDEN):
+            complaints.append(f"broad principal: {ace}")
+        elif user and user.lower() in low:
+            user_seen = True
+        elif not any(ok in low for ok in ACL_TOLERATED):
+            complaints.append(f"unexpected principal: {ace}")
+    if not user_seen:
+        complaints.append(f"no ACE for {user or '<unset USERNAME>'}: {aces}")
+    return complaints
+
+
 def _restrict_posix(path: Path) -> bool:
     os.chmod(path, 0o600)
     mode = stat.S_IMODE(os.stat(path).st_mode)
@@ -230,16 +276,11 @@ def _restrict_windows(path: Path) -> bool:
         logger.exception("icacls failed on %s; token file permissions are NOT restricted", path)
         return False
 
-    aces = parse_icacls_aces(shown, path)
-    forbidden = ("(I)", "builtin\\users", "everyone", "authenticated users")
-    ok = (
-        len(aces) == 1
-        and user.lower() in aces[0].lower()
-        and not any(bad in aces[0].lower() for bad in forbidden)
-    )
-    if not ok:
-        logger.error("Token file %s has unexpected ACL: %s", path, aces)
-    return ok
+    complaints = acl_complaints(parse_icacls_aces(shown, path), user)
+    if complaints:
+        logger.error("Token file %s has unexpected ACL: %s", path, complaints)
+        return False
+    return True
 
 
 def restrict_to_user(path: Path) -> bool:

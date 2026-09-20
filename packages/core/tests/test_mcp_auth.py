@@ -81,6 +81,19 @@ def _post(client, headers=None):
     return client.post("/mcp", json=RPC_TOOLS_LIST, headers=merged)
 
 
+def _icacls_aces(target: Path) -> list[str]:
+    """The live ACEs on a path, parsed by the production parser."""
+    out = subprocess.run(
+        ["icacls", str(target)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
+    ).stdout
+    return mcp_auth.parse_icacls_aces(out, target)
+
+
+def _acl_complaints_for(target: Path) -> list[str]:
+    return mcp_auth.acl_complaints(_icacls_aces(target), os.environ.get("USERNAME", ""))
+
+
 # ── 1-3: the core 401/401/200 ladder ─────────────────────────────────
 
 def test_missing_authorization_header_is_401(auth_client):
@@ -503,11 +516,7 @@ def test_a_replaced_empty_token_file_is_still_permission_restricted(tmp_path):
     target.write_text("", encoding="utf-8")
     mcp_auth.load_or_create_token(target)
     if sys.platform == "win32":
-        out = subprocess.run(
-            ["icacls", str(target)],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
-        ).stdout
-        assert len(mcp_auth.parse_icacls_aces(out, target)) == 1
+        assert _acl_complaints_for(target) == []
     else:
         assert stat.S_IMODE(os.stat(target).st_mode) == 0o600
 
@@ -595,20 +604,78 @@ def test_token_file_is_0600_on_posix(tmp_path):
 
 @pytest.mark.windows_only
 @pytest.mark.skipif(sys.platform != "win32", reason="icacls is Windows-only")
-def test_token_file_acl_is_user_only_on_windows(tmp_path):
+def test_token_file_acl_admits_no_ordinary_other_user_on_windows(tmp_path):
     target = tmp_path / "mcp_token"
     mcp_auth.load_or_create_token(target)
 
-    out = subprocess.run(
-        ["icacls", str(target)],
-        capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
-    ).stdout
-    aces = mcp_auth.parse_icacls_aces(out, target)
-
-    assert len(aces) == 1, f"expected exactly one ACE, got {aces}"
-    assert os.environ["USERNAME"].lower() in aces[0].lower(), aces
+    aces = _icacls_aces(target)
+    assert mcp_auth.acl_complaints(aces, os.environ["USERNAME"]) == [], aces
+    assert any(os.environ["USERNAME"].lower() in ace.lower() for ace in aces), aces
     for bad in ("(I)", "BUILTIN\\Users", "Everyone", "Authenticated Users"):
         assert all(bad.lower() not in ace.lower() for ace in aces), f"{bad} in {aces}"
+
+
+@pytest.mark.windows_only
+@pytest.mark.skipif(sys.platform != "win32", reason="icacls is Windows-only")
+def test_a_parent_with_no_inheritable_aces_is_still_a_restricted_token(tmp_path):
+    """The windows-latest CI shape, reproduced.
+
+    When the parent directory has no inheritable ACEs, Windows stamps the
+    creating process's DEFAULT DACL onto the new file -- user, SYSTEM,
+    Administrators, and on the runner OWNER RIGHTS -- as explicit entries.
+    `/inheritance:r` has nothing to strip and `/grant:r <user>:F` replaces
+    only the user's own ACE, so the old `len(aces) == 1` check called a
+    correctly restricted file unrestricted: it logged ERROR in production and
+    failed two tests on every windows-latest job in PR #17.
+    """
+    parent = tmp_path / "no_inheritance"
+    parent.mkdir()
+    subprocess.run(
+        ["icacls", str(parent), "/inheritance:r", "/grant:r", f"{os.environ['USERNAME']}:F"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
+    )
+
+    target = parent / "mcp_token"
+    assert mcp_auth.load_or_create_token(target)
+
+    aces = _icacls_aces(target)
+    assert len(aces) > 1, (
+        f"this box did not reproduce the runner's layout (got {aces}); the "
+        "test proves nothing here"
+    )
+    assert mcp_auth.acl_complaints(aces, os.environ["USERNAME"]) == [], aces
+    assert mcp_auth.restrict_to_user(target) is True
+
+
+@pytest.mark.parametrize(
+    ("aces", "expect_ok"),
+    [
+        # This box, a directory that does inherit.
+        (["CORSAIRAI\\david:(F)"], True),
+        # A parent with no inheritable ACEs: the process default DACL, explicit.
+        (["CORSAIRAI\\david:(F)", "BUILTIN\\Administrators:(F)",
+          "NT AUTHORITY\\SYSTEM:(F)"], True),
+        # The windows-latest 3.12 job on PR #17, verbatim apart from the
+        # account name (runnervmvmocb\runneradmin) swapped for this test's user.
+        (["runnervmvmocb\\david:(F)", "NT AUTHORITY\\SYSTEM:(F)",
+          "BUILTIN\\Administrators:(F)", "OWNER RIGHTS:(F)"], True),
+        # The cases the check exists for, none of which may pass.
+        (["CORSAIRAI\\david:(F)", "BUILTIN\\Users:(RX)"], False),
+        (["CORSAIRAI\\david:(F)", "Everyone:(F)"], False),
+        (["CORSAIRAI\\david:(F)", "NT AUTHORITY\\Authenticated Users:(M)"], False),
+        (["CORSAIRAI\\david:(I)(F)"], False),           # inheritance never removed
+        (["CORSAIRAI\\someone_else:(F)"], False),       # another ordinary account
+        (["NT AUTHORITY\\SYSTEM:(F)"], False),          # we cannot read our own token
+        ([], False),
+    ],
+)
+def test_acl_complaints_accepts_machine_principals_and_nothing_else(aces, expect_ok):
+    """The acceptance rule, off Windows too, against real ACE text.
+
+    Frozen output rather than a live icacls call: the runner's four-ACE list
+    is the input that broke CI, and no other machine reproduces it on demand.
+    """
+    assert (mcp_auth.acl_complaints(aces, "david") == []) is expect_ok
 
 
 def test_parse_icacls_aces_handles_real_output_shape():
