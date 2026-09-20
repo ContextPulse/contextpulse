@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import subprocess
 import sys
@@ -74,9 +75,47 @@ def confirmed_save_count(
     return sum(1 for r in rows if isinstance(r, dict) and r.get("category") == "phase0-save")
 
 
-def format_report(summary: dict[str, Any], saves: int | None, probe_db: Path) -> str:
+def since_to_epoch(since: str) -> float | None:
+    """Turn a --since date into the inclusive unix epoch usage_summary wants.
+
+    The journal compares its ISO-8601 UTC ``ts`` column as a STRING against the
+    raw --since value, so `--since 2026-09-19` means 2026-09-19T00:00:00Z. The
+    tool-call side must resolve the same instant or the two halves of this
+    report would disagree on the boundary -- which is the defect this function
+    exists to close, one date resolved two ways instead of not at all.
+
+    Returns None for an unparseable value, which counts everything: the report
+    then says so on its window line rather than silently narrowing.
+    """
+    try:
+        d = dt.datetime.fromisoformat(since.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=dt.timezone.utc)
+    return d.timestamp()
+
+
+def format_report(
+    summary: dict[str, Any],
+    saves: int | None,
+    probe_db: Path,
+    since: str | None = None,
+    since_ts: float | None = None,
+) -> str:
+    if since is None:
+        window = "  Window:                all time (no --since)"
+    elif since_ts is None:
+        window = (
+            f"  Window:                all time -- --since {since!r} is not a date "
+            "this report could parse, so NEITHER half was filtered"
+        )
+    else:
+        window = f"  Window:                {since} 00:00:00Z onwards, BOTH halves"
     lines = [
         f"Phase 0 attribution report -- probe.db: {probe_db}",
+        "",
+        window,
         "",
         f"  Tool calls total:      {summary['total_calls']}",
         f"  Tool calls w/ hits:    {summary['calls_with_hits']}",
@@ -106,7 +145,8 @@ def format_report(summary: dict[str, Any], saves: int | None, probe_db: Path) ->
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else "")
     ap.add_argument("--probe-db", default=None, help="Path to probe.db (default: probe.default_probe_db())")
-    ap.add_argument("--since", default="2026-07-07", help="Journal --since date for confirmed saves")
+    ap.add_argument("--since", default="2026-07-07",
+                help="Inclusive UTC date filtering BOTH halves: confirmed saves and tool calls")
     ap.add_argument("--project", default="ContextPulse")
     args = ap.parse_args(argv)
 
@@ -120,12 +160,13 @@ def main(argv: list[str] | None = None) -> int:
 
     conn = probe.connect_probe(db_path)
     try:
-        summary = probe.usage_summary(conn)
+        since_ts = since_to_epoch(args.since)
+        summary = probe.usage_summary(conn, since_ts=since_ts)
     finally:
         conn.close()
 
     saves = confirmed_save_count(project=args.project, since=args.since)
-    print(format_report(summary, saves, db_path))
+    print(format_report(summary, saves, db_path, since=args.since, since_ts=since_ts))
     return 0
 
 

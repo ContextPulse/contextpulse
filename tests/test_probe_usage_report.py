@@ -112,3 +112,66 @@ class TestMainEndToEnd:
         assert "facts_about: 1 calls, 1 with hits" in out
         assert "context_at: 1 calls, 0 with hits" in out
         assert "Confirmed saves (journal, category=phase0-save): 0" in out
+
+
+class TestSinceAppliesToBothHalves:
+    """One date on the report must mean one window.
+
+    `--since` reached the journal query and not the tool-call aggregate, so the
+    report printed a windowed save count beside an all-time call count under a
+    single heading. The Phase 0 restart gate is read off this report as a count
+    of calls in a window, which the instrument could not express.
+    """
+
+    def test_since_resolves_to_utc_midnight_inclusive(self):
+        mod = _load_report_module()
+        # The journal compares its ISO-8601 UTC ts column as a string, so
+        # `--since 2026-09-19` means this exact instant on that side too.
+        assert mod.since_to_epoch("2026-09-19") == 1789776000.0
+
+    def test_unparseable_since_is_none_not_a_crash_and_not_a_silent_zero(self):
+        mod = _load_report_module()
+        assert mod.since_to_epoch("last tuesday") is None
+
+    def test_since_filters_the_tool_call_count(self, tmp_path, capsys):
+        mod = _load_report_module()
+        db = tmp_path / "probe.db"
+        conn = probe.connect_probe(db)
+        conn.execute(
+            "INSERT INTO tool_usage (called_at, tool, query, hit_count)"
+            " VALUES (?, 'facts_about', 'old', 1)", (1787529600.0,),   # 2026-08-24T00:00:00Z
+        )
+        conn.execute(
+            "INSERT INTO tool_usage (called_at, tool, query, hit_count)"
+            " VALUES (?, 'facts_about', 'new', 1)", (1789862400.0,),   # 2026-09-20T00:00:00Z
+        )
+        conn.commit()
+        conn.close()
+
+        with patch("subprocess.run", return_value=_FakeCompleted(0, "[]")):
+            assert mod.main(["--probe-db", str(db), "--since", "2026-07-07"]) == 0
+        assert "Tool calls total:      2" in capsys.readouterr().out
+
+        with patch("subprocess.run", return_value=_FakeCompleted(0, "[]")):
+            assert mod.main(["--probe-db", str(db), "--since", "2026-09-19"]) == 0
+        out = capsys.readouterr().out
+        assert "Tool calls total:      1" in out, (
+            "the tool-call half ignored --since; this is the exact condition "
+            "recorded on cp-probe-usage-report-since-ignores-tool-calls"
+        )
+        assert "2026-09-19 00:00:00Z onwards, BOTH halves" in out
+
+    def test_report_says_so_when_it_could_not_apply_the_window(self, tmp_path, capsys):
+        """An unparseable date must not read as a clean all-time report -- the
+        reader has to be able to tell 'no window asked for' from 'window asked
+        for and not applied'."""
+        mod = _load_report_module()
+        db = tmp_path / "probe.db"
+        conn = probe.connect_probe(db)
+        probe.record_usage(conn, "facts_about", "Foo", hit_count=1)
+        conn.close()
+        with patch("subprocess.run", return_value=_FakeCompleted(0, "[]")):
+            assert mod.main(["--probe-db", str(db), "--since", "notadate"]) == 0
+        out = capsys.readouterr().out
+        assert "NEITHER half was filtered" in out
+        assert "Tool calls total:      1" in out

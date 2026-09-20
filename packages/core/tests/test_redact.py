@@ -499,3 +499,61 @@ class TestPayloadKeyCoverage:
         original = {"transcript": secret}
         redact_payload(original)
         assert original["transcript"] == secret
+
+
+class TestShortPayloadJwt:
+    """A JWT whose claims segment is short was not redacted at all.
+
+    Found 2026-09-20 by checking the 0.1.1 advisory's own published claim
+    ("bearer tokens and JWTs" are covered) against the released pattern table
+    rather than against the test fixtures. Every JWT in this file carries a
+    segment of 20+ characters after ``eyJ``, and the pattern required that of
+    all three segments -- so the suite could never see the gap.
+
+    ``{"sub":"1"}`` encodes to ``eyJzdWIiOiIxIn0``: twelve characters after the
+    prefix. A service issuing subject-only tokens, or any JOSE header without
+    the ``typ`` claim, produced a token that passed through capture verbatim.
+    The three-segment shape with ``eyJ`` (base64url for ``{"``) opening two of
+    them is what makes the pattern specific; the per-segment length was never
+    the thing carrying the specificity.
+    """
+
+    # Synthetic tokens. Signature bytes are filler, not a real signature.
+    MINIMAL_CLAIMS = (
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"   # {"alg":"HS256","typ":"JWT"}
+        ".eyJzdWIiOiIxIn0"                        # {"sub":"1"}
+        ".zqshortjwtneedle0123456789"
+    )
+    MINIMAL_HEADER = (
+        "eyJhbGciOiJub25lIn0"                     # {"alg":"none"}
+        ".eyJzdWIiOiJ6cXNob3J0aGVhZGVyIn0"        # {"sub":"zqshortheader"}
+        ".zqshortheaderneedle012345"
+    )
+
+    def test_short_claims_segment_is_redacted(self):
+        cleaned, counts = redact_with_counts(f"token {self.MINIMAL_CLAIMS} end")
+        assert "JWT" in counts, "a subject-only JWT matched nothing"
+        assert "zqshortjwtneedle0123456789" not in cleaned
+        assert cleaned.startswith("token ") and cleaned.endswith(" end")
+
+    def test_short_header_segment_is_redacted(self):
+        cleaned, counts = redact_with_counts(f"token {self.MINIMAL_HEADER} end")
+        assert "JWT" in counts, "an alg-only JOSE header matched nothing"
+        assert "zqshortheaderneedle012345" not in cleaned
+
+    def test_glued_short_jwt_is_redacted(self):
+        assert "zqshortjwtneedle0123456789" not in redact_sensitive(
+            f"authorization:{self.MINIMAL_CLAIMS}"
+        )
+
+    def test_prose_containing_eyj_is_not_redacted(self):
+        """The bound that was doing no work must not be replaced by one that
+        fires on ordinary text. Three dot-separated base64url runs, two of them
+        opening with ``eyJ``, is the shape -- not the length."""
+        for benign in (
+            "monkeyJoseph.eyJoined.together",
+            "they.eyJ.no",
+            "see eyJust.eyJoking around",
+            "file.eyJson.eyJson",
+        ):
+            assert redact_sensitive(benign) == benign, f"false positive on {benign!r}"

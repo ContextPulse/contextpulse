@@ -81,36 +81,6 @@ hand, and turn every confirmed repro into a permanent regression vector. See
 
 ---
 
-### [2026-09-19] A gate that measures an experiment nobody ran is not evidence
-
-**Context:** The Phase 0 wedge probe reached its documented STOP on 2026-08-20 at
-"0 of 3 attributed saves." That number had been treated as a verdict on whether the
-knowledge graph earns its keep.
-
-**Problem:** It was never a verdict on anything. Running the attribution instrument
-showed `tool_usage` held **one row for all time** — `facts_about('1Password')`,
-2026-08-24 — against 1000 accumulated facts. `facts_about` and `context_at` were
-exposed over MCP and working, but `using-contextpulse` (the skill that documents
-~35 ContextPulse tools) never mentioned either. Its only two matches for
-`context_at` were `get_context_at`, the unrelated Sight screen-frame tool. No agent
-had any way to learn the recall tools existed, so the experiment ran for two months
-with no treatment arm.
-
-Compounding it: `PROJECT_CONTEXT.md` listed "build the attribution instrument" as the
-highest-value *unstarted* work. It had been built, wired into every real call,
-covered by tests, and was reporting correctly the whole time.
-
-**Fix/Pattern:** Three habits, in order of how much they would have saved:
-1. **Run the instrument before trusting the number it produces.** One command
-   separated "recall is useless" from "recall was never invoked" — opposite problems
-   with opposite fixes.
-2. **A capability nobody is routed to does not exist.** Shipping an MCP tool is not
-   the same as making it reachable. The skill is the front door; a tool absent from it
-   is unreachable no matter how well it works.
-3. **A gate must distinguish "not attempted" from "attempted and failed."** The
-   restart carries a two-stage gate for exactly this: a precondition on call count
-   before any judgement about save count.
-
 ### [2026-09-19] Specifying a gate against a report reading the report cannot produce
 
 **Context:** Having just diagnosed the above, I wrote the replacement gate as
@@ -163,47 +133,91 @@ instead of reasoning about what the scheduler might do differently. It cost one 
 and overturned a written conclusion. Corollary: never wait for the next scheduled run to
 test a hypothesis you can trigger now.
 
-### [2026-09-19] A deliberate version cap needs an ignore rule, or a bot will undo it
+---
 
-**Context:** Widened Dependabot to watch the eight `packages/*/pyproject.toml` manifests,
-which had never been monitored at all.
+### [2026-09-19] Two config systems coexisting means every settings toggle can be a placebo
 
-**Problem:** Within ten minutes it opened a PR raising `mcp` from `>=1.0,<2` to `<3`
-across six manifests. That cap exists because `mcp` 2.0.0 removed
-`mcp.server.fastmcp` — which this project uses — and broke every CI job when it shipped.
-Merging would have re-broken the workspace.
+**Context:** The Settings dialog wrote `config.json`. The capture daemon never imported
+that module — it read an env-var-only config frozen at process start.
 
-**Fix/Pattern:** `versioning-strategy` does not express intent. Both `auto` and
-`increase-if-necessary` propose widening a range when a release lands outside it, which
-is right for an accidental bound and wrong for a deliberate one. Only an explicit
-`ignore` rule encodes "this cap is a guard" — and **it must use `versions:`, not
-`update-types:`**:
+**Problem:** Every toggle in the dialog was a placebo. It saved, it showed the new value
+on reopen, and it changed nothing in the process doing the capturing. Six fields were
+fully dead, twelve misleading, five partial. The worst was a blocklist intended to stop
+capture of password managers and 2FA prompts: whatever the user typed, the list was
+empty in the code path that actually ran. Nothing failed, nothing logged, and the UI
+confirmed the setting back to the user every time.
 
-```yaml
-ignore:
-  - dependency-name: "mcp"
-    versions: [">=2.0.0"]                              # works
-    # update-types: ["version-update:semver-major"]    # does NOT work here
-```
+**Fix/Pattern:** When two config systems coexist, the question is never "does the write
+work" — it is **"does the process that acts on this value read this file?"** Write a
+test that sets a value through the *user-facing* path and asserts the *consumer* sees
+it, for every field. That test is what makes a toggle real; a round-trip test through
+the writer proves only that the writer round-trips. And treat a settings UI shipped
+against an unread config as a privacy defect rather than a UI bug, because a control
+that claims to stop data collection and does not is worse than no control at all.
 
-**This correction is itself the lesson.** The `update-types` form was written first, folded
-into a skill as settled guidance, and was wrong. Proven as a controlled pair — same repo,
-same dependencies, same trigger, only the form differing:
+---
 
-| Dependabot run | Ignore form in its job definition | Outcome |
-|---|---|---|
-| 22:37 | `update-types: semver-major`, `version-requirement: null` | **opened the PR anyway** |
-| 23:19 | `version-requirement: >=2.0.0` | **no PR** |
+### [2026-09-19] Redaction belongs at write, at the boundary, AND before any egress — one chokepoint is a chokepoint for one path
 
-A range-widening update on a library with no lockfile has no single resolved "current
-version" for a semver comparison to classify against, so the `update-types` filter never
-engages.
+**Context:** The project had a working `redact_sensitive()` with a good pattern table,
+and a reasonable belief that captured text was scrubbed.
 
-**Verify a suppression rule by observing the thing not happen, or by reading the consumer's
-loaded state — never by the fact that the file now contains the rule:**
-`gh run view <id> --log | grep "Job definition"` → `job.ignore-conditions`.
+**Problem:** It had exactly one caller. Screen-OCR text was redacted; clipboard, voice
+transcripts, keystroke burst and correction text, memory and the knowledge-ingest
+bridge were not. The function's existence was doing the reassuring, and nobody had
+asked which paths reached it. A second surface was worse because it was invisible:
+captured text was also being sent to an external model for summarisation, which is
+egress that no storage-level fix touches.
 
-Two related traps: closing a *grouped* PR creates no ignore at all, and
-`@dependabot ignore this major version` does not work on one either — Dependabot says so in
-its own close comment. And `versioning-strategy: widen` is **not valid for pip**; an invalid
-value makes Dependabot reject the *entire file*, silently disabling every other setting in it.
+**Fix/Pattern:** Redact in three places, deliberately, and say why each exists.
+**(1) At write**, before persistence, before truncation — patterns have minimum
+lengths, so a token split by a size cap matches nothing and its head gets stored — and
+before any dedupe hash, or the hash becomes a brute-force oracle on short secrets.
+**(2) At the read boundary**, because rows captured before the fix are still on disk.
+**(3) Before egress**, for anything leaving the process. Then enumerate every
+stored-text field and check each one individually; the audit question is *"which
+fields reach the redactor"*, never *"is there a redactor."* Keeping one shared pattern
+table in the lowest common package is what makes (1)–(3) agree instead of drifting.
+
+---
+
+### [2026-09-19] A search over raw text is an oracle even when the output is redacted
+
+**Context:** After redaction was applied to stored values and to tool output, search
+tools still matched their query against the *raw* stored text and returned a count.
+
+**Problem:** That count is an extraction channel. Query a one-character prefix, read
+the count, extend by one character, repeat — a secret is recoverable character by
+character without ever appearing in any output the redactor sees. A planted key was
+recovered 13 characters deep this way. Every output-side test passed throughout,
+because the leak is in the *response to a query*, not in the response body.
+
+**Fix/Pattern:** Redacting output is not sufficient for any interface that answers
+questions *about* data. Ask the same question of the redacted text, through the same
+tokenizer the index uses — a tokenizer mismatch quietly reintroduces the channel, so
+the filter must share the tokenizer rather than approximate it. Generally: when you
+add a control, enumerate what still observes the uncontrolled value — counts,
+timings, lengths, existence checks, error messages — and treat each as an output.
+
+---
+
+### [2026-09-19] Count a public claim against a real client, not against a catalog
+
+**Context:** The README, the project docs and the marketing site all advertised a tool
+count. It had been carried forward, never measured.
+
+**Problem:** It was wrong — the live server exposes 37 tools, not the "~35" every
+document claimed. A wider audit of public claims found five outright false, three
+overstated and two unverifiable. Two of the false ones were the most specific and
+therefore the most damaging: a named technical feature advertised as shipped, which
+covered one capture path and not the rest, and an absolute statement about data
+never leaving the machine which a cloud-backed client makes false by its own
+behaviour.
+
+**Fix/Pattern:** Any number in public-facing copy needs a command that regenerates it
+and a date on the last time it was run. Count by connecting a real client and
+enumerating what it receives — not by counting decorators, registry entries, or docs,
+all of which can drift from what is served. And audit specific claims first: a vague
+slogan ages badly, but a falsifiable one ("N tools", "feature X redacts before
+storage") is what a reader can check and what a reporter will check for you.
+

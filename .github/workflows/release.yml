@@ -1,5 +1,15 @@
 name: Release
 
+# Builds every workspace package on a version tag and attaches the wheels and
+# sdists to the GitHub release for that tag. GitHub Releases is the only
+# distribution channel: the PyPI project name `contextpulse` belongs to an
+# unrelated project (registered 2026-03-28 by a different author), so the
+# former PyPI publish step could never succeed and was removed after the
+# v0.1.1 run failed with `invalid-publisher`. If PyPI ever becomes a channel
+# it will be under the `contextpulse-*` distribution names, each of which
+# needs its own trusted publisher registered on pypi.org before a publish
+# step is added back.
+
 on:
   push:
     tags:
@@ -15,12 +25,11 @@ jobs:
     permissions:
       contents: read
 
-  build-and-publish:
+  build-and-attach:
     needs: [security]
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # for creating GitHub releases
-      id-token: write   # for PyPI trusted publishing
+      contents: write   # for attaching files to the GitHub release
 
     steps:
       - uses: actions/checkout@v7
@@ -35,20 +44,16 @@ jobs:
 
       - name: Build all packages
         run: |
-          for pkg in packages/core packages/screen packages/voice packages/touch packages/project packages/memory; do
+          set -e
+          for pkg in packages/core packages/screen packages/voice packages/touch packages/project packages/memory packages/knowledge; do
             echo "Building $pkg..."
-            python -m build $pkg --outdir dist/
+            python -m build "$pkg" --outdir dist/
           done
 
       - name: Check distributions
         run: twine check dist/*
 
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: dist/
-
-      - name: Create GitHub Release
+      - name: Attach distributions to the GitHub release
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
