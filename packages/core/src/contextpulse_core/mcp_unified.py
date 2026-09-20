@@ -251,6 +251,26 @@ def main():
 
     _register_all()
 
+    # Sweep pre-redaction rows before serving. THIS is the live transport
+    # (mcp-surface.md); contextpulse_sight.mcp_server.main() is a standalone
+    # stdio server that the shipped configuration does not start, and the only
+    # other sweep trigger on this side -- _get_event_bus() -- is reached solely
+    # by two Pro-gated tools. So on a machine where the daemon is not running,
+    # nothing swept at all (review S-5).
+    #
+    # Backgrounded, and that is safe rather than a compromise: the sweep is
+    # defence in depth, not the control. Every search surface now matches over
+    # REDACTED text and every tool redacts what it renders, so a store that has
+    # not been swept yet -- or whose sweep failed outright -- cannot serve a
+    # secret through this server. ensure_migrated is idempotent and keeps a
+    # marker per store, so calling it from both processes costs nothing.
+    try:
+        from contextpulse_core.daemon import start_secret_migration
+
+        start_secret_migration()
+    except Exception:
+        logger.warning("secret migration skipped at MCP startup", exc_info=True)
+
     if args.stdio:
         # stdio stays unauthenticated by design: the client spawns this
         # process itself, as the same user, over a private pipe. A token

@@ -16,7 +16,7 @@ import threading
 import time
 from typing import Any, Callable
 
-from contextpulse_core.redact import redact_payload
+from contextpulse_core.redact import redact_payload, redacted_text_digest
 from contextpulse_core.spine import (
     ContextEvent,
     EventType,
@@ -466,12 +466,16 @@ class VoiceModule(ModalityModule):
             # queries activity.db for this event ~0.1s later. Emitting after
             # paste_text() returns (~0.5s later) means the detector always
             # queries before the row exists, so no correction is ever matched.
-            # Hashed on the text that is actually PASTED, not on the redacted
-            # copy. Touch's CorrectionDetector hashes the clipboard contents and
-            # looks for a transcription event carrying the same digest; hashing
-            # the redacted value would break that correlation for exactly the
-            # dictations that contained a secret.
-            paste_hash = hashlib.sha256(text.encode()).hexdigest()[:16]
+            # Hashed on the REDACTED rendering. This used to hash the raw text
+            # to keep the correlation working, which made the stored digest a
+            # preimage oracle: a dictated SSN has a search space of 10^9 and
+            # redact_payload leaves a digest alone because it is not a text
+            # field, so a 64-bit prefix inverted in seconds (review S-3).
+            # Touch's CorrectionDetector now derives its digest the same way
+            # through the same helper, so the correlation is unchanged -- and
+            # it is unchanged for secret-bearing dictations specifically, which
+            # is where hashing the raw text would have been "needed".
+            paste_hash = redacted_text_digest(text)
             self._emit(ContextEvent(
                 modality=Modality.VOICE,
                 event_type=EventType.TRANSCRIPTION,
@@ -557,7 +561,8 @@ class VoiceModule(ModalityModule):
                 # picks up ~0.1s later and immediately queries activity.db for
                 # this event. Emitting after paste_text() returns means the row
                 # never exists at query time, so no correction is matched.
-                paste_hash = hashlib.sha256(text.encode()).hexdigest()[:16]
+                # Over the redacted rendering, same as the main path above.
+                paste_hash = redacted_text_digest(text)
                 app_name, window_title = self._get_foreground_info()
                 self._emit(ContextEvent(
                     modality=Modality.VOICE,

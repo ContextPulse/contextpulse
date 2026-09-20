@@ -30,16 +30,35 @@ import os
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
 logger = logging.getLogger(__name__)
+
+# The .env files this module actually merged into os.environ, in load order.
+#
+# Published because a second layer needs to know EXACTLY which files could
+# have written a value here, and repeating the search elsewhere resolved a
+# different file: load_dotenv() with no path is find_dotenv(usecwd=False),
+# a walk up from THIS file's directory, while the obvious-looking
+# find_dotenv(usecwd=True) walks up from the working directory. A checkout
+# with a .env and a cwd with a .env are two different files. See
+# mcp_auth._dotenv_sets_off(), which reads this list rather than searching.
+#
+# find_dotenv() is called here with the same (absent) arguments load_dotenv()
+# would pass on, and from this same module, so the frame it inspects and the
+# path it returns are the ones load_dotenv() would have used.
+LOADED_DOTENV_PATHS: list[str] = []
 
 # Load optional workspace-level .env from CONTEXTPULSE_DOTENV env var, then local overrides.
 # This avoids hardcoding any specific user's directory structure.
 _workspace_dotenv = os.environ.get("CONTEXTPULSE_DOTENV", "")
 if _workspace_dotenv:
     load_dotenv(_workspace_dotenv, override=True)
-load_dotenv(override=True)  # local .env overrides everything
+    LOADED_DOTENV_PATHS.append(_workspace_dotenv)
+_local_dotenv = find_dotenv()
+if _local_dotenv:
+    load_dotenv(_local_dotenv, override=True)  # local .env overrides everything
+    LOADED_DOTENV_PATHS.append(_local_dotenv)
 
 
 def env(key: str, default: str) -> str:

@@ -267,17 +267,23 @@ def start_secret_migration() -> threading.Thread:
 
 
 def run_secret_migration() -> None:
-    """Sweep pre-redaction rows out of activity.db and the two derived stores.
+    """Sweep pre-redaction rows out of activity.db and the four derived stores.
 
     Separate from purge.ensure_migrated so the daemon does not have to know how
-    to resolve probe.db and knowledge.db, and so the MCP server can call the
-    identical entry point -- they are different processes and either can be the
-    one that starts first.
+    to resolve probe.db, knowledge.db and the two memory databases, and so the
+    MCP server can call the identical entry point -- they are different
+    processes and either can be the one that starts first.
+
+    Each path is resolved independently and a failure to resolve one skips only
+    that store: ensure_migrated keeps a marker per store, so a store that is
+    skipped here is simply swept on a later start.
     """
     from contextpulse_core.purge import ensure_migrated
 
     probe_db = None
     knowledge_db = None
+    memory_db = None
+    memory_cold_db = None
     try:
         from contextpulse_core.probe import default_probe_db
 
@@ -290,8 +296,22 @@ def run_secret_migration() -> None:
         knowledge_db = Path(default_knowledge_db())
     except Exception:
         logger.debug("knowledge.db path unresolvable; skipping it", exc_info=True)
+    try:
+        from contextpulse_memory.storage import default_memory_dir
 
-    ensure_migrated(Path(ACTIVITY_DB_PATH), probe_db=probe_db, knowledge_db=knowledge_db)
+        memory_dir = Path(default_memory_dir())
+        memory_db = memory_dir / "memory.db"
+        memory_cold_db = memory_dir / "memory_cold.db"
+    except Exception:
+        logger.debug("memory database paths unresolvable; skipping them", exc_info=True)
+
+    ensure_migrated(
+        Path(ACTIVITY_DB_PATH),
+        probe_db=probe_db,
+        knowledge_db=knowledge_db,
+        memory_db=memory_db,
+        memory_cold_db=memory_cold_db,
+    )
 
 
 class ContextPulseDaemon:

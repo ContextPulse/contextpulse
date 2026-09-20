@@ -41,6 +41,7 @@ from pathlib import Path
 # environment, and importing config runs load_dotenv(override=True), after
 # which a .env file has already overwritten os.environ. See auth_disabled().
 from contextpulse_core import env_guard
+from contextpulse_core import config
 from contextpulse_core.config import APPDATA_DIR
 
 # isort: on
@@ -81,18 +82,40 @@ _READ_RETRY_SLEEP = 0.02
 def _dotenv_sets_off() -> bool:
     """Would a .env file, on its own, have set the off switch?
 
-    Reads the same files config.py feeds to load_dotenv: the path named by
-    CONTEXTPULSE_DOTENV, and the nearest .env walking up from the cwd.
+    Reads config.LOADED_DOTENV_PATHS -- the files config.py really fed to
+    load_dotenv -- instead of repeating the search here. Repeating it was the
+    bug: config.py calls load_dotenv() with no path, which is
+    find_dotenv(usecwd=False), a walk up from config.py's OWN directory, while
+    this function called find_dotenv(usecwd=True), a walk up from the cwd. With
+    a .env in each tree the two layers resolve different files, so the guard
+    could clear a file that set nothing while never opening the one that set
+    the switch.
+
+    Two further candidates are consulted on top of that list, not instead of
+    it: CONTEXTPULSE_DOTENV as it stands NOW (it can be set after config.py
+    imported), and the cwd's .env (a caller may have loaded it itself, and a
+    future import order may run this before config.py). Every extra candidate
+    can only make the answer True, and True leaves auth ON -- so a false
+    positive costs a warning and a working endpoint, while a false negative
+    opens the endpoint. That asymmetry is why the union is the safe shape.
     """
     try:
         from dotenv import dotenv_values, find_dotenv
     except ImportError:  # pragma: no cover - python-dotenv is a hard dependency
         return False
 
-    candidates = [os.environ.get("CONTEXTPULSE_DOTENV", ""), find_dotenv(usecwd=True)]
+    candidates: list[str] = list(config.LOADED_DOTENV_PATHS)
+    candidates.append(os.environ.get("CONTEXTPULSE_DOTENV", ""))
+    candidates.append(find_dotenv(usecwd=True))
+
+    seen: set[str] = set()
     for candidate in candidates:
         if not candidate:
             continue
+        key = os.path.normcase(os.path.abspath(candidate))
+        if key in seen:
+            continue
+        seen.add(key)
         try:
             values = dotenv_values(candidate)
         except OSError:
@@ -315,7 +338,15 @@ def load_or_create_token(token_file: Path | str | None = None, _attempt: int = 0
     os.close(fd)
     restrict_to_user(path)
     try:
-        path.write_text(token, encoding="utf-8")
+        # flush + fsync, not write_text: closing the handle hands the bytes to
+        # the OS cache, it does not put them on the platter. This function
+        # returns the token to a caller that writes it straight into a client
+        # config, so a power cut before the cache flushed would leave a
+        # configured client pointing at an EMPTY token file.
+        with open(path, "wb") as handle:
+            handle.write(token.encode("utf-8"))
+            handle.flush()
+            os.fsync(handle.fileno())
     except OSError:
         # Leave no empty file behind -- it would poison every later read.
         path.unlink(missing_ok=True)
@@ -379,9 +410,16 @@ class BearerAuthASGI:
             st = os.stat(self._token_file)
         except OSError:
             return None
-        # ctime as well as mtime: regeneration unlinks and recreates, and the
+        # st_ino as well as mtime: regeneration unlinks and recreates, and the
         # replacement is always the same length, so size alone proves nothing.
-        return (st.st_mtime_ns, st.st_ctime_ns, st.st_size)
+        #
+        # st_ctime_ns used to hold this position and did nothing. NTFS
+        # file-system tunneling restores the creation time of a name deleted
+        # and recreated within ~15 s, so across a regenerate the measured
+        # result was ctime unchanged, size unchanged -- the triple collapsed to
+        # mtime_ns alone on exactly the path it was widened for. st_ino, which
+        # Python fills from the NTFS file index, does change.
+        return (st.st_mtime_ns, st.st_ino, st.st_size)
 
     def current_token(self) -> str:
         """The live token, re-read when the file underneath has changed.

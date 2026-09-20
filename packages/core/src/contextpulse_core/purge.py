@@ -107,6 +107,83 @@ def scan_clipboard(conn: sqlite3.Connection) -> tuple[Tally, list[tuple[int, str
     return tally, updates
 
 
+def scan_activity(
+    conn: sqlite3.Connection, include_titles: bool = False
+) -> tuple[Tally, Tally, list[tuple[str, str, str, int]]]:
+    """Find `activity` rows carrying secrets. Returns (ocr_tally, title_tally, updates).
+
+    THE LARGEST TEXT STORE IN THE PRODUCT, and the first sweep never opened it
+    (review B-2). It is guaranteed to hold unredacted secrets after upgrade for
+    two reasons the redaction work itself created: sixteen pattern shapes that
+    did not exist when those rows were OCR'd, and the word-boundary gap that
+    left every glued token raw. Add any period with redact_ocr_text=False.
+
+    Titles are tallied SEPARATELY and rewritten only under include_titles, for
+    the same measured reason as `events` -- on real data the CREDENTIAL pattern
+    fires overwhelmingly on ordinary window titles containing "password:" or
+    "token:", and scrubbing those by default is a far larger blast radius than
+    the vulnerability being closed.
+    """
+    ocr_tally = Tally()
+    title_tally = Tally()
+    updates: list[tuple[str, str, str, int]] = []
+
+    for row in conn.execute(
+        "SELECT id, ocr_text, window_title, app_name FROM activity"
+    ).fetchall():
+        ocr_tally.rows_scanned += 1
+        title_tally.rows_scanned += 1
+
+        ocr, ocr_counts = redact_with_counts(row["ocr_text"] or "")
+        ocr_tally.add(ocr_counts)
+
+        title, title_counts = redact_with_counts(row["window_title"] or "")
+        app, app_counts = redact_with_counts(row["app_name"] or "")
+        merged: dict[str, int] = {}
+        for counts in (title_counts, app_counts):
+            for category, n in counts.items():
+                merged[category] = merged.get(category, 0) + n
+        title_tally.add(merged)
+
+        rewrite_titles = include_titles and bool(merged)
+        if ocr_counts or rewrite_titles:
+            updates.append((
+                # ocr_text is nullable and must stay NULL if it was NULL --
+                # writing "" would turn "not OCR'd yet" into "OCR'd, empty".
+                ocr if row["ocr_text"] is not None else None,
+                title if rewrite_titles else (row["window_title"] or ""),
+                app if rewrite_titles else (row["app_name"] or ""),
+                row["id"],
+            ))
+
+    return ocr_tally, title_tally, updates
+
+
+def apply_activity_updates(
+    conn: sqlite3.Connection, updates: list[tuple[str, str, str, int]]
+) -> None:
+    """Rewrite `activity` rows and rebuild its FTS index.
+
+    Kept separate from apply_updates rather than folded into it: that function's
+    signature is part of the CLI's contract and is monkeypatched in tests.
+
+    The rebuild is belt AND braces. Unlike `events`, `activity` DOES carry an
+    AFTER UPDATE trigger into activity_fts, so the index should already be in
+    step -- but a store whose triggers failed to create (ActivityDB._init_schema
+    swallows OperationalError) would otherwise keep serving the pre-sweep terms,
+    and a stale index is still an oracle.
+    """
+    if not updates:
+        return
+    with conn:  # one transaction; rolls back on any exception
+        conn.executemany(
+            "UPDATE activity SET ocr_text = ?, window_title = ?, app_name = ? WHERE id = ?",
+            updates,
+        )
+        if table_exists(conn, "activity_fts"):
+            conn.execute("INSERT INTO activity_fts(activity_fts) VALUES('rebuild')")
+
+
 def scan_events(
     conn: sqlite3.Connection, include_titles: bool = False
 ) -> tuple[Tally, Tally, list[tuple[int, str, str, str]]]:
@@ -267,6 +344,7 @@ def apply_text_table(
     key_column: str,
     text_columns: tuple[str, ...],
     updates: list[tuple],
+    fts_table: str | None = None,
 ) -> None:
     if not updates:
         return
@@ -275,6 +353,13 @@ def apply_text_table(
         conn.executemany(
             f"UPDATE {table} SET {assignments} WHERE {key_column} = ?", updates
         )
+        # cold_summaries carries AFTER INSERT and AFTER DELETE triggers into
+        # cold_fts but NO AFTER UPDATE, so without this the index still holds
+        # the pre-sweep terms -- the same trap `events` has. memories does have
+        # an update trigger; rebuilding anyway costs one statement and removes
+        # the need to remember which is which.
+        if fts_table and table_exists(conn, fts_table):
+            conn.execute(f"INSERT INTO {fts_table}({fts_table}) VALUES('rebuild')")
 
 
 def existing_text_columns(
@@ -290,13 +375,21 @@ def existing_text_columns(
     return tuple(c for c in candidates if c in have)
 
 
-PROBE_FACTS = ("facts", "id", ("entity", "fact"))
-KNOWLEDGE_OBSERVATIONS = ("observations", "id", ("content", "window_title", "url"))
+# (table, key column, candidate text columns, FTS index to rebuild or None)
+PROBE_FACTS = ("facts", "id", ("entity", "fact"), None)
+KNOWLEDGE_OBSERVATIONS = ("observations", "id", ("content", "window_title", "url"), None)
+# memory.db / memory_cold.db. The warm tier indexes key, value AND tags, and
+# all three are stored raw for anything written before the memory package began
+# redacting. summary_json is a text column too: it carries the memory KEYS in
+# each 15-minute window. The hot tier needs no sweep -- it is an in-process
+# dict that dies with the daemon.
+MEMORY_WARM = ("memories", "id", ("key", "value", "tags"), "memories_fts")
+MEMORY_COLD = ("cold_summaries", "id", ("text_content", "summary_json"), "cold_fts")
 
 
 def purge_derived_store(db_path: Path, spec: tuple, apply: bool) -> Tally:
     """Scan (and optionally rewrite) one derived store. Missing DB = empty tally."""
-    table, key_column, candidates = spec
+    table, key_column, candidates, fts_table = spec
     if not db_path.exists():
         return Tally()
     conn = open_db(db_path, read_only=not apply)
@@ -308,7 +401,7 @@ def purge_derived_store(db_path: Path, spec: tuple, apply: bool) -> Tally:
             return Tally()
         tally, updates = scan_text_table(conn, table, key_column, columns)
         if apply:
-            apply_text_table(conn, table, key_column, columns, updates)
+            apply_text_table(conn, table, key_column, columns, updates, fts_table)
         return tally
     finally:
         conn.close()
@@ -322,19 +415,94 @@ def migration_applied(conn: sqlite3.Connection, name: str = MIGRATION_NAME) -> b
     return row is not None
 
 
+def mark_migrated(conn: sqlite3.Connection, name: str, rows: int) -> None:
+    """Record that ONE store is clean. Call only after verifying it."""
+    with conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO cp_migrations (name, applied_at, rows_affected) "
+            "VALUES (?, ?, ?)",
+            (name, time.time(), rows),
+        )
+
+
+def sweep_activity_db(conn: sqlite3.Connection) -> tuple[dict[str, int], int, bool]:
+    """Sweep clipboard, events and activity in one database.
+
+    Returns (counts, rows_affected, verified). `verified` is a re-scan result,
+    not an assertion that the UPDATE ran: "the statements executed" and "the
+    secrets are gone" are different claims, and only the second one may write a
+    marker. The re-scan is skipped when nothing was rewritten -- the first scan
+    already proved that store clean, so paying for a second full pass would
+    double the cost of the common case for no information.
+    """
+    counts: dict[str, int] = {}
+
+    clip_tally, clip_updates = scan_clipboard(conn)
+    evt_tally, _evt_titles, evt_updates = scan_events(conn, include_titles=False)
+    act_tally, _act_titles, act_updates = scan_activity(conn, include_titles=False)
+
+    if clip_updates or evt_updates:
+        apply_updates(conn, clip_updates, evt_updates)
+    apply_activity_updates(conn, act_updates)
+
+    for tally in (clip_tally, evt_tally, act_tally):
+        for category, n in tally.categories.items():
+            counts[category] = counts.get(category, 0) + n
+    rows = clip_tally.rows_affected + evt_tally.rows_affected + act_tally.rows_affected
+
+    verified = True
+    if clip_updates or evt_updates or act_updates:
+        remaining = (
+            scan_clipboard(conn)[0].total_matches
+            + scan_events(conn, include_titles=False)[0].total_matches
+            + scan_activity(conn, include_titles=False)[0].total_matches
+        )
+        verified = remaining == 0
+        if not verified:
+            logger.warning(
+                "secret migration: activity.db still has %d match(es) after the "
+                "sweep; not marking it done so the next start retries", remaining,
+            )
+
+    return counts, rows, verified
+
+
+def sweep_derived_store(db_path: Path, spec: tuple) -> tuple[Tally, bool]:
+    """Sweep one derived store and re-scan it. Returns (tally, verified)."""
+    tally = purge_derived_store(db_path, spec, apply=True)
+    if not tally.rows_affected:
+        return tally, True
+    after = purge_derived_store(db_path, spec, apply=False)
+    return tally, after.total_matches == 0
+
+
 def ensure_migrated(
     activity_db: Path,
     probe_db: Path | None = None,
     knowledge_db: Path | None = None,
+    memory_db: Path | None = None,
+    memory_cold_db: Path | None = None,
     name: str = MIGRATION_NAME,
 ) -> dict[str, int]:
-    """Redact pre-fix rows in place, once, before anything can serve them.
+    """Redact pre-fix rows in place, once PER STORE, before anything serves them.
 
     Called at daemon startup AND on first use of the sight MCP server, because
     they are separate processes and either can be the one that runs first. The
-    marker lives in a table inside activity.db rather than in a file, so the
-    check and the claim are in the same transactional store and two processes
-    racing cannot both decide they are first.
+    markers live in a table inside activity.db rather than in a file, so the
+    check and the claim are in the same transactional store.
+
+    ONE MARKER PER STORE, WRITTEN ONLY AFTER THAT STORE IS VERIFIED CLEAN.
+    The first version wrote a single marker inside the activity.db block and
+    swept probe.db and knowledge.db afterwards, warning and continuing on
+    failure. So a locked probe.db -- or a tray quit during the multi-minute
+    sweep, which kills it outright because start_secret_migration runs on a
+    daemon thread -- left those stores unswept FOREVER: the next start saw the
+    marker, returned immediately, and nothing ever said so again (review B-3).
+
+    A store that fails is simply not marked, so the next start retries it; a
+    store that succeeded is not swept twice. A store that does not exist is
+    clean, not failed, and IS marked -- otherwise every start rescans nothing
+    forever.
 
     Returns a {category: count} dict of what it rewrote. COUNTS ONLY -- no
     value is returned, logged or raised.
@@ -352,53 +520,54 @@ def ensure_migrated(
     except SystemExit:
         return counts
     try:
-        if migration_applied(conn, name):
-            return counts
+        if not migration_applied(conn, name):
+            try:
+                found, rows, verified = sweep_activity_db(conn)
+            except (sqlite3.DatabaseError, SystemExit) as exc:
+                logger.warning("secret migration %s did not complete: %s", name, exc)
+                return counts
+            for category, n in found.items():
+                counts[category] = counts.get(category, 0) + n
+            if verified:
+                mark_migrated(conn, name, rows)
+                logger.info(
+                    "secret migration %s: rewrote %d row(s) in activity.db; "
+                    "categories=%s", name, rows, sorted(found),
+                )
 
-        clip_tally, clip_updates = scan_clipboard(conn)
-        evt_tally, _title_tally, evt_updates = scan_events(conn, include_titles=False)
-        if clip_updates or evt_updates:
-            apply_updates(conn, clip_updates, evt_updates)
-        for tally in (clip_tally, evt_tally):
+        for db_path, spec, label in (
+            (probe_db, PROBE_FACTS, "probe"),
+            (knowledge_db, KNOWLEDGE_OBSERVATIONS, "knowledge"),
+            (memory_db, MEMORY_WARM, "memory"),
+            (memory_cold_db, MEMORY_COLD, "memory_cold"),
+        ):
+            if db_path is None:
+                continue
+            marker = f"{name}:{label}"
+            if migration_applied(conn, marker):
+                continue
+            try:
+                tally, verified = sweep_derived_store(Path(db_path), spec)
+            except (sqlite3.DatabaseError, SystemExit) as exc:
+                # No marker, so the next start retries this store and only
+                # this store.
+                logger.warning("secret migration: %s.db not swept: %s", label, exc)
+                continue
             for category, n in tally.categories.items():
                 counts[category] = counts.get(category, 0) + n
-
-        rows = clip_tally.rows_affected + evt_tally.rows_affected
-        with conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO cp_migrations (name, applied_at, rows_affected) "
-                "VALUES (?, ?, ?)",
-                (name, time.time(), rows),
-            )
-        logger.info(
-            "secret migration %s: rewrote %d row(s) in activity.db; categories=%s",
-            name, rows, sorted(counts),
-        )
-    except (sqlite3.DatabaseError, SystemExit) as exc:
-        # Contained on purpose -- see the docstring. Logged at warning so it is
-        # visible without being fatal.
-        logger.warning("secret migration %s did not complete: %s", name, exc)
-        return counts
+            if not verified:
+                logger.warning(
+                    "secret migration: %s.db still has matches after the sweep; "
+                    "not marking it done so the next start retries", label,
+                )
+                continue
+            mark_migrated(conn, marker, tally.rows_affected)
+            if tally.rows_affected:
+                logger.info(
+                    "secret migration: rewrote %d row(s) in %s.db; categories=%s",
+                    tally.rows_affected, label, sorted(tally.categories),
+                )
     finally:
         conn.close()
-
-    for db_path, spec, label in (
-        (probe_db, PROBE_FACTS, "probe.db"),
-        (knowledge_db, KNOWLEDGE_OBSERVATIONS, "knowledge.db"),
-    ):
-        if db_path is None:
-            continue
-        try:
-            tally = purge_derived_store(Path(db_path), spec, apply=True)
-        except (sqlite3.DatabaseError, SystemExit) as exc:
-            logger.warning("secret migration: %s not swept: %s", label, exc)
-            continue
-        if tally.rows_affected:
-            logger.info(
-                "secret migration: rewrote %d row(s) in %s; categories=%s",
-                tally.rows_affected, label, sorted(tally.categories),
-            )
-        for category, n in tally.categories.items():
-            counts[category] = counts.get(category, 0) + n
 
     return counts

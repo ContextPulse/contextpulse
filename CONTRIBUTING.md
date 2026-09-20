@@ -89,7 +89,7 @@ ruff format .
 ## Architecture Notes
 
 - **EventBus (spine):** All modules emit events here. New data sources must emit to the EventBus.
-- **MCP servers are read-only.** They query `activity.db` but never write. Writes happen in the daemon.
+- **MCP servers never write to `activity.db`.** They query it; the daemon is the only writer. The memory server is the one exception to the wider rule: `memory_store` and `memory_forget` write by design, to their own separate `memory.db` and `memory_cold.db`.
 - **Pro features** are gated by `@_require_pro`. Don't add this decorator to community-contributed tools.
 
 ## Contributor License Agreement

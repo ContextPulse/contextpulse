@@ -25,6 +25,12 @@ logger = logging.getLogger("contextpulse.platform.windows")
 # lands with the paste path fully breadcrumbed and the reader still suspect.
 # The contended-skip breadcrumb is always emitted — it is bounded by paste
 # frequency, and it is the line that shows the two threads met at all.
+#
+# This variable gates the READ path only. The paster has its own,
+# CONTEXTPULSE_PASTE_BREADCRUMBS (voice/paster.py), and the two are kept
+# separate deliberately: while they shared one switch, turning on the paste
+# trace to hunt a reproduction also turned on the 1 Hz read trace, into the
+# same daemon_stderr.log the paste trace was being kept small to protect.
 _READ_BREADCRUMBS = breadcrumbs_enabled("CONTEXTPULSE_CLIPBOARD_READ_BREADCRUMBS", "0")
 
 # Hard cap on how much of a clipboard block is materialised, independent of

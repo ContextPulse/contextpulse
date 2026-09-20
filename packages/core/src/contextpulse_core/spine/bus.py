@@ -15,76 +15,64 @@ mcp_calls) without modifying them.
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import threading
 from pathlib import Path
 from typing import Any, Callable
 
-from contextpulse_core.redact import redact_sensitive
+from contextpulse_core.search_filter import keep_rows_matching_redacted_text
 
 from .events import ContextEvent
 
 logger = logging.getLogger(__name__)
 
-# FTS5 operators and punctuation that are query syntax rather than content.
-_FTS_OPERATORS = frozenset({"and", "or", "not", "near"})
+# The tokenizer events_fts is declared with (see _FTS_SQL). The shadow index
+# the filter builds over the REDACTED text has to use the same one, or the
+# filter answers a different question from the one that produced the rows.
+_FTS_TOKENIZER = "porter unicode61"
 
 
-def _searchable_text(row: dict[str, Any]) -> str:
-    """Everything in an event row that a search can match on."""
-    parts = [str(row.get("window_title") or ""), str(row.get("app_name") or "")]
+def _indexed_text(row: dict[str, Any]) -> str:
+    """The text events_fts actually indexes, rebuilt from a result row.
+
+    Mirrors the generated `text_content` column and the insert trigger,
+    COALESCE order included: the first key that is PRESENT wins, even when its
+    value is the empty string. A filter that searched a different set of fields
+    from the index would keep rows the index would not have returned.
+    """
     payload = row.get("payload")
     if isinstance(payload, str):
-        parts.append(payload)
-    elif payload:
-        parts.append(str(payload))
-    return " ".join(parts)
+        try:
+            payload = json.loads(payload)
+        except (json.JSONDecodeError, TypeError):
+            payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    text_content = ""
+    for key in ("ocr_text", "transcript", "text"):
+        value = payload.get(key)
+        if value is not None:
+            text_content = str(value)
+            break
+
+    return " ".join([
+        str(row.get("window_title") or ""),
+        str(row.get("app_name") or ""),
+        text_content,
+    ])
 
 
-def _drop_rows_that_only_matched_redacted_text(
-    query: str, rows: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
-    """Remove rows whose match depended on text redaction removes.
-
-    WHY A SEARCH NEEDS THIS AT ALL. Redacting a tool's OUTPUT does not close a
-    query oracle. The adversarial review proved the clipboard case end to end:
-    a client issues "sk-", "sk-a", "sk-ab" ... and reads the RESULT COUNT to
-    recover a pre-fix secret one character at a time, while every response it
-    sees is correctly redacted. events_fts has the same shape at token
-    granularity -- one query per candidate token instead of per character.
-
-    So a count or a match must never be computed over raw stored text. Rows
-    written before capture-side redaction shipped are still raw on disk, which
-    is exactly the population an attacker would probe.
-
-    THE TEST IS DELIBERATELY NARROW. A row is dropped only when a query term
-    appears in its RAW text and NOT in its redacted text -- that is, the match
-    depended on something redaction removes. A row that matched for any other
-    reason is kept untouched, so porter stemming still works: a query for "run"
-    matching a stored "running" is not dropped, because "run" is absent from
-    both the raw and the redacted rendering and the rule never fires.
-
-    Checking the opposite way round -- requiring every query term to appear in
-    the redacted text -- would have silently disabled stemmed and prefix
-    matching, which is most of what this search is for.
-    """
-    terms = [
-        t.strip('"*()') .lower()
-        for t in query.split()
-        if t.strip('"*()') and t.strip('"*()').lower() not in _FTS_OPERATORS
-    ]
-    if not terms:
-        return rows
-
-    kept: list[dict[str, Any]] = []
-    for row in rows:
-        raw = _searchable_text(row).lower()
-        red = redact_sensitive(_searchable_text(row)).lower()
-        if any(term in raw and term not in red for term in terms):
-            continue
-        kept.append(row)
-    return kept
+def _like_text(row: dict[str, Any]) -> str:
+    """What the LIKE fallback matches on: titles plus the whole payload blob."""
+    payload = row.get("payload")
+    return " ".join([
+        str(row.get("window_title") or ""),
+        str(row.get("app_name") or ""),
+        payload if isinstance(payload, str) else (str(payload) if payload else ""),
+    ])
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS events (
@@ -366,9 +354,11 @@ class EventBus:
                         (query, cutoff),
                     )
                 rows = cursor.fetchall()
+                used_fts = True
             except sqlite3.OperationalError:
                 # FTS syntax error — fall back to LIKE search
                 logger.warning("FTS query failed, falling back to LIKE: %s", query)
+                used_fts = False
                 like_pattern = f"%{query}%"
                 if modality:
                     cursor = self._conn.execute(
@@ -391,7 +381,15 @@ class EventBus:
                     )
                 rows = cursor.fetchall()
 
-        return _drop_rows_that_only_matched_redacted_text(query, [dict(r) for r in rows])
+        # The count this returns is computed over REDACTED text, whichever path
+        # produced the candidates -- the LIKE fallback matched raw `payload`
+        # just as the FTS path matched the raw index, so both are filtered.
+        return keep_rows_matching_redacted_text(
+            query,
+            [dict(r) for r in rows],
+            _indexed_text if used_fts else _like_text,
+            tokenize=_FTS_TOKENIZER if used_fts else None,
+        )
 
     def get_by_time(
         self,

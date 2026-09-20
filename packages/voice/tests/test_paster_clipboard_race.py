@@ -20,9 +20,11 @@ an absent plugin to be meaningful is a test that silently proves nothing.
 """
 
 import os
+import re
 import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -350,18 +352,25 @@ class TestPhaseBreadcrumbs:
     pyperclip.copy(""). These name the phase instead.
     """
 
-    def test_verbose_mode_writes_every_ordered_phase_to_fd_2(
+    def test_every_ordered_phase_reaches_fd_2_by_default(
         self, monkeypatch, fast_paster, tmp_path
     ):
+        """R2-3. Per-phase is the DEFAULT, not a mode someone has to turn on.
+
+        The one-line-per-paste summary that used to be the default could not
+        name the phase of a crash: it wrote nothing at all for the paste that
+        died, which is the only paste anyone wants the phase of. Eight
+        os.write() calls per dictation is the price, and it is bounded by how
+        often a human dictates.
+        """
         paster = fast_paster
         monkeypatch.setattr(paster, "_BREADCRUMBS", True, raising=False)
-        monkeypatch.setattr(paster, "_VERBOSE_BREADCRUMBS", True, raising=False)
         monkeypatch.setattr(paster.pyperclip, "copy", lambda _t="": None)
 
         lines = _capture_fd2(tmp_path, lambda: paster.paste_text("hello"))
 
         phases = [ln.split()[-1] for ln in lines if ln.startswith("CLIPBOARD_PHASE")]
-        assert phases == [
+        assert phases[:8] == [
             "paste_copy_clear_enter",
             "paste_copy_clear_exit",
             "paste_copy_text_enter",
@@ -371,35 +380,77 @@ class TestPhaseBreadcrumbs:
             "paste_final_clear_enter",
             "paste_final_clear_exit",
         ]
+        assert any("outcome=completed" in ln for ln in lines), (
+            "the end-of-paste outcome line is still worth having: it is the "
+            "only thing that names a DROPPED paste, which enters no phase"
+        )
 
-    def test_default_mode_writes_one_line_per_paste(
+    def test_a_crash_after_phase_two_leaves_those_phases_on_fd_2(
         self, monkeypatch, fast_paster, tmp_path
     ):
-        """daemon_stderr.log is only rotated on daemon RESTART.
+        """R2-3, the case the instrument exists for.
 
-        Eight lines per dictation at ~30 dictations an hour accumulates in
-        the one log family this branch did not bound. One line per paste
-        keeps the forensics (it names the last phase reached) at an eighth
-        of the volume.
+        A ``__fastfail`` abort delivers no exception, runs no ``finally`` and
+        leaves only bytes already handed to the OS. Whatever the breadcrumbs
+        are going to say must therefore already BE bytes when the crash lands.
+        A phase name sitting in a module global, waiting for an end-of-paste
+        summary that will never be written, says nothing.
+
+        The crash is simulated at the start of phase 3 with a BaseException no
+        ``except Exception`` would catch, and ``_flush_phases`` is stubbed out,
+        so nothing the ``finally`` does can account for what the file holds.
         """
         paster = fast_paster
         monkeypatch.setattr(paster, "_BREADCRUMBS", True, raising=False)
-        monkeypatch.setattr(paster, "_VERBOSE_BREADCRUMBS", False, raising=False)
+        monkeypatch.setattr(paster, "_flush_phases", lambda _outcome: None)
         monkeypatch.setattr(paster.pyperclip, "copy", lambda _t="": None)
 
-        lines = _capture_fd2(tmp_path, lambda: paster.paste_text("hello"))
+        class Fastfail(BaseException):
+            """Stands in for an abort that runs no handler and no finally."""
 
-        crumbs = [ln for ln in lines if ln.startswith("CLIPBOARD_PHASE")]
-        assert len(crumbs) == 1
-        assert "outcome=completed" in crumbs[0]
-        assert "last_phase=paste_final_clear_exit" in crumbs[0]
+        def die(*_a, **_kw):
+            raise Fastfail
+
+        monkeypatch.setattr(paster.pyautogui, "hotkey", die)
+
+        def run():
+            with pytest.raises(Fastfail):
+                paster.paste_text("hello")
+
+        lines = _capture_fd2(tmp_path, run)
+
+        phases = [ln.split()[-1] for ln in lines if ln.startswith("CLIPBOARD_PHASE")]
+        assert phases == [
+            "paste_copy_clear_enter",
+            "paste_copy_clear_exit",
+            "paste_copy_text_enter",
+            "paste_copy_text_exit",
+            "paste_hotkey_enter",
+        ], f"the phases completed before the crash are not in the file: {lines}"
+
+    def test_the_paste_trace_does_not_share_the_readers_switch(self):
+        """R2-4. ``CONTEXTPULSE_CLIPBOARD_READ_BREADCRUMBS`` used to gate both
+        the per-poll read trace (~86k lines a day, off by default) and the
+        paster's verbose mode. Anyone following the paster's own advice to turn
+        it on while hunting a reproduction also switched on the 1 Hz read
+        trace, into the same file they had just been told not to flood.
+        """
+        from contextpulse_voice import paster as paster_mod
+
+        assert not hasattr(paster_mod, "_VERBOSE_BREADCRUMBS"), (
+            "the paster still has a verbose mode keyed on another module's switch"
+        )
+        source = Path(paster_mod.__file__).read_text(encoding="utf-8")
+        switches = set(re.findall(r'breadcrumbs_enabled\(\s*"([^"]+)"', source))
+        assert switches == {"CONTEXTPULSE_PASTE_BREADCRUMBS"}, (
+            f"the paster reads breadcrumb switches it does not own: {switches}"
+        )
 
     def test_a_dropped_paste_names_its_outcome(self, monkeypatch, fast_paster, tmp_path):
         from contextpulse_core.clipboard_lock import clipboard_lock
 
         paster = fast_paster
         monkeypatch.setattr(paster, "_BREADCRUMBS", True, raising=False)
-        monkeypatch.setattr(paster, "_VERBOSE_BREADCRUMBS", False, raising=False)
         monkeypatch.setattr(paster, "CLIPBOARD_LOCK_TIMEOUT", 0.02, raising=False)
         monkeypatch.setattr(paster, "CLIPBOARD_RETRY_TIMEOUT", 0.02, raising=False)
 

@@ -249,6 +249,81 @@ class TestVocabularyBridgeRefusesSecrets:
         assert json.loads(learned.read_text(encoding="utf-8")) == {"quokka": "Quokka"}
 
 
+class TestPasteCorrelationSurvivesRedaction:
+    """Review S-3, the half that could have broken silently.
+
+    VoiceModule now stores paste_text_hash over the REDACTED transcript, so
+    this detector -- which hashes the clipboard it reads -- has to derive its
+    digest the same way. If only one side redacted first, the correlation
+    would stop working for exactly the dictations that contained a secret, and
+    nothing would report it: on_paste_detected simply returns, no correction is
+    ever harvested, and the pipeline looks idle rather than broken. That is the
+    argument the original code used for hashing the raw text.
+    """
+
+    SPOKEN = f"{CONTROL_WORD} my social is 987-65-4321"
+
+    def _db_with_voice_event(self, tmp_path, stored_hash):
+        db_path = tmp_path / "activity.db"
+        bus = EventBus(db_path)
+        bus.close()
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "INSERT INTO events (event_id, timestamp, modality, event_type, app_name,"
+            " window_title, monitor_index, payload, correlation_id, attention_score,"
+            " cognitive_load) VALUES (?, ?, 'voice', 'transcription', 'code.exe',"
+            " 'editor', 0, ?, NULL, 0.0, 0.0)",
+            (
+                "voice-corr-1", time.time() - 2,
+                json.dumps({
+                    "transcript": redact_sensitive(self.SPOKEN),
+                    "paste_text_hash": stored_hash,
+                }),
+            ),
+        )
+        conn.commit()
+        conn.close()
+        return db_path
+
+    def _detector(self, db_path, tmp_path):
+        from contextpulse_touch.burst_tracker import BurstTracker
+        from contextpulse_touch.correction_detector import CorrectionDetector
+
+        return CorrectionDetector(
+            burst_tracker=BurstTracker(burst_timeout=0.1, min_chars=1),
+            watch_seconds=0.5,
+            db_path=db_path,
+            bridge=VocabularyBridge(learned_file=tmp_path / "learned.json"),
+        )
+
+    def test_a_secret_bearing_paste_still_correlates(self, tmp_path):
+        from contextpulse_core.redact import redacted_text_digest
+
+        db_path = self._db_with_voice_event(tmp_path, redacted_text_digest(self.SPOKEN))
+        det = self._detector(db_path, tmp_path)
+        try:
+            # The clipboard holds the RAW text -- that is what was pasted.
+            det.on_paste_detected(self.SPOKEN)
+            assert det.is_watching, (
+                "the two sides computed different digests: voice corrections "
+                "would silently stop being harvested for secret-bearing dictations"
+            )
+        finally:
+            det.stop()
+
+    def test_an_unrelated_paste_still_does_not_correlate(self, tmp_path):
+        """The positive control's opposite: the match is not vacuous."""
+        from contextpulse_core.redact import redacted_text_digest
+
+        db_path = self._db_with_voice_event(tmp_path, redacted_text_digest(self.SPOKEN))
+        det = self._detector(db_path, tmp_path)
+        try:
+            det.on_paste_detected("something else entirely")
+            assert not det.is_watching
+        finally:
+            det.stop()
+
+
 class TestLogsDoNotCarryTypedText:
     """Two log lines used to print the user's own text into a rotating file."""
 

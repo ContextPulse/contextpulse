@@ -119,6 +119,19 @@ def _call_voice_tools(db_path, tmp_path):
         mcp_server._DB_PATH = original
 
 
+def _transcription_payload(db_path):
+    conn = sqlite3.connect(str(db_path))
+    try:
+        row = conn.execute(
+            "SELECT payload FROM events WHERE event_type = 'transcription' "
+            "ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None, "no transcription event was stored"
+    return json.loads(row[0])
+
+
 def _fts_hits(db_path, term):
     conn = sqlite3.connect(str(db_path))
     try:
@@ -253,6 +266,50 @@ class TestVocabularyCannotServeASecret:
             out = mcp_server.get_vocabulary()
         assert CONTROL_WORD in out, f"{family}: returned nothing to redact"
         assert needle not in out, f"{family}: vocabulary file leaked a secret"
+
+
+class TestThePasteHashIsNotAPreimageOracle:
+    """Review S-3: paste_text_hash committed to the RAW transcript.
+
+    redact_payload leaves a digest alone -- it is not a text field -- so
+    `transcript` and `raw_transcript` were both correctly scrubbed while a
+    64-bit sha256 prefix of the unredacted text sat beside them. A dictated SSN
+    has a search space of 10^9 and a card number 10^16; that is a verification
+    oracle that inverts by brute force in seconds.
+
+    The clipboard path already got this right and its own comment says why
+    (clipboard.py: "hashing the raw value would leave a brute-forceable digest
+    of a short secret sitting in a table the redaction exists to keep clean").
+    """
+
+    @pytest.mark.parametrize("family,heard,needle", SPOKEN_SECRETS, ids=FAMILY_IDS)
+    def test_the_stored_digest_commits_to_redacted_text(self, tmp_path, family, heard, needle):
+        import hashlib
+
+        from contextpulse_core.redact import redacted_text_digest
+
+        db_path, pasted = _dictate_once(tmp_path, heard)
+        payload = _transcription_payload(db_path)
+        stored = payload["paste_text_hash"]
+
+        # The paste itself is still verbatim -- that is the product.
+        assert needle in pasted, f"{family}: the paste was redacted, which is a bug"
+
+        raw_digest = hashlib.sha256(pasted.encode()).hexdigest()[:16]
+        assert stored != raw_digest, (
+            f"{family}: the stored digest is a preimage of the raw dictation"
+        )
+        assert stored == redacted_text_digest(pasted)
+
+    def test_an_ordinary_dictation_digest_is_unchanged(self, tmp_path):
+        """Redaction is identity on clean text, so nothing else moves."""
+        import hashlib
+
+        db_path, pasted = _dictate_once(tmp_path, f"{CONTROL_WORD} deploy the importer")
+        payload = _transcription_payload(db_path)
+        assert payload["paste_text_hash"] == (
+            hashlib.sha256(pasted.encode()).hexdigest()[:16]
+        )
 
 
 class TestLogsDoNotCarryDictatedText:

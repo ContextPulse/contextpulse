@@ -131,6 +131,36 @@ def _is_user_scoped(path: Path) -> bool:
     return not _under(resolved, cwd)
 
 
+def _write_durably(path: Path, data: bytes, restrict: bool = False) -> None:
+    """Write `data` to a fresh `path` and force it to the platter.
+
+    `write_bytes()` closes the handle, which hands the bytes to the OS cache;
+    it does NOT push them to disk. For the temp file of an atomic replace that
+    is the difference between surviving a process kill and surviving a power
+    cut: without the fsync, the rename can land while the contents have not,
+    leaving the target present, renamed and empty -- the end state the atomic
+    write exists to prevent, with the original already gone.
+
+    `restrict=True` applies user-only permissions while the file is still
+    EMPTY, before any bytes are written. That is the ordering
+    `mcp_auth.load_or_create_token` uses for the token file; written the other
+    way round, a copy of a credential file exists on disk under whatever
+    permissions it inherited, however briefly.
+
+    The directory entry itself is not fsynced: there is no portable handle to
+    a directory on Windows, and the backup is what covers a lost rename.
+    """
+    path.unlink(missing_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    os.close(fd)
+    if restrict:
+        mcp_auth.restrict_to_user(path)
+    with open(path, "wb") as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
 def _write_config_atomically(path: Path, payload: str) -> None:
     """Replace `path` with `payload`, keeping one timestamped backup.
 
@@ -144,18 +174,20 @@ def _write_config_atomically(path: Path, payload: str) -> None:
     rather than something under %TEMP%. The backup is written with the same
     user-only permissions as the token file: it is a copy of a credential
     file, so it must not be more readable than the original.
+
+    Both writes go through _write_durably, so the bytes are on disk before the
+    rename rather than merely in the OS cache.
     """
     backup = path.with_name(f"{path.name}.{time.strftime('%Y%m%dT%H%M%S')}{BACKUP_SUFFIX}")
     if path.exists():
-        backup.write_bytes(path.read_bytes())
-        mcp_auth.restrict_to_user(backup)
+        _write_durably(backup, path.read_bytes(), restrict=True)
         for older in sorted(path.parent.glob(f"{path.name}.*{BACKUP_SUFFIX}"))[:-1]:
             # One generation only -- these are copies of a credential file.
             older.unlink(missing_ok=True)
 
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     try:
-        tmp.write_text(payload, encoding="utf-8")
+        _write_durably(tmp, payload.encode("utf-8"))
         os.replace(tmp, path)
     finally:
         tmp.unlink(missing_ok=True)
