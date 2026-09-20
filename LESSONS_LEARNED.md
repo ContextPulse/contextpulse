@@ -175,8 +175,35 @@ Merging would have re-broken the workspace.
 
 **Fix/Pattern:** `versioning-strategy` does not express intent. Both `auto` and
 `increase-if-necessary` propose widening a range when a release lands outside it, which
-is right for an accidental bound and wrong for a deliberate one. **Only an explicit
-`ignore` rule with `version-update:semver-major` encodes "this cap is a guard."** Any
-repo that pins a major on purpose needs both the pin and the matching ignore rule.
-Secondary: `versioning-strategy: widen` is **not valid for pip** and an invalid value
-makes Dependabot reject the *entire file*, silently disabling every other setting in it.
+is right for an accidental bound and wrong for a deliberate one. Only an explicit
+`ignore` rule encodes "this cap is a guard" — and **it must use `versions:`, not
+`update-types:`**:
+
+```yaml
+ignore:
+  - dependency-name: "mcp"
+    versions: [">=2.0.0"]                              # works
+    # update-types: ["version-update:semver-major"]    # does NOT work here
+```
+
+**This correction is itself the lesson.** The `update-types` form was written first, folded
+into a skill as settled guidance, and was wrong. Proven as a controlled pair — same repo,
+same dependencies, same trigger, only the form differing:
+
+| Dependabot run | Ignore form in its job definition | Outcome |
+|---|---|---|
+| 22:37 | `update-types: semver-major`, `version-requirement: null` | **opened the PR anyway** |
+| 23:19 | `version-requirement: >=2.0.0` | **no PR** |
+
+A range-widening update on a library with no lockfile has no single resolved "current
+version" for a semver comparison to classify against, so the `update-types` filter never
+engages.
+
+**Verify a suppression rule by observing the thing not happen, or by reading the consumer's
+loaded state — never by the fact that the file now contains the rule:**
+`gh run view <id> --log | grep "Job definition"` → `job.ignore-conditions`.
+
+Two related traps: closing a *grouped* PR creates no ignore at all, and
+`@dependabot ignore this major version` does not work on one either — Dependabot says so in
+its own close comment. And `versioning-strategy: widen` is **not valid for pip**; an invalid
+value makes Dependabot reject the *entire file*, silently disabling every other setting in it.
