@@ -19,11 +19,22 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
+from contextpulse_core.redact import redact_sensitive
+
 logger = logging.getLogger(__name__)
 
 
 class MemoryQuotaExceeded(Exception):
     """Raised when the warm-tier entry count reaches max_warm_entries."""
+
+
+class MemoryValueTooLarge(Exception):
+    """Raised when a single memory value exceeds MemoryStore.MAX_VALUE_BYTES.
+
+    Deliberately a raised exception rather than a silent truncation: a memory
+    that was quietly cut in half is worse than one that was refused, because
+    the caller believes it stored something it did not.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -545,6 +556,14 @@ class MemoryStore:
         self.warm = WarmTier(self._data_dir / "memory.db")
         self.cold = ColdTier(self._data_dir / "memory_cold.db")
 
+    # A single memory is a note, not a file. 64 KB is ~16,000 words -- far more
+    # than any legitimate note and far less than the "paste a whole file into
+    # the agent's memory" case the MCP surface audit flagged as unbounded on
+    # both write and read. Chosen as a round power-of-two ceiling, not measured
+    # from a distribution: there was no cap at all, so any finite one is the
+    # improvement and this one has room to be raised if a real note hits it.
+    MAX_VALUE_BYTES = 64 * 1024
+
     def store(
         self,
         key: str,
@@ -555,6 +574,25 @@ class MemoryStore:
         source_event_id: str | None = None,
         modality: str | None = None,
     ) -> None:
+        # Measured in BYTES, not characters: the store is what fills up, and a
+        # 3-byte emoji costs three times what its len() suggests.
+        size = len(value.encode("utf-8"))
+        if size > self.MAX_VALUE_BYTES:
+            raise MemoryValueTooLarge(
+                f"Memory value is {size} bytes; the limit is {self.MAX_VALUE_BYTES} "
+                f"({self.MAX_VALUE_BYTES // 1024} KB). Store a summary or a file "
+                "path instead of the file's contents."
+            )
+
+        # Unconditional, and BEFORE the value reaches any tier. Everything
+        # downstream -- the hot dict, the warm FTS index, the embedding vector,
+        # the cold-tier archive -- derives from this one local, so none of them
+        # can hold what this removes. The MCP surface audit found memory_recall
+        # returns whatever was stored verbatim with no redaction and no cap: an
+        # agent that stores a pasted credential as a "memory" hands it back in
+        # full to any MCP client.
+        value = redact_sensitive(value)
+
         # Quota check: if at capacity and this is a new key, block the write.
         # Upserts (existing key) are always allowed — they don't grow the store.
         if self._max_warm_entries and self.warm.get(key) is None:
