@@ -16,7 +16,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from contextpulse_core import clipboard_lock, gui_theme, mcp_auth
-from contextpulse_core.config import _DEFAULTS, load_config, save_config
+from contextpulse_core.config import _CLAMPS, _DEFAULTS, load_config, save_config
 from contextpulse_core.license import (
     get_license_email,
     get_license_tier,
@@ -28,6 +28,11 @@ from contextpulse_core.license import (
 logger = logging.getLogger(__name__)
 
 _settings_open = False
+
+# Ceiling for a spinner whose config key has no upper clamp. 86400 = 24h;
+# every spin field here except jpeg_quality is seconds-valued, and
+# jpeg_quality carries its own (1, 100) in _CLAMPS. See _spin_range().
+_UNBOUNDED_SPIN_CEILING = 86400
 
 # ── Keys this dialog can change that do NOT take effect until restart ──
 #
@@ -102,6 +107,31 @@ def _section_header(parent: tk.Frame, text: str) -> None:
     ).pack(anchor="w", pady=(15, 5))
 
 
+def _spin_range(key: str) -> tuple[int, int]:
+    """Spinner (from_, to) for a config key, taken from the core clamp table.
+
+    Every spinner used to be built `from_=0, to=300`, one literal shared by
+    auto_interval, jpeg_quality and buffer_max_age -- whose default is 1800.
+    Touching the buffer spinner at all snapped 1800 down to 300 and there was
+    no way back up through the control, so the dialog silently rewrote the
+    setting it was showing. (David's saved `buffer_max_age: 300` is almost
+    certainly that ceiling and not a preference.)
+
+    Reading _CLAMPS makes the widget and the validator one declaration
+    instead of two: a spinner cannot offer a value load_config() would clamp,
+    and cannot refuse one it would accept. An unbounded key gets a 24h
+    ceiling -- every spin field except jpeg_quality is seconds-valued, and
+    jpeg_quality is bounded in the table. The min()/max() against the
+    declared default is belt and braces: whatever the two tables say, a
+    spinner must always be able to show the value it is seeded with.
+    """
+    lo, hi = _CLAMPS[key]
+    default = int(_DEFAULTS[key])
+    from_ = min(int(lo) if lo is not None else 0, default)
+    to = max(int(hi) if hi is not None else _UNBOUNDED_SPIN_CEILING, default)
+    return from_, to
+
+
 def _field_row(
     parent: tk.Frame,
     label_text: str,
@@ -110,8 +140,18 @@ def _field_row(
     width: int = 0,
     entry_type: str = "entry",
     values: list[str] | None = None,
+    config_key: str | None = None,
 ) -> tk.Widget:
-    """Add a label + input row. Returns the input widget."""
+    """Add a label + input row. Returns the input widget.
+
+    `config_key` is REQUIRED for a spinner and names the key it edits; that
+    is what ties the widget's limits to _CLAMPS. Raising rather than falling
+    back to a literal is deliberate -- the 0..300 ceiling was invisible for
+    as long as it was precisely because nothing connected a spinner to its
+    key, and a silent default here would let the next one in the same way.
+    """
+    if entry_type == "spin" and config_key is None:
+        raise ValueError(f"_field_row({label_text!r}, entry_type='spin') needs a config_key")
     row = tk.Frame(parent, bg=gui_theme.BG)
     row.pack(fill="x", pady=2)
 
@@ -128,9 +168,10 @@ def _field_row(
         )
         widget.pack(side="left")
     elif entry_type == "spin":
+        spin_from, spin_to = _spin_range(config_key)
         widget = tk.Spinbox(
             row, textvariable=var,
-            from_=0, to=300, increment=1,
+            from_=spin_from, to=spin_to, increment=1,
             font=("Consolas", 10), width=width or 6,
             bg=gui_theme.SURFACE, fg=gui_theme.TEXT,
             insertbackground=gui_theme.ACCENT, relief="flat",
@@ -203,7 +244,8 @@ def _build_and_run() -> None:
     _section_header(frame, "Capture")
 
     interval_var = tk.IntVar(master=root, value=cfg["auto_interval"])
-    _field_row(frame, "Auto-capture interval (s):", interval_var, entry_type="spin")
+    _field_row(frame, "Auto-capture interval (s):", interval_var,
+               entry_type="spin", config_key="auto_interval")
 
     storage_var = tk.StringVar(master=root, value=cfg["storage_mode"])
     _field_row(
@@ -221,10 +263,12 @@ def _build_and_run() -> None:
     ).pack(anchor="w", pady=(2, 8))
 
     quality_var = tk.IntVar(master=root, value=cfg["jpeg_quality"])
-    _field_row(frame, "JPEG quality (1-100):", quality_var, entry_type="spin")
+    _field_row(frame, "JPEG quality (1-100):", quality_var,
+               entry_type="spin", config_key="jpeg_quality")
 
     buffer_var = tk.IntVar(master=root, value=cfg["buffer_max_age"])
-    _field_row(frame, "Buffer max age (seconds):", buffer_var, entry_type="spin")
+    _field_row(frame, "Buffer max age (seconds):", buffer_var,
+               entry_type="spin", config_key="buffer_max_age")
 
     # ── Hotkeys Section ───────────────────────────────────────────
     _section_header(frame, "Hotkeys")

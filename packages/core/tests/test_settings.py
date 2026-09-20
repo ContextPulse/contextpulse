@@ -21,7 +21,9 @@ from __future__ import annotations
 import ast
 import inspect
 from pathlib import Path
+from unittest.mock import MagicMock
 
+import pytest
 from contextpulse_core import settings
 from contextpulse_core.config import _DEFAULTS
 
@@ -151,6 +153,112 @@ class TestNoSecondDeclarationSite:
             f"only {len(subscripts)} cfg[...] reads found; the dialog should read "
             "every control's value straight out of the merged config"
         )
+
+
+class TestSpinboxRanges:
+    """SF-8: the Buffer-age Spinbox could not express its own default.
+
+    `_field_row(entry_type="spin")` hardcoded from_=0, to=300 and is shared by
+    auto_interval, jpeg_quality AND buffer_max_age -- whose default is 1800.
+    Stepping the spinner at all snapped 1800 down into range, with no way
+    back up through the control. David's saved `buffer_max_age: 300` is
+    almost certainly that ceiling rather than a considered choice.
+
+    The limits now come from the core clamp table, so the widget and the
+    validator cannot disagree, and the contains-its-default invariant below
+    is the mechanism that stops the same drift happening again.
+    """
+
+    SPIN_KEYS = ["auto_interval", "jpeg_quality", "buffer_max_age"]
+
+    def test_a_bounded_key_takes_both_limits_from_the_clamp_table(self):
+        assert settings._spin_range("jpeg_quality") == (1, 100)
+
+    def test_buffer_max_age_reaches_a_full_day_not_300(self):
+        assert settings._spin_range("buffer_max_age") == (0, 86400)
+
+    @pytest.mark.parametrize("key", SPIN_KEYS)
+    def test_every_spin_range_contains_its_own_default(self, key):
+        """The invariant that was violated. A ceiling below the default is a
+        control that silently rewrites the setting it is showing."""
+        lo, hi = settings._spin_range(key)
+        assert lo <= _DEFAULTS[key] <= hi, f"{key}: default {_DEFAULTS[key]} outside spinner {lo}..{hi}"
+
+    def test_the_range_follows_the_clamp_table_rather_than_a_literal(self, monkeypatch):
+        """Mutation check: move the clamp, and the spinner must move with it.
+
+        The default moves too, because a default outside its own clamp is the
+        one case where _spin_range deliberately ignores the table (below).
+        """
+        monkeypatch.setitem(settings._CLAMPS, "jpeg_quality", (5, 55))
+        monkeypatch.setitem(_DEFAULTS, "jpeg_quality", 50)
+        assert settings._spin_range("jpeg_quality") == (5, 55)
+
+    def test_a_default_outside_its_clamp_still_yields_a_usable_range(self, monkeypatch):
+        """Belt and braces: never hand back a spinner that cannot show the
+        value it was seeded with, whatever the two tables say."""
+        monkeypatch.setitem(settings._CLAMPS, "jpeg_quality", (1, 10))
+        monkeypatch.setitem(_DEFAULTS, "jpeg_quality", 90)
+        lo, hi = settings._spin_range("jpeg_quality")
+        assert lo <= 90 <= hi
+
+    def test_the_widget_is_actually_built_with_the_computed_range(self):
+        """Wired, not merely written: a helper nothing calls fixes nothing.
+
+        The three tk names this row touches are swapped for plain stubs by
+        hand. conftest binds `tk.Frame`/`tk.Label` to the MagicMock CLASS, so
+        `tk.Frame(parent, ...)` really constructs a MagicMock with `parent`
+        as its spec -- and spec'ing a Mock raises InvalidSpecError. Stubs
+        also mean this asserts on real recorded kwargs rather than on a mock
+        call record that would exist either way.
+        """
+        seen = {}
+
+        class _Stub:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def pack(self, *args, **kwargs):
+                pass
+
+        class _FakeSpinbox(_Stub):
+            def __init__(self, parent, **kwargs):
+                seen.update(kwargs)
+
+        originals = {name: getattr(settings.tk, name) for name in ("Frame", "Label", "Spinbox")}
+        settings.tk.Frame = _Stub
+        settings.tk.Label = _Stub
+        settings.tk.Spinbox = _FakeSpinbox
+        try:
+            settings._field_row(
+                _Stub(), "Buffer max age (seconds):", MagicMock(),
+                entry_type="spin", config_key="buffer_max_age",
+            )
+        finally:
+            for name, value in originals.items():
+                setattr(settings.tk, name, value)
+        assert (seen["from_"], seen["to"]) == (0, 86400)
+
+    def test_a_spin_field_without_a_config_key_fails_loudly(self):
+        """The 0..300 literal was invisible precisely because nothing tied a
+        spinner to the key it edits. A future one cannot be added silently."""
+        with pytest.raises(ValueError, match="config_key"):
+            settings._field_row(MagicMock(), "Something (s):", MagicMock(), entry_type="spin")
+
+    def test_every_spin_call_site_names_its_config_key(self):
+        """AST scan of _build_and_run: each entry_type="spin" row passes one."""
+        tree = ast.parse(inspect.getsource(settings._build_and_run))
+        spin_calls = [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "id", None) == "_field_row"
+            and any(kw.arg == "entry_type" and getattr(kw.value, "value", None) == "spin"
+                    for kw in node.keywords)
+        ]
+        assert len(spin_calls) == 3, f"expected 3 spin rows, found {len(spin_calls)}"
+        for call in spin_calls:
+            keys = [kw.value.value for kw in call.keywords if kw.arg == "config_key"]
+            assert keys and keys[0] in _DEFAULTS, ast.dump(call)
 
 
 class TestAsFloat:
