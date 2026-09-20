@@ -51,9 +51,6 @@ class TestModalityModuleABC:
                     "error": None,
                 }
 
-            def get_config_schema(self):
-                return {}
-
         module = DummyModule()
         assert module.get_modality() == Modality.SYSTEM
         assert module.is_alive() is False
@@ -95,9 +92,6 @@ class TestModalityModuleABC:
                         "events_emitted": 0, "last_event_timestamp": None,
                         "error": None}
 
-            def get_config_schema(self):
-                return {}
-
             def emit_test_event(self):
                 if self._callback:
                     event = ContextEvent(
@@ -114,8 +108,19 @@ class TestModalityModuleABC:
         assert len(received) == 1
         assert received[0].modality == Modality.VOICE
 
-    def test_get_config_schema_required(self):
-        """get_config_schema is required per spec section 7."""
+    def test_get_config_schema_is_not_required(self):
+        """A module with no get_config_schema is a valid ModalityModule.
+
+        Replaces test_get_config_schema_required / _returns_dict. The abstract
+        method was deleted: it advertised itself as the source of the settings
+        panel's controls and no settings panel ever called it, while being a
+        third declaration site for values _DEFAULTS owns -- and it had already
+        drifted from them (voice declared voice_whisper_model "base" against
+        _DEFAULTS "small"; sight declared `capture_interval`, a name matching
+        no config key). The pair of tests it replaces asserted the opposite,
+        so this is the test that would have caught an accidental revival of
+        the requirement.
+        """
         class NoConfigSchema(ModalityModule):
             def get_modality(self): return Modality.SYSTEM
             def register(self, cb): pass
@@ -123,26 +128,24 @@ class TestModalityModuleABC:
             def stop(self): pass
             def is_alive(self): return False
             def get_status(self): return {}
-            # get_config_schema intentionally omitted
 
-        with pytest.raises(TypeError):
-            NoConfigSchema()
+        module = NoConfigSchema()  # must NOT raise TypeError
+        assert module.get_modality() == Modality.SYSTEM
+        assert not hasattr(module, "get_config_schema")
 
-    def test_get_config_schema_returns_dict(self):
-        class FullModule(ModalityModule):
-            def get_modality(self): return Modality.SIGHT
+    def test_the_other_abstract_methods_are_still_required(self):
+        """Positive control: removing one abstract method did not remove them all.
+
+        Without this, the test above would pass just as happily against an
+        ABC that had lost every @abstractmethod.
+        """
+        class MissingGetStatus(ModalityModule):
+            def get_modality(self): return Modality.SYSTEM
             def register(self, cb): pass
             def start(self): pass
             def stop(self): pass
             def is_alive(self): return False
-            def get_status(self):
-                return {"modality": "sight", "running": False,
-                        "events_emitted": 0, "last_event_timestamp": None,
-                        "error": None}
-            def get_config_schema(self):
-                return {"capture_interval_seconds": {"type": "number", "default": 5.0}}
+            # get_status intentionally omitted
 
-        module = FullModule()
-        schema = module.get_config_schema()
-        assert isinstance(schema, dict)
-        assert len(schema) > 0
+        with pytest.raises(TypeError):
+            MissingGetStatus()

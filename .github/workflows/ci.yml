@@ -70,8 +70,14 @@ jobs:
           pip install pytest pytest-timeout
 
       - name: Run cross-platform tests
+        # tests/test_config_readers.py is named explicitly because no job ran
+        # the root tests/ directory: test-windows and test-macos run
+        # `pytest packages/`, test-integration runs `tests/integration/`. The
+        # config guard is a pure AST scan of the checked-out tree with no
+        # display or hardware dependency, so it belongs on the cheapest job
+        # that runs on both OSes -- a guard nothing executes is decoration.
         run: |
-          python -m pytest packages/core/tests packages/memory/tests packages/project/tests -v --tb=short
+          python -m pytest packages/core/tests packages/memory/tests packages/project/tests tests/test_config_readers.py -v --tb=short
 
   test-windows:
     runs-on: windows-latest

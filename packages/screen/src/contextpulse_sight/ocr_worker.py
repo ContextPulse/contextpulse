@@ -5,7 +5,7 @@
 Processes buffer frames through OCR asynchronously and stores results
 in the ActivityDB and as .txt sidecars alongside the frame files.
 
-Storage modes (configured via CONTEXTPULSE_STORAGE_MODE):
+Storage modes (Settings -> storage_mode, or CONTEXTPULSE_STORAGE_MODE):
   smart  — Always store text (searchable index). Delete image only if text-heavy.
   visual — Skip OCR entirely, keep images only.
   both   — Always keep image AND text. Good for debugging/benchmarking.
@@ -21,15 +21,32 @@ import queue
 import threading
 from pathlib import Path
 
+from contextpulse_core.config import _DEFAULTS
+from contextpulse_core.config import get as cfg_get
 from PIL import Image
 
 from contextpulse_sight.activity import ActivityDB
 from contextpulse_sight.buffer import RollingBuffer
 from contextpulse_sight.classifier import classify_and_extract
-from contextpulse_sight.config import ALWAYS_BOTH_APPS, STORAGE_MODE
 from contextpulse_sight.redact import redact_sensitive
 
 logger = logging.getLogger("contextpulse.sight.ocr_worker")
+
+
+def _storage_mode() -> str:
+    """The storage mode as configured right now.
+
+    Read per frame rather than bound at import: switching to "visual" is how a
+    user turns OCR off, and a setting that needs a daemon restart to take
+    effect is the defect this work exists to close.
+    """
+    return str(cfg_get("storage_mode", _DEFAULTS["storage_mode"]))
+
+
+def _always_both_apps() -> list[str]:
+    """Apps that keep image AND text. Lowercased by config._normalise()."""
+    apps = cfg_get("always_both_apps", _DEFAULTS["always_both_apps"])
+    return list(apps) if isinstance(apps, (list, tuple)) else []
 
 
 class OCRWorker:
@@ -65,7 +82,7 @@ class OCRWorker:
             monitor_index: Which monitor this frame came from. Forwarded to
                 emit_ocr() so the resulting ContextEvent carries it.
         """
-        if STORAGE_MODE == "visual":
+        if _storage_mode() == "visual":
             return  # No OCR needed in visual-only mode
         try:
             self._queue.put_nowait(
@@ -77,7 +94,7 @@ class OCRWorker:
     def start(self):
         """Start the background OCR processing thread."""
         self._thread.start()
-        logger.info("OCR worker started (mode=%s, queue=%d)", STORAGE_MODE, self._queue.maxsize)
+        logger.info("OCR worker started (mode=%s, queue=%d)", _storage_mode(), self._queue.maxsize)
 
     def is_alive(self) -> bool:
         """Return True if the OCR processing thread is running."""
@@ -136,12 +153,11 @@ class OCRWorker:
         is_text_heavy = result["type"] == "text" and result["text"]
 
         # Check if this app always needs both image + text (charts, design tools)
-        force_both = app_name.lower() in ALWAYS_BOTH_APPS if app_name else False
+        force_both = app_name.lower() in _always_both_apps() if app_name else False
 
         # Redact sensitive patterns (API keys, passwords, etc.) before storage
         if has_text:
-            from contextpulse_core.config import get as cfg_get
-            if cfg_get("redact_ocr_text", True):
+            if cfg_get("redact_ocr_text", _DEFAULTS["redact_ocr_text"]):
                 result["text"] = redact_sensitive(result["text"])
 
         # Always store whatever text OCR found — it's the searchable metadata
@@ -165,7 +181,7 @@ class OCRWorker:
                 )
 
         # Decide whether to keep the image
-        if is_text_heavy and STORAGE_MODE in ("smart", "text") and not force_both:
+        if is_text_heavy and _storage_mode() in ("smart", "text") and not force_both:
             # Text-heavy frame: text alone is sufficient, drop the image
             img_kb = 0
             try:

@@ -37,6 +37,7 @@ if sys.platform == "darwin":
 else:
     import pystray
 
+from contextpulse_core.config import ACTIVITY_DB_PATH as _cfg_activity_db
 from contextpulse_core.config import OUTPUT_DIR as _cfg_output_dir
 from contextpulse_core.first_run import is_first_run, show_welcome_dialog
 from contextpulse_core.license_dialog import show_nag_dialog
@@ -55,7 +56,14 @@ logger = logging.getLogger("contextpulse.daemon")
 OUTPUT_DIR = _cfg_output_dir
 LOG_FILE = OUTPUT_DIR / "contextpulse.log"
 CRASH_LOG = OUTPUT_DIR / "contextpulse_crash.log"
-ACTIVITY_DB_PATH = OUTPUT_DIR / os.environ.get("CONTEXTPULSE_ACTIVITY_DB", "activity.db")
+# Imported, not recomputed. This line used to be its own
+# `OUTPUT_DIR / os.environ.get("CONTEXTPULSE_ACTIVITY_DB", "activity.db")`,
+# a third expression of the same path beside contextpulse_core.config and
+# contextpulse_sight.config -- three copies that agreed only while all three
+# read the same env var with the same default. The daemon writes the DB that
+# contextpulse_sight.activity and the MCP server read, so a disagreement here
+# is a split-brain database, not a cosmetic duplicate.
+ACTIVITY_DB_PATH = _cfg_activity_db
 
 # Default warn threshold for the thread-budget diagnostic. Override via
 # CONTEXTPULSE_THREAD_BUDGET_WARN. The 2026-04-29 incident saw a 163-thread
@@ -454,17 +462,31 @@ class ContextPulseDaemon:
             )
             self._sight_app._session_monitor.start()
 
-            from contextpulse_sight.config import AUTO_INTERVAL
-            if AUTO_INTERVAL > 0:
-                self._sight_app._capture_thread = threading.Thread(
-                    target=self._sight_app._auto_capture_loop, daemon=True
-                )
-                self._sight_app._capture_thread.start()
+            # Both threads start unconditionally. They used to be gated on
+            # `contextpulse_sight.config.AUTO_INTERVAL > 0` -- a module
+            # constant frozen at import -- which meant auto_interval: 0 was a
+            # one-way door: nothing in the process could ever start capturing
+            # again without a daemon restart, and the Settings slider that
+            # claims to set it could not undo it.
+            #
+            # It also took the WATCHDOG down with it, which has nothing to do
+            # with the capture interval: _watchdog_loop is what re-reads
+            # clipboard_enabled every 15s and restarts a dead capture thread.
+            # With auto_interval: 0 the "Capture clipboard" checkbox was
+            # silently inert too.
+            #
+            # `auto_interval <= 0` now means "skip this iteration" INSIDE
+            # _auto_capture_loop (contextpulse_sight.app), so both 0 -> N and
+            # N -> 0 take effect live.
+            self._sight_app._capture_thread = threading.Thread(
+                target=self._sight_app._auto_capture_loop, daemon=True
+            )
+            self._sight_app._capture_thread.start()
 
-                self._sight_app._watchdog_thread = threading.Thread(
-                    target=self._sight_app._watchdog_loop, daemon=True
-                )
-                self._sight_app._watchdog_thread.start()
+            self._sight_app._watchdog_thread = threading.Thread(
+                target=self._sight_app._watchdog_loop, daemon=True
+            )
+            self._sight_app._watchdog_thread.start()
 
             # Sight hotkeys (Ctrl+Shift+S/A/Z/P)
             from pynput import keyboard

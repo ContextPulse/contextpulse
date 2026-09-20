@@ -23,19 +23,23 @@ CONTEXT_VOCAB_FILE = VOICE_DATA_DIR / "vocabulary_context.json"
 USER_PROFILE_FILE = VOICE_DATA_DIR / "user_profile.json"
 
 
-def _env(key: str, default: str) -> str:
-    return os.environ.get(key, default)
-
-
 def get_voice_config() -> dict:
-    """Load voice-specific settings from shared ContextPulse config."""
+    """Load voice-specific settings from shared ContextPulse config.
+
+    A pure rename of five keys out of the merged config -- no defaults, no
+    env reads. `load_config()` already applies CONTEXTPULSE_VOICE_HOTKEY,
+    _FIX_HOTKEY, _MODEL and _ALWAYS_LLM (they are in `_ENV_MAP`) and already
+    fills every key, so the fallbacks this used to carry could only ever be
+    an unreachable second declaration -- and one of them had already drifted:
+    the env fallback here said "small" while the Settings dialog said "base".
+    """
     cfg = load_config()
     return {
-        "hotkey": cfg.get("voice_hotkey", _env("CONTEXTPULSE_VOICE_HOTKEY", "ctrl+space")),
-        "fix_hotkey": cfg.get("voice_fix_hotkey", _env("CONTEXTPULSE_VOICE_FIX_HOTKEY", "ctrl+shift+space")),
-        "whisper_model": cfg.get("voice_whisper_model", _env("CONTEXTPULSE_VOICE_MODEL", "small")),
-        "always_use_llm": cfg.get("voice_always_use_llm", False),
-        "anthropic_api_key": cfg.get("voice_anthropic_api_key", ""),
+        "hotkey": cfg["voice_hotkey"],
+        "fix_hotkey": cfg["voice_fix_hotkey"],
+        "whisper_model": cfg["voice_whisper_model"],
+        "always_use_llm": cfg["voice_always_use_llm"],
+        "anthropic_api_key": cfg["voice_anthropic_api_key"],
     }
 
 

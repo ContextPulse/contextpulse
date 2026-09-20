@@ -15,12 +15,25 @@ from pathlib import Path
 
 import mss
 import numpy as np
+from contextpulse_core.config import _DEFAULTS
+from contextpulse_core.config import get as cfg_get
 from contextpulse_core.platform import get_platform_provider
 from PIL import Image
 
-from contextpulse_sight.config import JPEG_QUALITY, MAX_HEIGHT, MAX_WIDTH
-
 logger = logging.getLogger(__name__)
+
+
+def _jpeg_quality() -> int:
+    """JPEG quality as configured right now (Settings -> jpeg_quality)."""
+    return int(cfg_get("jpeg_quality", _DEFAULTS["jpeg_quality"]))
+
+
+def _max_size() -> tuple[int, int]:
+    """Downscale bounds as configured right now."""
+    return (
+        int(cfg_get("max_width", _DEFAULTS["max_width"])),
+        int(cfg_get("max_height", _DEFAULTS["max_height"])),
+    )
 
 # --- Backend abstraction ---
 
@@ -239,10 +252,11 @@ def find_monitor_at_cursor(sct: mss.mss) -> tuple[int, dict]:
 
 
 def _downscale(img: Image.Image) -> Image.Image:
-    """Downscale image to fit within MAX_WIDTH x MAX_HEIGHT, preserving aspect ratio."""
-    if img.width <= MAX_WIDTH and img.height <= MAX_HEIGHT:
+    """Downscale image to fit the configured max width/height, keeping aspect."""
+    max_width, max_height = _max_size()
+    if img.width <= max_width and img.height <= max_height:
         return img
-    img.thumbnail((MAX_WIDTH, MAX_HEIGHT), Image.LANCZOS)
+    img.thumbnail((max_width, max_height), Image.LANCZOS)
     return img
 
 
@@ -486,7 +500,7 @@ def save_image(img: Image.Image, path: Path, fmt: str = "PNG") -> None:
     if fmt.upper() == "JPEG":
         if img.mode == "RGBA":
             img = img.convert("RGB")
-        img.save(path, format="JPEG", quality=JPEG_QUALITY)
+        img.save(path, format="JPEG", quality=_jpeg_quality())
     else:
         img.save(path, format="PNG")
     logger.info("Saved %s (%dx%d) to %s", fmt, img.width, img.height, path)
@@ -497,5 +511,5 @@ def capture_to_bytes(img: Image.Image, fmt: str = "PNG") -> bytes:
     buf = BytesIO()
     if fmt.upper() == "JPEG" and img.mode == "RGBA":
         img = img.convert("RGB")
-    img.save(buf, format=fmt, quality=JPEG_QUALITY if fmt.upper() == "JPEG" else None)
+    img.save(buf, format=fmt, quality=_jpeg_quality() if fmt.upper() == "JPEG" else None)
     return buf.getvalue()

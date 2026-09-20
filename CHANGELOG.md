@@ -127,8 +127,59 @@ present in voice, touch, memory and the two derived stores.
   storing them unbounded.
 - A "Capture clipboard contents" checkbox in Settings, and the matching
   `CONTEXTPULSE_CLIPBOARD_ENABLED` environment variable.
+- **Seven settings that existed only as hardcoded constants are now real
+  config keys**, settable in `config.json` and by environment variable like
+  every other tunable: `auto_interval_idle`
+  (`CONTEXTPULSE_AUTO_INTERVAL_IDLE`), `auto_idle_threshold`
+  (`CONTEXTPULSE_AUTO_IDLE_THRESHOLD`), `ocr_diff_threshold`
+  (`CONTEXTPULSE_OCR_DIFF_THRESHOLD`), `touch_burst_timeout`
+  (`CONTEXTPULSE_TOUCH_BURST_TIMEOUT`), `touch_correction_window`
+  (`CONTEXTPULSE_TOUCH_CORRECTION_WINDOW`), `touch_min_burst_chars`
+  (`CONTEXTPULSE_TOUCH_MIN_BURST_CHARS`) and `touch_mouse_debounce`
+  (`CONTEXTPULSE_TOUCH_MOUSE_DEBOUNCE`).
+- Values in `config.json` are now range-checked the same way environment
+  variables always were, so a hand-edited `"jpeg_quality": 500` is clamped
+  instead of reaching the encoder.
+
+### Changed
+
+- **The default privacy blocklist is now in effect.** ContextPulse has always
+  shipped fourteen default patterns — password managers, sign-in and
+  two-factor windows — and documented them as the privacy behaviour, but the
+  capture pipeline read a separate, empty list, so the defaults never blocked
+  anything. Windows whose titles contain those patterns are no longer
+  captured, and rows already stored with such titles stop appearing in MCP
+  search results. If you want the old behaviour, set `blocklist_patterns` to
+  `[]` in `config.json`.
+- Blocklist patterns now match on word boundaries rather than as bare
+  substrings, so the short defaults `"Sign in"` and `"Log in"` no longer block
+  unrelated windows such as "Design in Figma" or "Blog index".
+- Settings that cannot take effect until a restart are now named individually
+  when you save, instead of a blanket "Hotkey changes will take effect after
+  restarting" that appeared even when no hotkey had changed.
 
 ### Fixed
+
+- **The Settings dialog silently downgraded two settings every time you
+  pressed Save.** It carried its own copy of every default, and two had
+  drifted from the values the daemon runs: it wrote `jpeg_quality` 75 over 90,
+  and the Whisper model `base` over `small`. Opening Settings and saving with
+  nothing changed was enough to trigger it.
+- **"Always use AI cleanup" did nothing until the next restart.** The voice
+  module read the setting once at startup and cached it; it is now read per
+  dictation.
+- **Setting the auto-capture interval to 0 could not be undone.** The capture
+  and watchdog threads were only created when the interval was above zero at
+  startup, so a zero left the process with nothing to restart — and took the
+  clipboard setting's 15-second reconcile down with it, because that runs on
+  the same watchdog. Both threads now always start and a zero interval is
+  handled inside the loop.
+- The four touch settings in `config.json` were written by the Settings dialog
+  and then ignored by the daemon, which read hardcoded constants instead.
+- An unparseable value in one of the touch fields discarded the entire Save —
+  blocklist, hotkeys and all — with no message.
+- `CONTEXTPULSE_ACTIVITY_DB` was resolved independently in three places; the
+  daemon now imports the one path the rest of the codebase uses.
 
 - Boolean environment variables were parsed as integers, so
   `CONTEXTPULSE_KNOWLEDGE_ENABLED=true` raised `ValueError` out of every

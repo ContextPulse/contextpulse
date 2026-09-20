@@ -7,11 +7,9 @@ import math
 import threading
 import time
 
-from contextpulse_sight.config import (
-    EVENT_IDLE_THRESHOLD,
-    EVENT_MOVEMENT_THRESHOLD,
-    EVENT_POLL_INTERVAL,
-)
+from contextpulse_core.config import _DEFAULTS
+from contextpulse_core.config import get as cfg_get
+
 from contextpulse_sight.privacy import get_foreground_window_title
 
 logger = logging.getLogger("contextpulse.sight.events")
@@ -29,6 +27,13 @@ class EventDetector:
     def __init__(self, get_cursor_pos=None, find_monitor_index=None):
         """Initialize the event detector.
 
+        The three event_* tunables are read ONCE here, not per poll. They are
+        thread constants with no Settings control: the poll interval is the
+        loop's own wait, so re-reading it mid-loop would change the meaning of
+        a wait already in progress. A change to any of them takes effect when
+        the detector is next constructed -- daemon restart, or the watchdog
+        rebuilding a dead detector.
+
         Args:
             get_cursor_pos: Callable returning (x, y) cursor position.
                 Defaults to capture._get_cursor_pos.
@@ -37,6 +42,16 @@ class EventDetector:
         """
         self._get_cursor_pos = get_cursor_pos
         self._find_monitor_index = find_monitor_index
+
+        self._poll_interval = float(
+            cfg_get("event_poll_interval", _DEFAULTS["event_poll_interval"])
+        )
+        self._idle_threshold = float(
+            cfg_get("event_idle_threshold", _DEFAULTS["event_idle_threshold"])
+        )
+        self._movement_threshold = float(
+            cfg_get("event_movement_threshold", _DEFAULTS["event_movement_threshold"])
+        )
 
         self._last_title: str = ""
         self._last_cursor: tuple[int, int] = (0, 0)
@@ -53,7 +68,7 @@ class EventDetector:
         self._thread.start()
         logger.info(
             "EventDetector started (poll=%.1fs, idle=%ds, movement=%dpx)",
-            EVENT_POLL_INTERVAL, EVENT_IDLE_THRESHOLD, EVENT_MOVEMENT_THRESHOLD,
+            self._poll_interval, self._idle_threshold, self._movement_threshold,
         )
 
     def stop(self):
@@ -85,7 +100,7 @@ class EventDetector:
 
     def _poll_loop(self):
         """Poll for events at configured interval."""
-        while not self._stop.wait(EVENT_POLL_INTERVAL):
+        while not self._stop.wait(self._poll_interval):
             try:
                 self._check_window_change()
                 self._check_cursor_activity()
@@ -118,12 +133,12 @@ class EventDetector:
         if distance > 0:
             # Check idle-then-active
             idle_duration = now - self._last_activity_time
-            if idle_duration >= EVENT_IDLE_THRESHOLD:
+            if idle_duration >= self._idle_threshold:
                 self._trigger(f"idle_wake: {idle_duration:.0f}s idle")
             self._last_activity_time = now
 
         # Check significant movement (monitor boundary cross proxy)
-        if distance >= EVENT_MOVEMENT_THRESHOLD:
+        if distance >= self._movement_threshold:
             # Check if monitor changed
             new_monitor = self._get_monitor_index(cx, cy)
             if new_monitor != self._last_monitor_index:

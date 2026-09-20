@@ -4,9 +4,12 @@ conftest.py mocks tkinter, pystray, and windll before any imports happen,
 so this file can safely import contextpulse_core.daemon.
 """
 
+import ast
 import inspect
 import sys
+import textwrap
 import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -699,6 +702,13 @@ def _sight_app_with_clipboard(tmp_path, monkeypatch, enabled):
     app._event_detector = MagicMock()
     app._ocr_worker = MagicMock()
     app._sight_module = MagicMock()
+    # The daemon now starts both of these unconditionally (it used to gate
+    # them on contextpulse_sight.config.AUTO_INTERVAL, a frozen constant).
+    # Stub the loop BODIES rather than the threads: the thread objects stay
+    # real, so a test can still assert they were created and started, but
+    # nothing takes a screenshot or polls a clipboard for 15s.
+    app._auto_capture_loop = MagicMock(name="_auto_capture_loop")
+    app._watchdog_loop = MagicMock(name="_watchdog_loop")
     return app
 
 
@@ -727,8 +737,9 @@ class TestClipboardMonitorMayBeAbsent:
         return daemon, app
 
     def _start(self, daemon):
+        # No AUTO_INTERVAL patch: the daemon no longer reads that constant,
+        # and _sight_app_with_clipboard stubs the two loop bodies instead.
         with patch("contextpulse_sight.privacy.SessionMonitor"), \
-             patch("contextpulse_sight.config.AUTO_INTERVAL", 0), \
              patch("pynput.keyboard.Listener"):
             daemon._start_modules()
 
@@ -765,3 +776,109 @@ class TestClipboardMonitorMayBeAbsent:
         self._start(daemon)
         daemon._stop_modules()
         assert monitor._stop.is_set(), "the running monitor was not told to stop"
+
+
+# ---------------------------------------------------------------------------
+# The capture and watchdog threads start regardless of auto_interval
+# ---------------------------------------------------------------------------
+
+class TestCaptureThreadAlwaysStarts:
+    """auto_interval: 0 must not be a one-way door.
+
+    _start_modules used to wrap both thread starts in
+    `if contextpulse_sight.config.AUTO_INTERVAL > 0`. That constant is frozen
+    at import, so setting the interval to 0 meant no capture thread existed
+    for the life of the process -- the Settings slider could turn capture off
+    and then could not turn it back on, and nothing said so.
+
+    Worse, the same branch also skipped the WATCHDOG thread, which is what
+    re-reads clipboard_enabled every 15s and restarts a dead capture thread.
+    A user who set auto_interval: 0 lost the "Capture clipboard" checkbox's
+    live behaviour as a side effect of a setting about screenshots.
+
+    Handling 0 belongs inside _auto_capture_loop (it skips the iteration),
+    where a later save can change the answer.
+    """
+
+    def _daemon_and_app(self, tmp_path, monkeypatch):
+        daemon, _ = _make_daemon(tmp_path)
+        app = _sight_app_with_clipboard(tmp_path, monkeypatch, enabled=False)
+        daemon._sight_app = app
+        daemon._voice_module = None
+        daemon._touch_module = None
+        daemon._knowledge_ingestor = None
+        with patch("contextpulse_sight.privacy.SessionMonitor"), \
+             patch("pynput.keyboard.Listener"):
+            daemon._start_modules()
+        return daemon, app
+
+    def test_both_threads_start_when_auto_interval_is_zero(self, tmp_path, monkeypatch):
+        import contextpulse_core.config as cfg_mod
+        monkeypatch.setitem(cfg_mod._DEFAULTS, "auto_interval", 0)
+        cfg_mod.clear_config_cache()
+
+        _, app = self._daemon_and_app(tmp_path, monkeypatch)
+
+        assert app._capture_thread is not None, "no capture thread with auto_interval 0"
+        assert app._watchdog_thread is not None, "no watchdog thread with auto_interval 0"
+        # The loop BODY is what decides whether to capture, and it is reached.
+        app._auto_capture_loop.assert_called_once()
+        app._watchdog_loop.assert_called_once()
+
+    def test_both_threads_start_at_the_default_interval(self, tmp_path, monkeypatch):
+        """Positive control: the zero case above would also pass if the daemon
+        had simply stopped starting threads altogether."""
+        _, app = self._daemon_and_app(tmp_path, monkeypatch)
+        app._auto_capture_loop.assert_called_once()
+        app._watchdog_loop.assert_called_once()
+
+    def test_daemon_does_not_read_the_frozen_sight_constant(self):
+        """The gate is gone from the CODE, not merely inert at runtime.
+
+        Parsed, not grepped: the first version of this test searched the raw
+        source and failed on the comment that explains the removal -- the
+        same false positive tests/test_config_readers.py avoids by walking
+        the AST, where comments do not exist.
+        """
+        import contextpulse_core.daemon as daemon_mod
+        tree = ast.parse(textwrap.dedent(
+            inspect.getsource(daemon_mod.ContextPulseDaemon._start_modules)
+        ))
+        names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+        names |= {a.name for n in ast.walk(tree)
+                  if isinstance(n, ast.ImportFrom) for a in n.names}
+        assert "AUTO_INTERVAL" not in names, (
+            "_start_modules still reads contextpulse_sight.config.AUTO_INTERVAL, "
+            "a constant frozen at import"
+        )
+
+
+class TestActivityDbPathIsImportedNotRecomputed:
+    """daemon.py held a third copy of the activity-DB path expression.
+
+    It read CONTEXTPULSE_ACTIVITY_DB itself and joined it to OUTPUT_DIR, which
+    agreed with contextpulse_core.config only for as long as both spelled the
+    same env var with the same default. The daemon WRITES the database that
+    contextpulse_sight.activity and the MCP server read, so a disagreement is
+    a split-brain store rather than a tidy-up.
+    """
+
+    def test_daemon_path_is_the_config_path(self):
+        import contextpulse_core.config as cfg_mod
+        import contextpulse_core.daemon as daemon_mod
+        assert daemon_mod.ACTIVITY_DB_PATH == cfg_mod.ACTIVITY_DB_PATH
+
+    def test_daemon_module_no_longer_reads_the_env_var(self):
+        """Again parsed, not grepped -- the comment above the import names it."""
+        import contextpulse_core.daemon as daemon_mod
+        tree = ast.parse(
+            Path(inspect.getfile(daemon_mod)).read_text(encoding="utf-8")
+        )
+        literals = [
+            n.lineno for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and n.value == "CONTEXTPULSE_ACTIVITY_DB"
+        ]
+        assert not literals, (
+            f"daemon.py still resolves the activity DB path itself (line(s) {literals}) "
+            "instead of importing contextpulse_core.config.ACTIVITY_DB_PATH"
+        )

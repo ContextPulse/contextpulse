@@ -62,10 +62,23 @@ class ModalityModule(ABC):
             - error: str | None
         """
 
-    @abstractmethod
-    def get_config_schema(self) -> dict[str, Any]:
-        """Return JSON schema for this module's configuration.
-
-        Used by the settings panel to render module-specific controls.
-        Keys are config param names; values are dicts with type, default, etc.
-        """
+    # There is deliberately no get_config_schema(). It declared itself the
+    # source of the settings panel's controls -- "Used by the settings panel
+    # to render module-specific controls" -- and no settings panel ever called
+    # it, in any module, in the project's life. What it did instead was be a
+    # THIRD declaration site for values that _DEFAULTS already owned, and it
+    # had already drifted from both of the others: voice said
+    # voice_whisper_model default "base" against _DEFAULTS "small", and sight
+    # declared `capture_interval` and `diff_threshold`, names that match no
+    # config key at all.
+    #
+    # Wiring it instead of deleting it was considered and rejected: a flat
+    # {name: {type, default}} cannot express the per-section help text,
+    # enumerated combo values, cross-field restart logic or License section
+    # the real dialog needs, so "generate the panel from the schema" means
+    # building a UI-generation layer. _DEFAULTS plus the reader guard in
+    # tests/test_config_readers.py does the schema's only real job -- one
+    # declaration per key -- and can be checked automatically.
+    #
+    # Removing an ABSTRACT method is backward compatible: a third-party
+    # module that still defines get_config_schema keeps working.

@@ -104,7 +104,13 @@ class VoiceModule(ModalityModule):
         self._model_size = model_size or cfg["whisper_model"]
         self._hotkey_keys = _parse_hotkey(cfg["hotkey"])
         self._fix_hotkey_keys = _parse_hotkey(cfg["fix_hotkey"])
-        self._always_use_llm = cfg["always_use_llm"]
+        # always_use_llm is deliberately NOT cached here. Unlike the model
+        # (loaded from disk) and the hotkeys (bound into a pynput listener),
+        # it is a per-dictation branch, so caching it at construction made the
+        # Settings checkbox a placebo for the life of the daemon -- ticked,
+        # saved, and ignored until restart with nothing saying so. It is read
+        # in _transcribe_and_paste instead, beside the has_api_key() call that
+        # already goes to the same config file on every dictation.
 
     def get_modality(self) -> Modality:
         return Modality.VOICE
@@ -193,26 +199,6 @@ class VoiceModule(ModalityModule):
             "events_emitted": self._events_emitted,
             "last_event_timestamp": self._last_timestamp,
             "error": self._error,
-        }
-
-    def get_config_schema(self) -> dict[str, Any]:
-        return {
-            "voice_hotkey": {
-                "type": "string", "default": "ctrl+space",
-                "description": "Hold to dictate",
-            },
-            "voice_fix_hotkey": {
-                "type": "string", "default": "ctrl+shift+space",
-                "description": "Re-transcribe last dictation with higher quality",
-            },
-            "voice_whisper_model": {
-                "type": "string", "default": "base",
-                "description": "Whisper model size (base/small/medium/large)",
-            },
-            "voice_always_use_llm": {
-                "type": "boolean", "default": False,
-                "description": "Always use LLM for text cleanup",
-            },
         }
 
     def _emit(self, event: ContextEvent) -> None:
@@ -460,7 +446,7 @@ class VoiceModule(ModalityModule):
                 return
 
             raw_text = apply_punctuation(raw_text)
-            use_llm = self._always_use_llm and has_api_key()
+            use_llm = bool(get_voice_config()["always_use_llm"]) and has_api_key()
             if use_llm and self._overlay:
                 self._overlay.show_cleaning()
             profile_context = self._build_profile_context(app_name, window_title)

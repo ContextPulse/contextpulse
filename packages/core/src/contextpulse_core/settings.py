@@ -16,7 +16,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from contextpulse_core import clipboard_lock, gui_theme, mcp_auth
-from contextpulse_core.config import load_config, save_config
+from contextpulse_core.config import _CLAMPS, _DEFAULTS, load_config, save_config
 from contextpulse_core.license import (
     get_license_email,
     get_license_tier,
@@ -28,6 +28,56 @@ from contextpulse_core.license import (
 logger = logging.getLogger(__name__)
 
 _settings_open = False
+
+# Ceiling for a spinner whose config key has no upper clamp. 86400 = 24h;
+# every spin field here except jpeg_quality is seconds-valued, and
+# jpeg_quality carries its own (1, 100) in _CLAMPS. See _spin_range().
+_UNBOUNDED_SPIN_CEILING = 86400
+
+# ── Keys this dialog can change that do NOT take effect until restart ──
+#
+# Every other control here is read at the point of use, so saving it changes
+# behaviour immediately. These nine are cached by whichever module owns them:
+# the four sight hotkeys are parsed once in ContextPulseSightApp.__init__, the
+# three voice keys once in VoiceModule.__init__ (the model is loaded from
+# disk), and the two touch keys once in TouchModule.__init__ when it builds
+# its listeners.
+#
+# The notice used to be keyed on a seven-element tuple named `startup_hotkeys`
+# and its text said "Hotkey changes will take effect after restarting" -- so
+# changing the Whisper model or a touch timing silently did nothing and said
+# nothing, and changing the model said "hotkey". The names and the text are
+# now derived from this one tuple.
+#
+# NOT here on purpose: touch_min_burst_chars and touch_mouse_debounce are
+# equally startup-bound but this dialog exposes no control for them, so they
+# can never be the reason a notice fires.
+_RESTART_KEYS: tuple[str, ...] = (
+    "hotkey_capture",
+    "hotkey_all_monitors",
+    "hotkey_region",
+    "hotkey_pause",
+    "voice_hotkey",
+    "voice_fix_hotkey",
+    "voice_whisper_model",
+    "touch_burst_timeout",
+    "touch_correction_window",
+)
+
+# What to call each of them in the notice. Paired with _RESTART_KEYS by a
+# test, so a key added above without a label is a test failure rather than a
+# KeyError in front of the user at save time.
+_RESTART_LABELS: dict[str, str] = {
+    "hotkey_capture": "Quick capture hotkey",
+    "hotkey_all_monitors": "All monitors hotkey",
+    "hotkey_region": "Region capture hotkey",
+    "hotkey_pause": "Pause/Resume hotkey",
+    "voice_hotkey": "Dictate hotkey",
+    "voice_fix_hotkey": "Fix last hotkey",
+    "voice_whisper_model": "Whisper model",
+    "touch_burst_timeout": "Touch burst timeout",
+    "touch_correction_window": "Touch correction window",
+}
 
 
 def show_settings() -> None:
@@ -57,6 +107,31 @@ def _section_header(parent: tk.Frame, text: str) -> None:
     ).pack(anchor="w", pady=(15, 5))
 
 
+def _spin_range(key: str) -> tuple[int, int]:
+    """Spinner (from_, to) for a config key, taken from the core clamp table.
+
+    Every spinner used to be built `from_=0, to=300`, one literal shared by
+    auto_interval, jpeg_quality and buffer_max_age -- whose default is 1800.
+    Touching the buffer spinner at all snapped 1800 down to 300 and there was
+    no way back up through the control, so the dialog silently rewrote the
+    setting it was showing. (David's saved `buffer_max_age: 300` is almost
+    certainly that ceiling and not a preference.)
+
+    Reading _CLAMPS makes the widget and the validator one declaration
+    instead of two: a spinner cannot offer a value load_config() would clamp,
+    and cannot refuse one it would accept. An unbounded key gets a 24h
+    ceiling -- every spin field except jpeg_quality is seconds-valued, and
+    jpeg_quality is bounded in the table. The min()/max() against the
+    declared default is belt and braces: whatever the two tables say, a
+    spinner must always be able to show the value it is seeded with.
+    """
+    lo, hi = _CLAMPS[key]
+    default = int(_DEFAULTS[key])
+    from_ = min(int(lo) if lo is not None else 0, default)
+    to = max(int(hi) if hi is not None else _UNBOUNDED_SPIN_CEILING, default)
+    return from_, to
+
+
 def _field_row(
     parent: tk.Frame,
     label_text: str,
@@ -65,8 +140,18 @@ def _field_row(
     width: int = 0,
     entry_type: str = "entry",
     values: list[str] | None = None,
+    config_key: str | None = None,
 ) -> tk.Widget:
-    """Add a label + input row. Returns the input widget."""
+    """Add a label + input row. Returns the input widget.
+
+    `config_key` is REQUIRED for a spinner and names the key it edits; that
+    is what ties the widget's limits to _CLAMPS. Raising rather than falling
+    back to a literal is deliberate -- the 0..300 ceiling was invisible for
+    as long as it was precisely because nothing connected a spinner to its
+    key, and a silent default here would let the next one in the same way.
+    """
+    if entry_type == "spin" and config_key is None:
+        raise ValueError(f"_field_row({label_text!r}, entry_type='spin') needs a config_key")
     row = tk.Frame(parent, bg=gui_theme.BG)
     row.pack(fill="x", pady=2)
 
@@ -83,9 +168,10 @@ def _field_row(
         )
         widget.pack(side="left")
     elif entry_type == "spin":
+        spin_from, spin_to = _spin_range(config_key)
         widget = tk.Spinbox(
             row, textvariable=var,
-            from_=0, to=300, increment=1,
+            from_=spin_from, to=spin_to, increment=1,
             font=("Consolas", 10), width=width or 6,
             bg=gui_theme.SURFACE, fg=gui_theme.TEXT,
             insertbackground=gui_theme.ACCENT, relief="flat",
@@ -98,7 +184,33 @@ def _field_row(
     return widget
 
 
+def _as_float(raw: str, key: str) -> float:
+    """Parse a free-text numeric field, falling back to the declared default.
+
+    The touch fields are plain Entry widgets, so `float()` on their contents
+    raises ValueError for anything non-numeric. show_settings() swallows every
+    exception to protect the daemon, so an unparseable "1,5" in one field used
+    to discard the ENTIRE save -- blocklist, hotkeys and all -- with no message
+    and no log line above DEBUG.
+    """
+    text = str(raw).strip()
+    if not text:
+        return float(_DEFAULTS[key])
+    try:
+        return float(text)
+    except ValueError:
+        logger.warning("Settings: %s=%r is not a number — keeping %r", key, text, _DEFAULTS[key])
+        return float(_DEFAULTS[key])
+
+
 def _build_and_run() -> None:
+    # load_config() fills EVERY key in _DEFAULTS, so every read below is
+    # cfg["key"] and not cfg.get("key", <literal>). The literals were a second
+    # declaration site that had already drifted: this dialog offered
+    # voice_whisper_model="base" and jpeg_quality=75 while the daemon ran
+    # "small" and 90, so opening Settings and pressing Save silently
+    # downgraded both. A KeyError here would mean _DEFAULTS lost a key the
+    # dialog exposes, which is worth failing loudly for.
     cfg = load_config()
 
     dlg = gui_theme.create_dialog("ContextPulse — Settings", width=560, height=780)
@@ -131,10 +243,11 @@ def _build_and_run() -> None:
     # ── Capture Section ───────────────────────────────────────────
     _section_header(frame, "Capture")
 
-    interval_var = tk.IntVar(master=root, value=cfg.get("auto_interval", 5))
-    _field_row(frame, "Auto-capture interval (s):", interval_var, entry_type="spin")
+    interval_var = tk.IntVar(master=root, value=cfg["auto_interval"])
+    _field_row(frame, "Auto-capture interval (s):", interval_var,
+               entry_type="spin", config_key="auto_interval")
 
-    storage_var = tk.StringVar(master=root, value=cfg.get("storage_mode", "smart"))
+    storage_var = tk.StringVar(master=root, value=cfg["storage_mode"])
     _field_row(
         frame, "Storage mode:", storage_var,
         entry_type="combo", values=["smart", "visual", "both", "text"],
@@ -149,25 +262,27 @@ def _build_and_run() -> None:
         font=("Consolas", 8), fg=gui_theme.TEXT_MUTED,
     ).pack(anchor="w", pady=(2, 8))
 
-    quality_var = tk.IntVar(master=root, value=cfg.get("jpeg_quality", 75))
-    _field_row(frame, "JPEG quality (1-100):", quality_var, entry_type="spin")
+    quality_var = tk.IntVar(master=root, value=cfg["jpeg_quality"])
+    _field_row(frame, "JPEG quality (1-100):", quality_var,
+               entry_type="spin", config_key="jpeg_quality")
 
-    buffer_var = tk.IntVar(master=root, value=cfg.get("buffer_max_age", 1800))
-    _field_row(frame, "Buffer max age (seconds):", buffer_var, entry_type="spin")
+    buffer_var = tk.IntVar(master=root, value=cfg["buffer_max_age"])
+    _field_row(frame, "Buffer max age (seconds):", buffer_var,
+               entry_type="spin", config_key="buffer_max_age")
 
     # ── Hotkeys Section ───────────────────────────────────────────
     _section_header(frame, "Hotkeys")
 
-    hk_capture_var = tk.StringVar(master=root, value=cfg.get("hotkey_capture", "ctrl+shift+s"))
+    hk_capture_var = tk.StringVar(master=root, value=cfg["hotkey_capture"])
     _field_row(frame, "Quick capture:", hk_capture_var)
 
-    hk_all_var = tk.StringVar(master=root, value=cfg.get("hotkey_all_monitors", "ctrl+shift+a"))
+    hk_all_var = tk.StringVar(master=root, value=cfg["hotkey_all_monitors"])
     _field_row(frame, "All monitors:", hk_all_var)
 
-    hk_region_var = tk.StringVar(master=root, value=cfg.get("hotkey_region", "ctrl+shift+z"))
+    hk_region_var = tk.StringVar(master=root, value=cfg["hotkey_region"])
     _field_row(frame, "Region capture:", hk_region_var)
 
-    hk_pause_var = tk.StringVar(master=root, value=cfg.get("hotkey_pause", "ctrl+shift+p"))
+    hk_pause_var = tk.StringVar(master=root, value=cfg["hotkey_pause"])
     _field_row(frame, "Pause/Resume:", hk_pause_var)
 
     gui_theme.make_label(
@@ -175,22 +290,23 @@ def _build_and_run() -> None:
         font=("Segoe UI", 8), fg=gui_theme.TEXT_MUTED,
     ).pack(anchor="w", pady=(2, 0))
 
+
     # ── Voice Section ─────────────────────────────────────────────
     _section_header(frame, "Voice Dictation")
 
-    voice_hotkey_var = tk.StringVar(master=root, value=cfg.get("voice_hotkey", "ctrl+space"))
+    voice_hotkey_var = tk.StringVar(master=root, value=cfg["voice_hotkey"])
     _field_row(frame, "Dictate (hold):", voice_hotkey_var)
 
-    voice_fix_var = tk.StringVar(master=root, value=cfg.get("voice_fix_hotkey", "ctrl+shift+space"))
+    voice_fix_var = tk.StringVar(master=root, value=cfg["voice_fix_hotkey"])
     _field_row(frame, "Fix last:", voice_fix_var)
 
-    voice_model_var = tk.StringVar(master=root, value=cfg.get("voice_whisper_model", "base"))
+    voice_model_var = tk.StringVar(master=root, value=cfg["voice_whisper_model"])
     _field_row(
         frame, "Whisper model:", voice_model_var,
         entry_type="combo", values=["tiny", "base", "small", "medium", "large-v3"],
     )
 
-    voice_llm_var = tk.StringVar(master=root, value="1" if cfg.get("voice_always_use_llm", False) else "0")
+    voice_llm_var = tk.StringVar(master=root, value="1" if cfg["voice_always_use_llm"] else "0")
     tk.Checkbutton(
         frame, text="  Always use AI cleanup (requires Anthropic API key)",
         variable=voice_llm_var, onvalue="1", offvalue="0",
@@ -200,41 +316,44 @@ def _build_and_run() -> None:
         highlightthickness=0, bd=1,
     ).pack(anchor="w", pady=(8, 0))
 
-    voice_api_var = tk.StringVar(master=root, value=cfg.get("voice_anthropic_api_key", ""))
+    voice_api_var = tk.StringVar(master=root, value=cfg["voice_anthropic_api_key"])
     _field_row(frame, "Anthropic API key:", voice_api_var)
 
     gui_theme.make_label(
         frame,
         "tiny      — fastest, ~40 MB RAM, fine for short commands, struggles with names/jargon\n"
-        "base      — recommended, ~150 MB RAM, strong accuracy for everyday speech\n"
-        "small     — better with accents and technical terms, ~500 MB RAM, ~2x slower\n"
+        "base      — ~150 MB RAM, strong accuracy for everyday speech\n"
+        "small     — default, better with accents and technical terms, ~500 MB RAM, ~2x slower\n"
         "medium    — near-human accuracy, ~1.5 GB RAM, noticeable pause on long dictations\n"
-        "large-v3  — highest accuracy, ~3 GB RAM, slow on CPU — best with a GPU",
+        "large-v3  — highest accuracy, ~3 GB RAM, slow on CPU — best with a GPU\n"
+        "Model changes take effect after restart.",
         font=("Consolas", 8), fg=gui_theme.TEXT_MUTED,
     ).pack(anchor="w", pady=(2, 0))
 
     # ── Touch Section ─────────────────────────────────────────────
     _section_header(frame, "Touch (Input Capture)")
 
-    burst_var = tk.StringVar(master=root, value=str(cfg.get("touch_burst_timeout", 1.5)))
+    burst_var = tk.StringVar(master=root, value=str(cfg["touch_burst_timeout"]))
     _field_row(frame, "Burst timeout (s):", burst_var)
 
-    correction_var = tk.StringVar(master=root, value=str(cfg.get("touch_correction_window", 15.0)))
+    correction_var = tk.StringVar(master=root, value=str(cfg["touch_correction_window"]))
     _field_row(frame, "Correction window (s):", correction_var)
 
     gui_theme.make_label(
-        frame, "Touch captures typing patterns and detects voice dictation corrections.",
+        frame,
+        "Touch captures typing patterns and detects voice dictation corrections.\n"
+        "Timing changes take effect after restart.",
         font=("Segoe UI", 8), fg=gui_theme.TEXT_MUTED,
     ).pack(anchor="w", pady=(2, 0))
 
     # ── Privacy Section ───────────────────────────────────────────
     _section_header(frame, "Privacy")
 
-    blocklist_str = ", ".join(cfg.get("blocklist_patterns", []))
+    blocklist_str = ", ".join(cfg["blocklist_patterns"])
     blocklist_var = tk.StringVar(master=root, value=blocklist_str)
     _field_row(frame, "Blocklist (comma-sep):", blocklist_var)
 
-    always_both_str = ", ".join(cfg.get("always_both_apps", []))
+    always_both_str = ", ".join(cfg["always_both_apps"])
     always_both_var = tk.StringVar(master=root, value=always_both_str)
     _field_row(frame, "Always keep image+text:", always_both_var)
 
@@ -243,7 +362,7 @@ def _build_and_run() -> None:
         font=("Segoe UI", 8), fg=gui_theme.TEXT_MUTED,
     ).pack(anchor="w", pady=(2, 0))
 
-    redact_var = tk.StringVar(master=root, value="1" if cfg.get("redact_ocr_text", True) else "0")
+    redact_var = tk.StringVar(master=root, value="1" if cfg["redact_ocr_text"] else "0")
     tk.Checkbutton(
         frame, text="  Redact sensitive text from OCR (API keys, passwords, tokens)",
         variable=redact_var, onvalue="1", offvalue="0",
@@ -254,7 +373,7 @@ def _build_and_run() -> None:
     ).pack(anchor="w", pady=(8, 0))
 
     clipboard_var = tk.StringVar(
-        master=root, value="1" if cfg.get("clipboard_enabled", True) else "0"
+        master=root, value="1" if cfg["clipboard_enabled"] else "0"
     )
     tk.Checkbutton(
         frame, text="  Capture clipboard contents",
@@ -447,16 +566,9 @@ def _build_and_run() -> None:
     ).pack(anchor="w", pady=(6, 0))
 
     # ── Save & Close ──────────────────────────────────────────────
-    # Capture startup values for change detection
-    startup_hotkeys = (
-        cfg.get("hotkey_capture", ""),
-        cfg.get("hotkey_all_monitors", ""),
-        cfg.get("hotkey_region", ""),
-        cfg.get("hotkey_pause", ""),
-        cfg.get("voice_hotkey", ""),
-        cfg.get("voice_fix_hotkey", ""),
-        cfg.get("voice_whisper_model", ""),
-    )
+    # Values of the restart-bound keys as they were when the dialog opened,
+    # so save_and_close can name exactly which of them the user changed.
+    startup_values = {key: cfg[key] for key in _RESTART_KEYS}
 
     def save_and_close():
         new_cfg = dict(cfg)  # preserve any unknown keys
@@ -467,19 +579,19 @@ def _build_and_run() -> None:
             "jpeg_quality": max(1, min(100, quality_var.get())),
             "buffer_max_age": max(0, buffer_var.get()),
             # Sight hotkeys
-            "hotkey_capture": hk_capture_var.get().strip().lower() or "ctrl+shift+s",
-            "hotkey_all_monitors": hk_all_var.get().strip().lower() or "ctrl+shift+a",
-            "hotkey_region": hk_region_var.get().strip().lower() or "ctrl+shift+z",
-            "hotkey_pause": hk_pause_var.get().strip().lower() or "ctrl+shift+p",
+            "hotkey_capture": hk_capture_var.get().strip().lower() or _DEFAULTS["hotkey_capture"],
+            "hotkey_all_monitors": hk_all_var.get().strip().lower() or _DEFAULTS["hotkey_all_monitors"],
+            "hotkey_region": hk_region_var.get().strip().lower() or _DEFAULTS["hotkey_region"],
+            "hotkey_pause": hk_pause_var.get().strip().lower() or _DEFAULTS["hotkey_pause"],
             # Voice
-            "voice_hotkey": voice_hotkey_var.get().strip().lower() or "ctrl+space",
-            "voice_fix_hotkey": voice_fix_var.get().strip().lower() or "ctrl+shift+space",
-            "voice_whisper_model": voice_model_var.get() or "base",
+            "voice_hotkey": voice_hotkey_var.get().strip().lower() or _DEFAULTS["voice_hotkey"],
+            "voice_fix_hotkey": voice_fix_var.get().strip().lower() or _DEFAULTS["voice_fix_hotkey"],
+            "voice_whisper_model": voice_model_var.get() or _DEFAULTS["voice_whisper_model"],
             "voice_always_use_llm": voice_llm_var.get() == "1",
             "voice_anthropic_api_key": voice_api_var.get().strip(),
             # Touch
-            "touch_burst_timeout": float(burst_var.get() or "1.5"),
-            "touch_correction_window": float(correction_var.get() or "15.0"),
+            "touch_burst_timeout": _as_float(burst_var.get(), "touch_burst_timeout"),
+            "touch_correction_window": _as_float(correction_var.get(), "touch_correction_window"),
             # Privacy
             "blocklist_patterns": [p.strip() for p in blocklist_var.get().split(",") if p.strip()],
             "always_both_apps": [p.strip() for p in always_both_var.get().split(",") if p.strip()],
@@ -489,19 +601,13 @@ def _build_and_run() -> None:
         save_config(new_cfg)
         logger.info("Settings saved")
 
-        new_hotkeys = (
-            new_cfg["hotkey_capture"],
-            new_cfg["hotkey_all_monitors"],
-            new_cfg["hotkey_region"],
-            new_cfg["hotkey_pause"],
-            new_cfg["voice_hotkey"],
-            new_cfg["voice_fix_hotkey"],
-            new_cfg["voice_whisper_model"],
-        )
-        if new_hotkeys != startup_hotkeys:
+        changed = [k for k in _RESTART_KEYS if new_cfg[k] != startup_values[k]]
+        if changed:
             messagebox.showinfo(
                 "ContextPulse",
-                "Hotkey changes will take effect after restarting ContextPulse.",
+                "Saved. These take effect after you restart ContextPulse:\n\n  "
+                + "\n  ".join(_RESTART_LABELS[k] for k in changed)
+                + "\n\nEverything else you changed is already live.",
             )
 
         dlg.destroy()
