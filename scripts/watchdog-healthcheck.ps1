@@ -176,6 +176,11 @@ function Test-WatchdogInSession0 {
 }
 
 function Test-McpAlive {
+    # TCP connect only, on purpose. The MCP endpoint requires a bearer token
+    # since 2026-09-19, and the alternative to reading the token file here
+    # would be an unauthenticated /health route -- a fingerprintable surface
+    # for exactly the local callers the token shuts out. A listening socket is
+    # a sufficient liveness signal for this check.
     $listening = Test-NetConnection -ComputerName 127.0.0.1 -Port $McpPort -WarningAction SilentlyContinue
     return $listening.TcpTestSucceeded
 }
