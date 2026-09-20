@@ -31,6 +31,7 @@ path, and the OCR behaviour gated on ``redact_ocr_text``, are unchanged.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any, Iterable
 
@@ -390,6 +391,28 @@ def redact_sensitive(text: str) -> str:
         return text
     cleaned, _counts = redact_with_counts(text)
     return cleaned
+
+
+def redacted_text_digest(text: str, length: int = 16) -> str:
+    """A short digest that is safe to STORE, because it commits to redacted text.
+
+    Used to correlate one piece of text across modalities -- a dictation and the
+    paste it produced -- without keeping the text itself.
+
+    HASHING THE RAW TEXT IS A PREIMAGE ORACLE, not a privacy measure. A dictated
+    SSN has a search space of 10^9 and a card number 10^16; a 64-bit prefix of
+    sha256("my social is 123-45-6789") inverts by brute force in seconds, and
+    redact_payload leaves a digest alone because it is not a text field. So the
+    digest is taken over the redacted rendering, which commits to everything the
+    store is allowed to remember and to nothing it is not (review S-3).
+
+    ONE DEFINITION ON PURPOSE. Both sides of a correlation must hash the same
+    way or the match silently stops working for exactly the inputs that
+    contained a secret -- which is the failure mode that made hashing the raw
+    text look necessary in the first place. Redaction is deterministic, so two
+    callers given the same text still agree.
+    """
+    return hashlib.sha256(redact_sensitive(text).encode()).hexdigest()[:length]
 
 
 def redact_payload(payload: dict[str, Any], extra_keys: Iterable[str] = ()) -> dict[str, Any]:

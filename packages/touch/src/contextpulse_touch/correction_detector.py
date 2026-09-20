@@ -12,7 +12,6 @@ The self-improving loop:
 7. Write corrections to vocabulary via VocabularyBridge
 """
 
-import hashlib
 import json
 import logging
 import sqlite3
@@ -21,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from contextpulse_core.redact import redact_sensitive
+from contextpulse_core.redact import redact_sensitive, redacted_text_digest
 from contextpulse_voice.config import LEARNED_VOCAB_FILE
 
 from contextpulse_touch.burst_tracker import BurstTracker
@@ -178,7 +177,13 @@ class CorrectionDetector:
             return
 
         self.pastes_detected += 1
-        text_hash = hashlib.sha256(clipboard_text.encode()).hexdigest()[:16]
+        # Over the REDACTED rendering, matching what VoiceModule stores as
+        # paste_text_hash. Both sides use the one helper so they cannot drift:
+        # if only one of them redacted first, the correlation would silently
+        # stop working for exactly the dictations that contained a secret
+        # (review S-3). The raw clipboard text stays in memory for the watch
+        # window, which is where the correction diff needs it.
+        text_hash = redacted_text_digest(clipboard_text)
 
         # Check if this paste matches a recent Voice transcription
         voice_match = self._find_voice_event(text_hash)
