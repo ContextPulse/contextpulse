@@ -6,7 +6,7 @@
 # run that. Its test-cross-platform job runs
 #
 #     pytest packages/core/tests packages/memory/tests packages/project/tests \
-#            tests/test_config_readers.py
+#            tests/ --ignore=tests/integration
 #
 # and `pytest packages/` reaches none of the root `tests/` directory. So the
 # documented command could pass on a developer's machine while the build went
@@ -100,8 +100,14 @@ run_block "lint" \
 # The root-tests half only. The packages half is a strict subset of the
 # test-windows block below, so running it twice would just cost time.
 # THIS is the block that `pytest packages/` misses entirely.
+#
+# Widened from the single test_config_readers.py file to the whole directory on
+# 2026-09-20, in the same commit that widened ci.yml, per the rule above. Seven
+# other root files had been sitting here uncollected by any job
+# (cp-seven-test-files-run-by-no-ci-job). tests/integration/ is excluded because
+# the test-integration job owns it and it is windows-only.
 run_block "test-cross-platform: root tests" \
-    "$PY" -m pytest tests/test_config_readers.py -q --tb=short -p no:cacheprovider
+    "$PY" -m pytest tests/ --ignore=tests/integration -q --tb=short -p no:cacheprovider
 
 if [ "$MODE" = "fast" ]; then
     :
