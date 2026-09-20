@@ -56,10 +56,46 @@ _PATTERNS: list[tuple[re.Pattern, str]] = [
 ]
 
 
+# Pulls "AWS_KEY" out of "[REDACTED:AWS_KEY]" so a category name is never a
+# second hand-maintained list that can drift from the patterns above.
+_CATEGORY_RE = re.compile(r"\[REDACTED:([A-Z_]+)\]")
+
+
+def category_of(replacement: str) -> str:
+    """Return the category label carried by a replacement string."""
+    match = _CATEGORY_RE.search(replacement)
+    if match is None:
+        raise ValueError(f"replacement carries no [REDACTED:CATEGORY] label: {replacement!r}")
+    return match.group(1)
+
+
+def redact_with_counts(text: str) -> tuple[str, dict[str, int]]:
+    """Redact, and report how many matches each category accounted for.
+
+    Returns (cleaned_text, {category: match_count}). Categories with zero
+    matches are omitted, so an empty dict means the text was clean.
+
+    This is the counting entry point for offline auditing (see
+    scripts/purge_clipboard_secrets.py), which must be able to report WHAT was
+    found without ever handling or printing the value. Sharing the pattern
+    table with redact_sensitive is the point: an audit run against its own
+    copy of the patterns would silently stop matching whatever this file
+    learns next.
+    """
+    if not text:
+        return text, {}
+    counts: dict[str, int] = {}
+    for pattern, replacement in _PATTERNS:
+        text, n = pattern.subn(replacement, text)
+        if n:
+            category = category_of(replacement)
+            counts[category] = counts.get(category, 0) + n
+    return text, counts
+
+
 def redact_sensitive(text: str) -> str:
     """Apply all redaction patterns to OCR text. Returns cleaned text."""
     if not text:
         return text
-    for pattern, replacement in _PATTERNS:
-        text = pattern.sub(replacement, text)
-    return text
+    cleaned, _counts = redact_with_counts(text)
+    return cleaned
