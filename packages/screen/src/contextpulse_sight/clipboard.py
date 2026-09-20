@@ -65,9 +65,28 @@ class ClipboardMonitor:
         """Return True if the clipboard polling thread is running."""
         return self._thread.is_alive()
 
-    def stop(self):
-        """Stop the clipboard monitoring thread."""
+    def stop(self, timeout: float = 2.0):
+        """Stop the clipboard monitoring thread and WAIT for it to finish.
+
+        The join is not politeness. _reconcile_clipboard_monitor constructs and
+        starts a replacement monitor immediately after calling this, so without
+        it the outgoing thread can still be inside _check_clipboard ->
+        record_clipboard while the new one starts polling. Two monitors write
+        for up to one poll interval, and the fresh monitor's empty _last_text
+        lets the same clip be captured twice (review S7).
+
+        The timeout is a ceiling, not a guarantee: the poll loop waits up to
+        1.0s on the stop event, so 2.0s is two intervals' headroom. A thread
+        that outlives it is logged rather than waited on forever -- a shutdown
+        path must not hang.
+        """
         self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=timeout)
+            if self._thread.is_alive():
+                logger.warning(
+                    "Clipboard monitor thread did not stop within %.1fs", timeout,
+                )
 
     def _poll_loop(self):
         """Poll clipboard for text changes."""

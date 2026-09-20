@@ -516,10 +516,20 @@ def get_screen_text() -> str:
     result = classify_and_extract(img)
 
     if result["type"] == "text" and result["text"]:
+        # This is a LIVE capture, so it never passed through the OCR worker
+        # where redact_ocr_text is honoured -- a user with redaction enabled
+        # got it at write time and not through this tool, which returns
+        # whatever is on screen right now, password manager included
+        # (review S6). Gated on the same setting so the two paths agree.
+        from contextpulse_core.config import get as cfg_get
+
+        text = result["text"]
+        if cfg_get("redact_ocr_text", True):
+            text = _redact(text)
         return (
             f"[OCR: {result['lines']} lines, {result['chars']} chars, "
             f"confidence={result['confidence']:.2f}, time={result['ocr_time']:.1f}s]\n\n"
-            f"{result['text']}"
+            f"{text}"
         )
     else:
         return (
