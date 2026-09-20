@@ -1,6 +1,6 @@
 """Clipboard secrets must never reach storage, the FTS index, or an MCP client.
 
-Reported externally 2026-09-19 by Yevhen Tienkaiev: clipboard capture bypassed
+Reported privately by an external researcher 2026-09-19: clipboard capture bypassed
 the secret redaction applied to OCR text. `redact_sensitive()` existed and had
 exactly one caller (ocr_worker), so every pattern family the product advertises
 as "redacted before storage" was being written verbatim to the `clipboard`

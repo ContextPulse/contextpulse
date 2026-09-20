@@ -43,7 +43,8 @@ clipboard. The clipboard report was the one that came in; the same defect was
 present in voice, touch, memory and the two derived stores.
 
 - **Clipboard** — text is redacted before storage and at the MCP boundary, and
-  the `clipboard_enabled` setting is now honoured. Reported by Yevhen Tienkaiev.
+  the `clipboard_enabled` setting is now honoured. Reported privately by an
+  external researcher.
 - **Voice** — transcripts (both raw and cleaned) are redacted before the event
   is stored, and on the way out of `get_recent_transcriptions`,
   `learn_from_session`, `get_vocabulary`, `rebuild_context_vocabulary` and

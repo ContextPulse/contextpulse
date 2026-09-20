@@ -90,8 +90,9 @@ paid cloud tier under active evaluation.
 - **Version 0.1.1 SHIPPED 2026-09-19 23:40 MDT, a security release.** David approved the
   public push after reading the release review doc; PR #17 merged to public `main`
   (`50a4393`, all 14 CI checks green), GitHub release `v0.1.1` published, draft advisory
-  `GHSA-xfr9-62vj-4227` (medium, credits Hronom) awaiting the 7-day response to the
-  reporter before publication. Private backup `release-0.1.1` mirrors it. The release
+  `GHSA-xfr9-62vj-4227` (medium; a credit entry is OFFERED to the reporter and sits
+  `pending` until he accepts it, which is GitHub enforcing consent) awaiting the 7-day
+  response to the reporter before publication. Private backup `release-0.1.1` mirrors it. The release
   includes the config unification (see below) and the MCP local auth. David's daemon
   and MCP server run it since 23:43; the MCP token was rotated once after the rollout.
   - Redaction now runs at write **and** at the MCP boundary for every stored-text
@@ -134,8 +135,8 @@ paid cloud tier under active evaluation.
   review doc (his hold of 22:10 lifted at 22:25). Shipped in it: the claim corrections from branch
   `docs/claims-corrections` (README 12 changes, SECURITY.md 4 principles rewritten
   plus a "what redaction does not cover" section, CONTRIBUTING 1), the corrected
-  live site page, a 0.1.x release, and a public GitHub Security Advisory crediting
-  Yevhen Tienkaiev by name.
+  live site page, a 0.1.x release, and a public GitHub Security Advisory offering the
+  reporter a credit entry, which is his to accept or decline before publication.
 - **The external security report's clock is running.** Acknowledgment due
   **2026-09-21 17:19 MDT**, detailed response due **2026-09-26**, per the 48h/7d
   commitment ContextPulse's own `SECURITY.md` publishes. The clock started when the
