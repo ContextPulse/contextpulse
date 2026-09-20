@@ -1,6 +1,7 @@
 """Tests for contextpulse_core.config — persistent JSON config with env var fallback."""
 
 import json
+import os
 
 import pytest
 from contextpulse_core.config import (
