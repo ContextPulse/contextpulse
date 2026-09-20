@@ -27,57 +27,57 @@ pyautogui.FAILSAFE = False
 
 logger = logging.getLogger(__name__)
 
-# Paste-path breadcrumbs default ON — they are the crash forensics for
-# cp-daemon-heap-corruption-after-paste, and a defect that fired twice in two
-# weeks needs the instrument running continuously to catch a third. Today
-# daemon_stderr.log.1 ends at "Pasted 100 characters" (12:32:14) and the
+# Paste-path breadcrumbs default ON, one os.write() per phase — they are the
+# crash forensics for cp-daemon-heap-corruption-after-paste, and a defect that
+# fired twice in two weeks needs the instrument running continuously to catch a
+# third. daemon_stderr.log.1 ends at "Pasted 100 characters" (12:32:14) and the
 # watchdog records 0xC0000374 at 12:32:19 — a five-second hole covering the
 # hotkey, a 0.5s sleep and the trailing pyperclip.copy(""). These turn that
 # hole into a named phase.
 #
-# But they write to fd 2 -> daemon_stderr.log, which the watchdog only
-# rotates on RESTART: a long-running daemon accumulates, and that is the same
-# file that once reached 20MB. So the DEFAULT is one line per paste, not one
-# per phase: _phase() overwrites a single in-memory marker and the whole
-# paste emits one "last phase reached" line when it ends — which is all the
-# forensics needs, because a crash mid-paste leaves the marker unflushed and
-# the LAST line in the file is then the previous paste's, with the current
-# one named by its absence.
+# Per-phase has to be the DEFAULT, not a mode someone switches on after the
+# fact. A __fastfail abort delivers no exception, runs no finally and leaves
+# only bytes already handed to the OS (see clipboard_lock.write_breadcrumb), so
+# a design that buffers the phase name in memory and emits one summary line at
+# the END of the paste writes NOTHING for the paste that crashed — the only
+# paste whose phase anyone wants. "The current one named by its absence" says
+# no more than the watchdog's own 0xC0000374 already does.
 #
-# Set CONTEXTPULSE_CLIPBOARD_READ_BREADCRUMBS=1 for the full per-phase trace
-# (8 lines per paste), which is what you want while actively hunting a
-# reproduction; CONTEXTPULSE_PASTE_BREADCRUMBS=0 silences both.
+# The volume argument that motivated buffering was real but aimed at the wrong
+# thing: 8 lines per dictation is bounded by how often a human speaks, while
+# daemon_stderr.log was unbounded because nothing rotated it by size. That is
+# fixed where it lives, in scripts/daemon-watchdog.ps1.
+#
+# CONTEXTPULSE_PASTE_BREADCRUMBS=0 silences the paste trace. It is the ONLY
+# switch this module reads: the clipboard reader's per-poll trace has its own,
+# CONTEXTPULSE_CLIPBOARD_READ_BREADCRUMBS (platform/windows.py), and sharing
+# one variable meant that turning on the paste trace while hunting a
+# reproduction also turned on ~86k lines a day of 1 Hz read tracing, into the
+# same file.
 _BREADCRUMBS = breadcrumbs_enabled("CONTEXTPULSE_PASTE_BREADCRUMBS")
-_VERBOSE_BREADCRUMBS = breadcrumbs_enabled("CONTEXTPULSE_CLIPBOARD_READ_BREADCRUMBS", "0")
-
-# The phase most recently entered, kept per-paste. Read by _flush_phases().
-_current_phase = ""
 
 
 def _phase(name: str) -> None:
-    """Mark the native call now in flight.
+    """Mark the native call now in flight. One os.write syscall, immediately.
 
-    Verbose mode writes it immediately (crash-survivable, one syscall). The
-    default records it and lets :func:`_flush_phases` emit a single line per
-    paste, so continuous instrumentation costs daemon_stderr.log one line per
-    dictation instead of eight.
+    Crash-survivable by construction: the bytes are with the OS before the
+    call they describe is made.
     """
-    global _current_phase
     if not _BREADCRUMBS:
         return
-    if _VERBOSE_BREADCRUMBS:
-        write_breadcrumb(name)
-    else:
-        _current_phase = name
+    write_breadcrumb(name)
 
 
 def _flush_phases(outcome: str) -> None:
-    """Emit the one-line-per-paste summary naming the last phase reached."""
-    global _current_phase
-    if not _BREADCRUMBS or _VERBOSE_BREADCRUMBS:
+    """Close the paste out with its outcome.
+
+    Kept alongside the per-phase lines rather than replaced by them: a paste
+    DROPPED on a lock timeout enters no phase at all, so this is the only line
+    that ever names it. One more line on a path that already writes eight.
+    """
+    if not _BREADCRUMBS:
         return
-    write_breadcrumb(f"paste_done outcome={outcome} last_phase={_current_phase or 'none'}")
-    _current_phase = ""
+    write_breadcrumb(f"paste_done outcome={outcome}")
 
 # Terminal emulators do NOT treat Ctrl+V as paste (there it is a literal /
 # no-op); their paste chord is Ctrl+Shift+V. Dictating into a terminal — e.g. a
