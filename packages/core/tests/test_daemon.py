@@ -631,3 +631,102 @@ class TestSessionGuardOrdering:
              pytest.raises(SystemExit):
             daemon.run()
         mock_start.assert_not_called()
+
+
+
+# ---------------------------------------------------------------------------
+# Clipboard monitor is optional (clipboard_enabled=False)
+# ---------------------------------------------------------------------------
+
+def _sight_app_with_clipboard(tmp_path, monkeypatch, enabled):
+    """A REAL ContextPulseSightApp, with only its heavy parts mocked.
+
+    A MagicMock sight app cannot test this: the daemon would call a mocked
+    _start_clipboard_monitor that never touches the monitor, so the test
+    would pass no matter what the daemon did. The clipboard lifecycle
+    methods have to be the real ones.
+    """
+    import contextpulse_sight.activity as act
+    import contextpulse_sight.app as app_mod
+    import contextpulse_sight.buffer as buf_mod
+    import contextpulse_sight.config as cfg
+
+    buf_dir = tmp_path / "buffer"
+    buf_dir.mkdir(exist_ok=True)
+    monkeypatch.setattr(cfg, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(buf_mod, "BUFFER_DIR", buf_dir)
+    monkeypatch.setattr(act, "ACTIVITY_DB_PATH", tmp_path / "activity.db")
+    monkeypatch.setattr(
+        app_mod,
+        "cfg_get",
+        lambda key, default=None: enabled if key == "clipboard_enabled" else default,
+    )
+
+    app = app_mod.ContextPulseSightApp()
+    # Everything _start_modules touches other than the clipboard helpers --
+    # real ones would spawn capture threads and load OCR models.
+    app._event_detector = MagicMock()
+    app._ocr_worker = MagicMock()
+    app._sight_module = MagicMock()
+    return app
+
+
+class TestClipboardMonitorMayBeAbsent:
+    """The unified daemon is the process that actually runs on this machine.
+
+    ContextPulseSightApp._clipboard_monitor is None when clipboard_enabled is
+    false. _start_modules and _stop_modules reach into the sight app's
+    internals directly, so gating the monitor inside the app was not enough --
+    the daemon dereferenced it unguarded and raised AttributeError on startup,
+    taking Sight, Voice and Touch down with it. Verified failing against the
+    unguarded call sites before the fix.
+    """
+
+    def _daemon_with(self, tmp_path, monkeypatch, enabled):
+        daemon, _ = _make_daemon(tmp_path)
+        app = _sight_app_with_clipboard(tmp_path, monkeypatch, enabled)
+        daemon._sight_app = app
+        daemon._voice_module = None
+        daemon._touch_module = None
+        daemon._knowledge_ingestor = None
+        return daemon, app
+
+    def _start(self, daemon):
+        with patch("contextpulse_sight.privacy.SessionMonitor"), \
+             patch("contextpulse_sight.config.AUTO_INTERVAL", 0), \
+             patch("pynput.keyboard.Listener"):
+            daemon._start_modules()
+
+    def test_start_modules_completes_when_clipboard_disabled(self, tmp_path, monkeypatch):
+        daemon, app = self._daemon_with(tmp_path, monkeypatch, enabled=False)
+        assert app._clipboard_monitor is None
+
+        self._start(daemon)  # must not raise AttributeError
+
+        assert app._clipboard_monitor is None, "a disabled monitor was started anyway"
+        app._ocr_worker.start.assert_called_once()
+
+    def test_stop_modules_completes_when_clipboard_disabled(self, tmp_path, monkeypatch):
+        daemon, app = self._daemon_with(tmp_path, monkeypatch, enabled=False)
+        daemon._stop_modules()  # must not raise AttributeError
+        app._ocr_worker.stop.assert_called_once()
+
+    def test_start_modules_still_starts_an_enabled_monitor(self, tmp_path, monkeypatch):
+        daemon, app = self._daemon_with(tmp_path, monkeypatch, enabled=True)
+        assert app._clipboard_monitor is not None
+
+        self._start(daemon)
+        try:
+            assert app._clipboard_monitor.is_alive(), (
+                "the monitor thread is not running -- the disabled case would "
+                "pass here too if the daemon simply stopped starting it"
+            )
+        finally:
+            app._clipboard_monitor.stop()
+
+    def test_stop_modules_stops_an_enabled_monitor(self, tmp_path, monkeypatch):
+        daemon, app = self._daemon_with(tmp_path, monkeypatch, enabled=True)
+        monitor = app._clipboard_monitor
+        self._start(daemon)
+        daemon._stop_modules()
+        assert monitor._stop.is_set(), "the running monitor was not told to stop"

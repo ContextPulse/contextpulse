@@ -333,7 +333,12 @@ class ContextPulseDaemon:
         if self._sight_app:
             self._sight_app._event_detector.start()
             self._sight_app._ocr_worker.start()
-            self._sight_app._clipboard_monitor.start()
+            # Via the app's own helper, not _clipboard_monitor.start(): the
+            # monitor is None when clipboard_enabled is false, and this
+            # daemon -- not ContextPulseSightApp.run() -- is the process that
+            # actually runs, so dereferencing it here would AttributeError on
+            # startup and take Sight, Voice and Touch down with it.
+            self._sight_app._start_clipboard_monitor()
             self._sight_app._sight_module.start()
 
             from contextpulse_sight.privacy import SessionMonitor
@@ -446,7 +451,7 @@ class ContextPulseDaemon:
             self._sight_app.stop_event.set()
             self._sight_app._event_detector.stop()
             self._sight_app._ocr_worker.stop()
-            self._sight_app._clipboard_monitor.stop()
+            self._sight_app._stop_clipboard_monitor()
             self._sight_app._sight_module.stop()
             if hasattr(self._sight_app, "hotkey_listener") and self._sight_app.hotkey_listener:
                 self._sight_app.hotkey_listener.stop()

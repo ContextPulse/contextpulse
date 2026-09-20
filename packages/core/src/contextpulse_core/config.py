@@ -133,6 +133,7 @@ _ENV_MAP: dict[str, str] = {
     "voice_whisper_model": "CONTEXTPULSE_VOICE_MODEL",
     "voice_always_use_llm": "CONTEXTPULSE_VOICE_ALWAYS_LLM",
     "knowledge_enabled": "CONTEXTPULSE_KNOWLEDGE_ENABLED",
+    "clipboard_enabled": "CONTEXTPULSE_CLIPBOARD_ENABLED",
 }
 
 
@@ -154,12 +155,20 @@ def load_config() -> dict:
         if val is None:
             continue
         default = _DEFAULTS[key]
-        if isinstance(default, int):
+        # bool MUST be tested before int: bool is a subclass of int, so
+        # isinstance(True, int) is True and the int() branch would claim every
+        # boolean key. CONTEXTPULSE_KNOWLEDGE_ENABLED=true then raised
+        # ValueError: invalid literal for int() with base 10: 'true'
+        # out of load_config(), taking down every caller of config.get() --
+        # including the daemon's clipboard_enabled lookup at startup. The
+        # numeric spellings were wrong too but silently: "1" yielded the int
+        # 1 and "0" the int 0, never True/False.
+        if isinstance(default, bool):
+            config[key] = val.lower() in ("1", "true", "yes")
+        elif isinstance(default, int):
             config[key] = int(val)
         elif isinstance(default, float):
             config[key] = float(val)
-        elif isinstance(default, bool):
-            config[key] = val.lower() in ("1", "true", "yes")
         elif isinstance(default, list):
             config[key] = [p.strip() for p in val.split(",") if p.strip()]
         else:

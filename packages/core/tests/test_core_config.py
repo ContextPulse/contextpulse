@@ -73,6 +73,46 @@ class TestLoadConfig:
         cfg = load_config()
         assert cfg["blocklist_patterns"] == ["bank", "password"]
 
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [("true", True), ("True", True), ("1", True), ("yes", True),
+         ("false", False), ("0", False), ("no", False), ("", False)],
+    )
+    def test_env_var_overrides_for_bool(self, isolated_config, monkeypatch, raw, expected):
+        """bool is a subclass of int, so isinstance(default, int) matches a
+        boolean default and the int() branch runs first. Before this was
+        fixed, CONTEXTPULSE_KNOWLEDGE_ENABLED=true raised
+        ValueError: invalid literal for int() with base 10: 'true'
+        out of load_config() -- crashing every caller of config.get(),
+        including the daemon's clipboard_enabled lookup at startup.
+        """
+        monkeypatch.setenv("CONTEXTPULSE_KNOWLEDGE_ENABLED", raw)
+        cfg = load_config()
+        assert cfg["knowledge_enabled"] is expected
+
+    def test_every_bool_default_survives_its_env_var(self, isolated_config, monkeypatch):
+        """Covers the whole class, not just the one key that was reported."""
+        import contextpulse_core.config as cfg_mod
+
+        bool_keys = [
+            key for key, default in cfg_mod._DEFAULTS.items()
+            if isinstance(default, bool) and key in cfg_mod._ENV_MAP
+        ]
+        assert bool_keys, "no boolean key is env-mapped; this test would be vacuous"
+        for key in bool_keys:
+            monkeypatch.setenv(cfg_mod._ENV_MAP[key], "true")
+        cfg = load_config()
+        for key in bool_keys:
+            assert cfg[key] is True, f"{key} did not coerce from its env var"
+
+    def test_clipboard_enabled_is_env_mappable(self, isolated_config, monkeypatch):
+        monkeypatch.setenv("CONTEXTPULSE_CLIPBOARD_ENABLED", "false")
+        cfg = load_config()
+        assert cfg["clipboard_enabled"] is False
+
+    def test_clipboard_enabled_defaults_on(self, isolated_config):
+        assert load_config()["clipboard_enabled"] is True
+
     def test_invalid_storage_mode_falls_back_to_smart(self, isolated_config):
         appdata, config_file = isolated_config
         appdata.mkdir(parents=True, exist_ok=True)
