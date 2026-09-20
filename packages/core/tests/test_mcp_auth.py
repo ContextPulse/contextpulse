@@ -2,8 +2,8 @@
 # Copyright (C) 2025-2026 Jerard Ventures LLC
 """Tests for local bearer-token auth on the unified MCP HTTP endpoint.
 
-Written before contextpulse_core.mcp_auth existed, per the spec's step order
-(.internal/audit-2026-09-19/spec-mcp-local-auth.md section 6, step 3).
+Written before contextpulse_core.mcp_auth existed, so the wrapper was built
+against these tests rather than the other way round.
 
 The fixture deliberately wraps a REAL FastMCP streamable-http app -- not a
 stand-in -- and reuses the production TransportSecuritySettings builder from
