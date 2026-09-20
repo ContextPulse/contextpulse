@@ -23,6 +23,7 @@ import os
 import time as _time
 from datetime import datetime
 
+from contextpulse_core.redact import redact_sensitive
 from mcp.server.fastmcp import FastMCP
 
 from contextpulse_knowledge.bridge import default_knowledge_db
@@ -49,11 +50,14 @@ def _fact_object(f: Fact) -> str:
 
 
 def _fmt_fact(f: Fact) -> str:
-    obj = _fact_object(f)
+    # Facts are derived from observation text, so a fact minted from a pre-fix
+    # observation can quote one. Same reasoning as probe_mcp._fmt_facts.
+    obj = redact_sensitive(str(_fact_object(f)))
     valid = _fmt_ms(f.valid_from)
     if f.valid_to is not None:
         valid += f" -> {_fmt_ms(f.valid_to)}"
-    return f"- ({valid}, conf {f.confidence:.2f}) {f.subject_id} {f.predicate} {obj}".rstrip()
+    subject = redact_sensitive(str(f.subject_id))
+    return f"- ({valid}, conf {f.confidence:.2f}) {subject} {f.predicate} {obj}".rstrip()
 
 
 def _parse_when_ms(when: str) -> int | None:
@@ -166,10 +170,12 @@ def context_at(when: str, window_minutes: int = 15) -> str:
     lines = [f"Context around {_fmt_ms(t)} (+/-{window_minutes}min):"]
     project = ctx.get("project")
     if project is not None:
-        lines.append(f"Active project: {_fact_object(project)}")
+        lines.append(f"Active project: {redact_sensitive(str(_fact_object(project)))}")
     apps = ctx.get("apps") or []
     if apps:
-        app_names = ", ".join(_fact_object(a) for a in apps if _fact_object(a))
+        app_names = ", ".join(
+            redact_sensitive(str(_fact_object(a))) for a in apps if _fact_object(a)
+        )
         if app_names:
             lines.append(f"Apps: {app_names}")
     lines.append("Facts:")
@@ -227,6 +233,10 @@ def search_knowledge(query: str, limit: int = 10) -> str:
         return f"No knowledge-graph matches for '{query}'."
     lines = [f"Search results for '{query}':"]
     for h in hits:
-        snippet = (h.get("snippet") or "").replace("\n", " ").strip()
+        # knowledge.db holds a SECOND copy of captured text -- bridge.py
+        # ingests clipboard_change, transcription and typing_burst events --
+        # and no purge of activity.db touches it. Redacted on the way out for
+        # observations ingested before the bridge started redacting at write.
+        snippet = redact_sensitive((h.get("snippet") or "").replace("\n", " ").strip())
         lines.append(f"- ({_fmt_ms(h.get('observed_at'))}) {snippet}")
     return "\n".join(lines)

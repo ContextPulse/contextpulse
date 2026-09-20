@@ -65,9 +65,28 @@ class ClipboardMonitor:
         """Return True if the clipboard polling thread is running."""
         return self._thread.is_alive()
 
-    def stop(self):
-        """Stop the clipboard monitoring thread."""
+    def stop(self, timeout: float = 2.0):
+        """Stop the clipboard monitoring thread and WAIT for it to finish.
+
+        The join is not politeness. _reconcile_clipboard_monitor constructs and
+        starts a replacement monitor immediately after calling this, so without
+        it the outgoing thread can still be inside _check_clipboard ->
+        record_clipboard while the new one starts polling. Two monitors write
+        for up to one poll interval, and the fresh monitor's empty _last_text
+        lets the same clip be captured twice (review S7).
+
+        The timeout is a ceiling, not a guarantee: the poll loop waits up to
+        1.0s on the stop event, so 2.0s is two intervals' headroom. A thread
+        that outlives it is logged rather than waited on forever -- a shutdown
+        path must not hang.
+        """
         self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=timeout)
+            if self._thread.is_alive():
+                logger.warning(
+                    "Clipboard monitor thread did not stop within %.1fs", timeout,
+                )
 
     def _poll_loop(self):
         """Poll clipboard for text changes."""
@@ -83,11 +102,20 @@ class ClipboardMonitor:
         seq = _get_clipboard_sequence()
         if seq == self._sequence_number:
             return
-        self._sequence_number = seq
 
         text = _get_clipboard_text()
         if not text:
+            # Deliberately do NOT commit `seq` here. Since
+            # cp-daemon-heap-corruption-after-paste, the Win32 read also
+            # returns None when a paste holds the clipboard lock — and a paste
+            # is exactly when the clipboard content is most worth capturing.
+            # Retiring the sequence on a read that produced nothing would drop
+            # that change permanently; leaving it pending costs one extra
+            # IsClipboardFormatAvailable call per second for as long as the
+            # clipboard holds a non-text item, which is the cheap half of the
+            # read and never reaches GlobalLock.
             return
+        self._sequence_number = seq
 
         # Debounce: skip if too soon after last capture
         now = time.time()

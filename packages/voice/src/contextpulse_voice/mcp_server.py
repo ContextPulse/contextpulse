@@ -11,6 +11,7 @@ import sqlite3
 import time
 
 from contextpulse_core.config import ACTIVITY_DB_PATH
+from contextpulse_core.redact import redact_sensitive
 from mcp.server.fastmcp import FastMCP
 
 from contextpulse_voice.config import get_voice_config, has_api_key
@@ -20,6 +21,22 @@ logger = logging.getLogger(__name__)
 mcp_app = FastMCP("ContextPulse Voice")
 
 _DB_PATH = ACTIVITY_DB_PATH
+
+
+def _redact(value: object) -> str:
+    """Scrub secrets from any stored text on its way out of an MCP tool.
+
+    Second layer, not the primary one -- VoiceModule redacts the transcript
+    payload before it reaches the EventBus. This exists because every
+    transcription stored before today is still raw on disk, and because the
+    vocabulary files these tools also read are written by paths that predate
+    the fix.
+
+    Redact BEFORE truncating, never after.
+    """
+    if not value:
+        return ""
+    return redact_sensitive(str(value))
 
 
 def _get_db() -> sqlite3.Connection | None:
@@ -66,9 +83,9 @@ def get_recent_transcriptions(minutes: int = 30, limit: int = 10) -> str:
         for row in rows:
             payload = json.loads(row["payload"])
             ts = time.strftime("%H:%M:%S", time.localtime(row["timestamp"]))
-            raw = payload.get("raw_transcript", "")
-            cleaned = payload.get("transcript", "")
-            app = row["app_name"] or "unknown"
+            raw = _redact(payload.get("raw_transcript"))
+            cleaned = _redact(payload.get("transcript"))
+            app = _redact(row["app_name"]) or "unknown"
             duration = payload.get("duration_seconds", 0)
             fix = " [FIX-LAST]" if payload.get("fix_last") else ""
 
@@ -210,9 +227,13 @@ def get_vocabulary(learned_only: bool = False) -> str:
         if not entries:
             return f"No {label.lower()} vocabulary entries found."
 
+        # Vocabulary entries are word pairs, and a word can be a whole token:
+        # a pasted secret that the user retypes reaches the learned file as a
+        # correction key. Writers now refuse such a pair, but files written
+        # before that are still on disk.
         lines = [f"=== {label} Vocabulary ({len(entries)} entries) ===\n"]
         for misheard, correct in sorted(entries.items()):
-            lines.append(f"  {misheard!r:30s} -> {correct!r}")
+            lines.append(f"  {_redact(misheard)!r:30s} -> {_redact(correct)!r}")
 
         return "\n".join(lines)
     except Exception as e:
@@ -283,7 +304,7 @@ def learn_from_session(hours: int = 24, dry_run: bool = True) -> str:
         lines = [f"=== Session Learning ({mode}) — {len(results)} patterns ===\n"]
         for r in sorted(results, key=lambda x: -x["count"]):
             lines.append(
-                f"  {r['original']!r:30s} -> {r['corrected']!r:20s} "
+                f"  {_redact(r['original'])!r:30s} -> {_redact(r['corrected'])!r:20s} "
                 f"(seen {r['count']}x, confidence {r['confidence']:.0%})"
             )
 
@@ -313,7 +334,7 @@ def rebuild_context_vocabulary() -> str:
         entries = get_context_entries()
         lines = [f"Rebuilt context vocabulary: {count} entries\n"]
         for misheard, correct in sorted(entries.items()):
-            lines.append(f"  {misheard!r:30s} -> {correct!r}")
+            lines.append(f"  {_redact(misheard)!r:30s} -> {_redact(correct)!r}")
         return "\n".join(lines)
     except Exception as e:
         return f"Error rebuilding context vocabulary: {e}"
@@ -381,7 +402,7 @@ def check_corrections(hours: int = 72, threshold: int = 3, dry_run: bool = True)
         lines = [f"=== Correction Escalation ({mode}) — {len(results)} patterns ===\n"]
         for r in sorted(results, key=lambda x: -x.get("count", 0)):
             lines.append(
-                f"  {r['original']!r:30s} -> {r['corrected']!r:20s} "
+                f"  {_redact(r['original'])!r:30s} -> {_redact(r['corrected'])!r:20s} "
                 f"(seen {r.get('count', '?')}x, action: {r.get('action', '?')})"
             )
 

@@ -36,6 +36,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from contextpulse_core.redact import redact_sensitive
+
 # ISO datetime formats an LLM might emit for valid_from despite the prompt.
 _ISO_FORMATS = (
     "%Y-%m-%dT%H:%M:%S",
@@ -334,7 +336,20 @@ _TEXT_KEYS = ("ocr_text", "transcript", "text", "burst_text", "correction_text")
 
 
 def _extract_text(payload_raw: str | None) -> str:
-    """Pull the best text field out of an event payload; never raise."""
+    """Pull the best text field out of an event payload; never raise.
+
+    REDACTED HERE, at the single point where event text enters this process.
+    Everything downstream -- the prompt built by build_extraction_prompt, the
+    `claude -p` invocation in scripts/probe_consolidator.py, the fact sentences
+    the model writes back into the `facts` table, and facts_about/context_at
+    which serve those facts to any MCP client -- inherits it. Redacting at the
+    prompt builder alone would leave read_recent_events() handing raw text to
+    any other caller, and redacting in the consolidator script would leave the
+    library path uncovered.
+
+    Rows written before the capture-side fixes are still raw on disk, so this
+    is doing real work rather than duplicating a guarantee upstream.
+    """
     if not payload_raw:
         return ""
     try:
@@ -346,7 +361,7 @@ def _extract_text(payload_raw: str | None) -> str:
     for key in _TEXT_KEYS:
         value = payload.get(key)
         if value:
-            return value
+            return redact_sensitive(str(value))
     return ""
 
 
@@ -507,10 +522,21 @@ def _prompt_header() -> str:
 
 
 def build_extraction_prompt(events: list[dict[str, Any]]) -> str:
-    """Assemble the Claude-CLI extraction prompt from a batch of events."""
+    """Assemble the Claude-CLI extraction prompt from a batch of events.
+
+    Text arrives already redacted from _extract_text. It is redacted AGAIN
+    here, unconditionally, because this function is public and a caller can
+    pass it a list it assembled itself -- and because this is the last point
+    before the text leaves the process for an external model. Redaction is
+    idempotent (no replacement re-matches a pattern), so the second pass costs
+    a regex sweep and buys a guarantee that does not depend on the caller.
+
+    Redact BEFORE the _MAX_TEXT_CHARS truncation, never after: a token the cut
+    halves matches nothing and its leading half would be transmitted verbatim.
+    """
     lines: list[str] = []
     for e in events:
-        text = (e.get("text") or "").strip().replace("\n", " ")
+        text = redact_sensitive((e.get("text") or "").strip().replace("\n", " "))
         if len(text) > _MAX_TEXT_CHARS:
             text = text[:_MAX_TEXT_CHARS] + "..."
         lines.append(

@@ -15,15 +15,64 @@ mcp_calls) without modifying them.
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import threading
 from pathlib import Path
 from typing import Any, Callable
 
+from contextpulse_core.search_filter import keep_rows_matching_redacted_text
+
 from .events import ContextEvent
 
 logger = logging.getLogger(__name__)
+
+# The tokenizer events_fts is declared with (see _FTS_SQL). The shadow index
+# the filter builds over the REDACTED text has to use the same one, or the
+# filter answers a different question from the one that produced the rows.
+_FTS_TOKENIZER = "porter unicode61"
+
+
+def _indexed_text(row: dict[str, Any]) -> str:
+    """The text events_fts actually indexes, rebuilt from a result row.
+
+    Mirrors the generated `text_content` column and the insert trigger,
+    COALESCE order included: the first key that is PRESENT wins, even when its
+    value is the empty string. A filter that searched a different set of fields
+    from the index would keep rows the index would not have returned.
+    """
+    payload = row.get("payload")
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except (json.JSONDecodeError, TypeError):
+            payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    text_content = ""
+    for key in ("ocr_text", "transcript", "text"):
+        value = payload.get(key)
+        if value is not None:
+            text_content = str(value)
+            break
+
+    return " ".join([
+        str(row.get("window_title") or ""),
+        str(row.get("app_name") or ""),
+        text_content,
+    ])
+
+
+def _like_text(row: dict[str, Any]) -> str:
+    """What the LIKE fallback matches on: titles plus the whole payload blob."""
+    payload = row.get("payload")
+    return " ".join([
+        str(row.get("window_title") or ""),
+        str(row.get("app_name") or ""),
+        payload if isinstance(payload, str) else (str(payload) if payload else ""),
+    ])
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS events (
@@ -254,6 +303,11 @@ class EventBus:
 
         return [ContextEvent.from_row(dict(r)) for r in rows]
 
+    # ── search-result filtering ──────────────────────────────────────
+    #
+    # Defined as a module-level helper below the class; see its docstring for
+    # why a search over events needs one at all.
+
     def search(
         self,
         query: str,
@@ -300,9 +354,11 @@ class EventBus:
                         (query, cutoff),
                     )
                 rows = cursor.fetchall()
+                used_fts = True
             except sqlite3.OperationalError:
                 # FTS syntax error — fall back to LIKE search
                 logger.warning("FTS query failed, falling back to LIKE: %s", query)
+                used_fts = False
                 like_pattern = f"%{query}%"
                 if modality:
                     cursor = self._conn.execute(
@@ -325,7 +381,15 @@ class EventBus:
                     )
                 rows = cursor.fetchall()
 
-        return [dict(r) for r in rows]
+        # The count this returns is computed over REDACTED text, whichever path
+        # produced the candidates -- the LIKE fallback matched raw `payload`
+        # just as the FTS path matched the raw index, so both are filtered.
+        return keep_rows_matching_redacted_text(
+            query,
+            [dict(r) for r in rows],
+            _indexed_text if used_fts else _like_text,
+            tokenize=_FTS_TOKENIZER if used_fts else None,
+        )
 
     def get_by_time(
         self,

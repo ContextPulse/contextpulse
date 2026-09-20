@@ -151,7 +151,13 @@ class ContextPulseSightApp:
         return bool(cfg_get("clipboard_enabled", True))
 
     def _start_clipboard_monitor(self) -> None:
-        """Start the clipboard monitor, if the user has it enabled."""
+        """Start the clipboard monitor, if the user has it enabled.
+
+        Also starts the reconcile timer, and starts it UNCONDITIONALLY --
+        including when the monitor itself is not started, because the setting
+        can be switched back on mid-session and nothing else would notice.
+        """
+        self._start_clipboard_reconcile_thread()
         if not self._clipboard_enabled():
             logger.info("Clipboard capture disabled by setting -- monitor not started")
             self._clipboard_monitor = None
@@ -159,7 +165,51 @@ class ContextPulseSightApp:
         if self._clipboard_monitor is None:
             self._clipboard_monitor = ClipboardMonitor(self.activity_db)
             self._clipboard_monitor.set_sight_module(self._sight_module)
+        elif self._clipboard_monitor.is_alive():
+            # Already running. Calling start() again raises "threads can only
+            # be started once" -- found by a test that calls this twice, which
+            # is now a reachable sequence: the daemon calls it and so does the
+            # app's own run().
+            return
         self._clipboard_monitor.start()
+
+    def _start_clipboard_reconcile_thread(self) -> None:
+        """Poll the clipboard setting on a dedicated timer.
+
+        _reconcile_clipboard_monitor was only ever called from _watchdog_loop,
+        and BOTH start sites -- this app's run() and the unified daemon's
+        _start_modules -- wrap that watchdog in `if AUTO_INTERVAL > 0`. So a
+        user who set CONTEXTPULSE_AUTO_INTERVAL=0 could untick "Capture
+        clipboard contents" and the monitor kept polling and storing until the
+        next restart (review S4) -- exactly the half-honoured behaviour the
+        reconcile was written to prevent.
+
+        A privacy control must not depend on an unrelated capture setting. This
+        is a small dedicated thread rather than a change to the capture loop:
+        the config-unification work owns that restructuring, and a timer that
+        does one thing is easier to delete when it arrives.
+
+        Idempotent -- the watchdog still calls reconcile too when it runs, and
+        reconcile is safe to call repeatedly.
+        """
+        existing = getattr(self, "_clipboard_reconcile_thread", None)
+        if existing is not None and existing.is_alive():
+            return
+        self._clipboard_reconcile_thread = threading.Thread(
+            target=self._clipboard_reconcile_loop,
+            name="cp-clipboard-reconcile",
+            daemon=True,
+        )
+        self._clipboard_reconcile_thread.start()
+
+    def _clipboard_reconcile_loop(self) -> None:
+        while not self.stop_event.wait(15):
+            try:
+                self._reconcile_clipboard_monitor()
+            except Exception:
+                # A reconcile failure must not kill the loop -- the next tick
+                # is the recovery, and a dead timer silently restores the bug.
+                logger.exception("Clipboard reconcile failed")
 
     def _reconcile_clipboard_monitor(self) -> None:
         """Watchdog hook: make the running state match the setting.
@@ -678,7 +728,10 @@ def main():
             else:
                 setup_client(target)
         else:
-            print("Usage: contextpulse-sight --setup {claude-code|cursor|gemini|all|print}")
+            print(
+                "Usage: contextpulse-sight --setup "
+                "{claude-code|cursor|gemini|claude-desktop|all|print}"
+            )
             _sys.exit(1)
         return
 

@@ -38,6 +38,46 @@ $LogFile       = Join-Path $WorkDir "logs\daemon_watchdog.log"
 $StderrLog     = Join-Path $WorkDir "daemon_stderr.log"
 $StderrBackups = 5   # generations of stderr to retain across restarts
 
+# --- Stderr log size bounds ---
+# Until 2026-09-19 daemon_stderr.log was rotated ONLY at restart and had no
+# size bound of any kind, in either direction: the live file grew for as long
+# as the daemon ran, and the five retained generations were each unbounded too.
+# daemon_stderr.log.2 reached 20MB once. The paste-path breadcrumbs write to
+# this file on every dictation, so it is the log family most likely to grow.
+#
+# The live file cannot be rotated. Start-Process -RedirectStandardError hands
+# the child an inherited handle that does not share delete or rename, and
+# Move-Item on it fails with "the process cannot access the file because it is
+# being used by another process" (measured 2026-09-19 against a genuinely live
+# child; SetLength(0) through a FileShare.ReadWrite handle DOES succeed and
+# buys nothing, because the writer's file pointer is untouched and the length
+# returns on the very next write). So crossing $StderrMaxBytes is REPORTED
+# while the daemon runs and acted on at the next restart, which is the only
+# moment the handle is free. The retained generations are held open by nobody,
+# so those are bounded for real, by total bytes.
+$StderrMaxBytes      = 5MB
+$StderrMaxTotalBytes = 25MB
+# How often the supervisor looks at the live stderr log. WaitForExit() with no
+# timeout blocks for the daemon's entire lifetime, which is the mechanical
+# reason nothing ever noticed this file growing.
+$StderrCheckSeconds  = 60
+
+# Same pattern as watchdog-healthcheck.ps1's rotation: a machine-local named
+# mutex, because two PROCESSES have to be serialised and a threading primitive
+# cannot do it. Local\ (per-session), not Global\: creating a Global\ object
+# needs SeCreateGlobalPrivilege this task is not guaranteed to hold.
+#
+# The watchdog's own single-instance mutex does NOT already cover this. It is
+# released by the `finally` at the bottom of this script, and a watchdog that
+# dies mid-crash-report is relaunched by watchdog-healthcheck.ps1 within two
+# minutes -- so a successor can be rotating while the predecessor's last act
+# still is.
+$StderrRotateMutexName = "Local\ContextPulseStderrLogRotate"
+
+# Set when the live log has been reported oversize, so the supervisor says it
+# once per daemon run rather than once a minute. Cleared by each rotation.
+$script:StderrOversizeReported = $false
+
 # --- State ---
 $restartTimestamps = [System.Collections.Generic.List[datetime]]::new()
 $backoffSeconds = 5
@@ -51,6 +91,86 @@ function Write-Log {
     Add-Content -Path $LogFile -Value $line -ErrorAction SilentlyContinue
 }
 
+function Move-LogGeneration {
+    # Returns $true if the move happened or was unnecessary, $false if it
+    # genuinely failed. A vanished source means someone else already moved it:
+    # expected, not an error.
+    #
+    # Never -ErrorAction SilentlyContinue. A swallowed failure here is not
+    # cosmetic: the caller goes straight on to Start-Process
+    # -RedirectStandardError, which TRUNCATES the file, so a silent rotation
+    # failure destroys exactly the crash diagnostics this function exists to
+    # preserve, and looks identical to a successful rotation in the log.
+    param([string]$Source, [string]$Destination)
+    if (-not (Test-Path $Source)) { return $true }
+    try {
+        Move-Item $Source $Destination -Force -ErrorAction Stop
+        return $true
+    } catch [System.Management.Automation.ItemNotFoundException] {
+        return $true
+    } catch {
+        Write-Log "Stderr rotation could not move '$Source' -> '$Destination': $($_.Exception.Message)" "WARN"
+        return $false
+    }
+}
+
+function Limit-StderrLogSize {
+    # Bound the RETAINED generations by total bytes. Nothing holds these open,
+    # so unlike the live file they can genuinely be capped. Five unbounded
+    # generations is not a bound -- daemon_stderr.log.2 reached 20MB once, and
+    # $StderrBackups alone would happily keep five more of those.
+    #
+    # Dropped oldest-first: generation 1 is the run that just crashed, which is
+    # the one a post-mortem wants.
+    param(
+        [Parameter(Mandatory)] [string]$Path,
+        [int]$Keep = $StderrBackups,
+        [long]$MaxTotal = $StderrMaxTotalBytes
+    )
+    $total = 0
+    for ($g = 1; $g -le $Keep; $g++) {
+        if (Test-Path "$Path.$g") {
+            try { $total += (Get-Item "$Path.$g" -ErrorAction Stop).Length } catch { }
+        }
+    }
+    for ($g = $Keep; $g -ge 1; $g--) {
+        if ($total -le $MaxTotal) { break }
+        $victim = "$Path.$g"
+        if (-not (Test-Path $victim)) { continue }
+        try {
+            $size = (Get-Item $victim -ErrorAction Stop).Length
+            Remove-Item $victim -Force -ErrorAction Stop
+            $total -= $size
+            Write-Log "Stderr history over $MaxTotal bytes - dropped '$victim' ($size bytes)" "WARN"
+        } catch {
+            Write-Log "Stderr history could not drop '$victim': $($_.Exception.Message)" "WARN"
+        }
+    }
+    return $total
+}
+
+function Test-StderrLogSize {
+    # Called while the daemon is LIVE, so it can only report. See the note on
+    # $StderrMaxBytes: the file cannot be renamed out from under an inherited
+    # stderr handle. Says it once per daemon run, not once per check.
+    param(
+        [Parameter(Mandatory)] [string]$Path,
+        [long]$MaxBytes = $StderrMaxBytes
+    )
+    if ($script:StderrOversizeReported) { return }
+    if (-not (Test-Path $Path)) { return }
+    try {
+        $len = (Get-Item $Path -ErrorAction Stop).Length
+    } catch {
+        return
+    }
+    if ($len -lt $MaxBytes) { return }
+    $script:StderrOversizeReported = $true
+    Write-Log ("'$Path' is $len bytes (cap $MaxBytes). It cannot be rotated while " +
+        "the daemon holds it open; it will be rotated at the next restart. If it is " +
+        "growing fast, CONTEXTPULSE_PASTE_BREADCRUMBS=0 silences the per-paste trace.") "WARN"
+}
+
 function Rotate-StderrLog {
     # Start-Process -RedirectStandardError opens the target file for write
     # (truncating it) on every call, so a crashing run's stderr is
@@ -62,24 +182,52 @@ function Rotate-StderrLog {
     # this, a second Start-Process to the same -RedirectStandardError path
     # left ONLY the second run's output -- the first run's content was
     # gone, not appended).
+    #
+    # Serialised on a named mutex and followed by a total-size prune. Called at
+    # the one moment the live file is not held open: after the daemon exited
+    # and before the next Start-Process.
     param(
         [Parameter(Mandatory)] [string]$Path,
         [int]$Keep = $StderrBackups
     )
-    if (-not (Test-Path $Path)) {
-        return
-    }
-    $oldest = "$Path.$Keep"
-    if (Test-Path $oldest) {
-        Remove-Item $oldest -Force -ErrorAction SilentlyContinue
-    }
-    for ($generation = $Keep - 1; $generation -ge 1; $generation--) {
-        $source = "$Path.$generation"
-        if (Test-Path $source) {
-            Move-Item $source "$Path.$($generation + 1)" -Force -ErrorAction SilentlyContinue
+    $mutex = New-Object System.Threading.Mutex($false, $StderrRotateMutexName)
+    $held = $false
+    try {
+        try {
+            $held = $mutex.WaitOne(2000)
+        } catch [System.Threading.AbandonedMutexException] {
+            # A previous run died holding it; we now own it.
+            $held = $true
         }
+        if (-not $held) {
+            Write-Log "Stderr rotation skipped: another run held the rotate mutex for >2s" "WARN"
+            return
+        }
+
+        if (Test-Path $Path) {
+            $oldest = "$Path.$Keep"
+            if (Test-Path $oldest) {
+                try {
+                    Remove-Item $oldest -Force -ErrorAction Stop
+                } catch {
+                    Write-Log "Stderr rotation could not delete '$oldest': $($_.Exception.Message)" "WARN"
+                }
+            }
+            for ($generation = $Keep - 1; $generation -ge 1; $generation--) {
+                [void](Move-LogGeneration -Source "$Path.$generation" -Destination "$Path.$($generation + 1)")
+            }
+            if (-not (Move-LogGeneration -Source $Path -Destination "$Path.1")) {
+                Write-Log ("Stderr rotation FAILED - the next launch will truncate '$Path' " +
+                    "and this run's diagnostics will be lost") "ERROR"
+            }
+        }
+
+        $script:StderrOversizeReported = $false
+        [void](Limit-StderrLogSize -Path $Path -Keep $Keep)
+    } finally {
+        if ($held) { $mutex.ReleaseMutex() }
+        $mutex.Dispose()
     }
-    Move-Item $Path "$Path.1" -Force -ErrorAction SilentlyContinue
 }
 
 function Get-RestartsInLastHour {
@@ -129,6 +277,12 @@ function Start-McpServer {
     # dead endpoint until the watchdog was manually restarted.
     param([int]$MaxAttempts = 3)
 
+    # Liveness is a TCP connect, and stays one. Since 2026-09-19 the endpoint
+    # requires a bearer token, so an HTTP probe would have to either read the
+    # token file or be served by an unauthenticated /health route -- and that
+    # route would hand any local process a way to fingerprint ContextPulse,
+    # which is the exact surface the token exists to close. A listening socket
+    # is all this supervisor needs to decide whether to relaunch.
     $listening = Test-NetConnection -ComputerName 127.0.0.1 -Port $McpPort -WarningAction SilentlyContinue
     if ($listening.TcpTestSucceeded) {
         return
@@ -147,7 +301,8 @@ function Start-McpServer {
 
         Write-Log "Unified MCP server started (pid=$($mcpProc.Id))"
 
-        # Wait briefly and verify it came up
+        # Wait briefly and verify it came up. TCP only -- see the note above:
+        # a token-bearing HTTP probe is not worth an unauthenticated route.
         Start-Sleep -Seconds 3
         $check = Test-NetConnection -ComputerName 127.0.0.1 -Port $McpPort -WarningAction SilentlyContinue
         if ($check.TcpTestSucceeded) {
@@ -227,8 +382,16 @@ try {
 
         Write-Log "Daemon started (pid=$($proc.Id))"
 
-        # Wait for process to exit
-        $proc.WaitForExit()
+        # Wait for the process to exit, looking at the stderr log as we go.
+        # WaitForExit() with no timeout blocks for the daemon's whole lifetime,
+        # which is the mechanical reason nothing ever noticed daemon_stderr.log
+        # growing: the only code that could have looked was parked in a syscall
+        # for days at a time. The timed overload returns $false on timeout and
+        # $true when the child is gone, so this waits exactly as long and looks
+        # once a minute on the way.
+        while (-not $proc.WaitForExit($StderrCheckSeconds * 1000)) {
+            Test-StderrLogSize -Path $StderrLog
+        }
         $proc.Refresh()
         $exitCode = $proc.ExitCode
         $runtime = ((Get-Date) - $startTime).TotalSeconds

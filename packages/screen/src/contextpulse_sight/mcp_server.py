@@ -62,10 +62,45 @@ _activity_db = ActivityDB()
 _event_bus: EventBus | None = None
 
 
+_migration_done = False
+
+
+def _ensure_secret_migration() -> None:
+    """Sweep pre-redaction rows before this process serves anything.
+
+    The daemon runs the same sweep at startup, but the MCP server can be a
+    SEPARATE PROCESS and can be the one that starts first -- and it is the one
+    with the search tools, which is where the count oracle lives. The marker
+    lives in a table inside activity.db, so both processes checking is safe and
+    only one does the work.
+
+    Guarded by a process-local flag as well, purely to avoid re-opening the
+    database on every tool call; correctness comes from the marker, not this.
+
+    Backgrounded for the same reason as the daemon's: it is a full-table scan,
+    and a tool call must not block on one. The search paths redact
+    independently, so a sweep still in flight costs nothing.
+    """
+    global _migration_done
+    if _migration_done:
+        return
+    _migration_done = True
+    try:
+        from contextpulse_core.daemon import start_secret_migration
+
+        start_secret_migration()
+    except Exception:
+        # Never let a cleanup stop the server from answering. The search paths
+        # redact independently, so a failed sweep degrades to the previous
+        # behaviour rather than opening a hole.
+        logger.warning("secret migration skipped at MCP startup", exc_info=True)
+
+
 def _get_event_bus() -> EventBus:
     """Lazy-init EventBus (reads the same activity.db as the daemon)."""
     global _event_bus
     if _event_bus is None:
+        _ensure_secret_migration()
         _event_bus = EventBus(_activity_db.db_path)
     return _event_bus
 
@@ -481,10 +516,20 @@ def get_screen_text() -> str:
     result = classify_and_extract(img)
 
     if result["type"] == "text" and result["text"]:
+        # This is a LIVE capture, so it never passed through the OCR worker
+        # where redact_ocr_text is honoured -- a user with redaction enabled
+        # got it at write time and not through this tool, which returns
+        # whatever is on screen right now, password manager included
+        # (review S6). Gated on the same setting so the two paths agree.
+        from contextpulse_core.config import get as cfg_get
+
+        text = result["text"]
+        if cfg_get("redact_ocr_text", True):
+            text = _redact(text)
         return (
             f"[OCR: {result['lines']} lines, {result['chars']} chars, "
             f"confidence={result['confidence']:.2f}, time={result['ocr_time']:.1f}s]\n\n"
-            f"{result['text']}"
+            f"{text}"
         )
     else:
         return (
@@ -741,6 +786,15 @@ def search_clipboard(query: str, minutes_ago: int = 60) -> str:
     Searches through captured clipboard contents. Useful for finding a
     specific error message, URL, or code snippet that was copied earlier.
 
+    SCAN LIMIT: only the 2000 most recent entries inside the window are
+    examined. Matching is done in Python against the REDACTED text -- that is
+    what stops the result count leaking a stored secret one character at a time
+    -- and a bounded scan is what keeps that affordable, so a large
+    minutes_ago cannot become a full-table scan. When the window holds more
+    than 2000 entries the response says `truncated: true`, and "no results"
+    then means "none in the part that was examined", not "none at all".
+    Narrow minutes_ago to search further back reliably.
+
     Args:
         query: Text to search for in clipboard history.
         minutes_ago: How far back to search (default 60 minutes).
@@ -749,10 +803,27 @@ def search_clipboard(query: str, minutes_ago: int = 60) -> str:
     if not query or not query.strip():
         return "Search query cannot be empty."
     results = _activity_db.search_clipboard(query, minutes_ago)
-    if not results:
-        return f"No clipboard entries matching '{query}' in the last {minutes_ago} minutes."
 
-    lines = [f"=== Clipboard Search: '{query}' ({len(results)} results) ===\n"]
+    # Counted separately from the search itself: a row COUNT over a time range
+    # says nothing about any row's content, so reporting it does not reopen the
+    # oracle the redacted matching closed.
+    scan_limit = _activity_db._SEARCH_SCAN_LIMIT
+    in_window = _activity_db.clipboard_rows_in_window(minutes_ago)
+    truncated = in_window > scan_limit
+    notice = (
+        f"truncated: true — only the {scan_limit} most recent of {in_window} "
+        f"entries in this window were scanned\n"
+        if truncated else ""
+    )
+
+    if not results:
+        return (
+            notice
+            + f"No clipboard entries matching '{query}' in the last {minutes_ago} minutes."
+            + (" (in the entries that were scanned)" if truncated else "")
+        )
+
+    lines = [notice + f"=== Clipboard Search: '{query}' ({len(results)} results) ===\n"]
     for entry in results:
         ts_str = datetime.fromtimestamp(entry["timestamp"]).strftime("%H:%M:%S")
         text = _redact(entry["text"])
@@ -940,6 +1011,9 @@ def get_event_timeline(minutes_ago: float = 5.0, modality: str | None = None) ->
 
 
 def main():
+    # Before the transport opens, not lazily on first search: a standalone
+    # sight MCP server may be the only process that ever touches this store.
+    _ensure_secret_migration()
     mcp_app.run(transport="stdio")
 
 

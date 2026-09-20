@@ -8,9 +8,41 @@ import logging
 import os
 import threading
 
+from contextpulse_core.clipboard_lock import (
+    CLIPBOARD_LOCK_TIMEOUT,
+    breadcrumbs_enabled,
+    clipboard_lock,
+    write_breadcrumb,
+)
 from contextpulse_core.platform.base import PlatformProvider
 
 logger = logging.getLogger("contextpulse.platform.windows")
+
+# Per-poll read breadcrumbs are OFF by default and the paste-path ones are ON:
+# this read runs once a second, so tracing every one would write ~86k lines a
+# day for a signal that only matters during the ~0.7s a paste is in flight.
+# Turn it on (CONTEXTPULSE_CLIPBOARD_READ_BREADCRUMBS=1) if a 0xC0000374 ever
+# lands with the paste path fully breadcrumbed and the reader still suspect.
+# The contended-skip breadcrumb is always emitted — it is bounded by paste
+# frequency, and it is the line that shows the two threads met at all.
+#
+# This variable gates the READ path only. The paster has its own,
+# CONTEXTPULSE_PASTE_BREADCRUMBS (voice/paster.py), and the two are kept
+# separate deliberately: while they shared one switch, turning on the paste
+# trace to hunt a reproduction also turned on the 1 Hz read trace, into the
+# same daemon_stderr.log the paste trace was being kept small to protect.
+_READ_BREADCRUMBS = breadcrumbs_enabled("CONTEXTPULSE_CLIPBOARD_READ_BREADCRUMBS", "0")
+
+# Hard cap on how much of a clipboard block is materialised, independent of
+# how big the block is. GlobalSize bounds the read for SAFETY; this bounds it
+# for SIZE. Without it a 200MB text copy allocates 400MB+ in the daemon and
+# holds both the clipboard lock and the Win32 clipboard open long enough for
+# the paster's 2s acquire to fail, dropping a dictation -- the read would be
+# memory-safe and still take the feature down. Sight truncates to 10,000
+# chars immediately afterwards (clipboard.py _MAX_LENGTH), so 1 MiB is ~50x
+# more than any consumer keeps and still small enough to copy in one tick.
+_READ_CAP_CHARS = 1024 * 1024 // 2  # 1 MiB of UTF-16 code units
+
 
 
 class POINT(ctypes.Structure):
@@ -40,6 +72,11 @@ _k32.GlobalLock.argtypes = [ctypes.wintypes.HGLOBAL]
 _k32.GlobalLock.restype = ctypes.wintypes.LPVOID
 _k32.GlobalUnlock.argtypes = [ctypes.wintypes.HGLOBAL]
 _k32.GlobalUnlock.restype = ctypes.wintypes.BOOL
+# GlobalSize bounds the read below. Undeclared it would default to c_int and
+# truncate a >2GB block's size to a negative number — the same sign-extension
+# trap documented for GetClipboardData/GlobalLock above.
+_k32.GlobalSize.argtypes = [ctypes.wintypes.HGLOBAL]
+_k32.GlobalSize.restype = ctypes.c_size_t
 
 
 class WindowsPlatformProvider(PlatformProvider):
@@ -58,13 +95,31 @@ class WindowsPlatformProvider(PlatformProvider):
     def get_clipboard_text(self) -> str | None:
         """Read text from the Windows clipboard using Win32 API.
 
-        Returns None when the clipboard holds no text (a normal, quiet case).
+        Holds :data:`clipboard_lock` for the ENTIRE open/lock/read/close
+        cycle. Holding it only around individual API calls would not help: the
+        hazard is another thread's EmptyClipboard freeing the block between
+        our GlobalLock and our GlobalUnlock, which is a write to heap metadata
+        on a dead block (cp-daemon-heap-corruption-after-paste).
+
+        Returns None when the clipboard holds no text (a normal, quiet case),
+        and also when a paste is in flight and the lock could not be taken —
+        the caller must treat None as "nothing read yet", not as "no change".
         A genuine API failure is logged rather than swallowed — this read is on
         a 1s poll loop, so the log is rate-limited to one warning per distinct
         error to surface breakage without flooding the daemon log.
         """
         CF_UNICODETEXT = 13
+        if not clipboard_lock.acquire(timeout=CLIPBOARD_LOCK_TIMEOUT):
+            # A paste in flight owns the clipboard. Skipping one poll costs
+            # nothing; racing it corrupts the heap. Not a warning — this is the
+            # designed outcome. Breadcrumbed unconditionally because contention
+            # is bounded by paste frequency (~30/hour), unlike the read itself.
+            write_breadcrumb("read_skipped_lock_busy")
+            logger.debug("Clipboard busy (paste in flight) — skipping this poll")
+            return None
         try:
+            if _READ_BREADCRUMBS:
+                write_breadcrumb("read_open_enter")
             if not _u32.OpenClipboard(None):
                 return None
             try:
@@ -73,18 +128,60 @@ class WindowsPlatformProvider(PlatformProvider):
                 handle = _u32.GetClipboardData(CF_UNICODETEXT)
                 if not handle:
                     return None
+                # Bound the read by the block's real size BEFORE locking it.
+                # ctypes.wstring_at(ptr) with no length scans for a NUL
+                # terminator without limit; clipboard text written by another
+                # application is not guaranteed to carry one, so an unbounded
+                # read can walk off the end of the allocation on its own —
+                # independently of the paste race above.
+                size_bytes = _k32.GlobalSize(handle)
+                if not size_bytes:
+                    return None
+                max_chars = size_bytes // ctypes.sizeof(ctypes.c_wchar)
+                if not max_chars:
+                    return None
+                if max_chars > _READ_CAP_CHARS:
+                    # Logged once, not per poll: a huge clip sits on the
+                    # clipboard for as long as the user leaves it there, and
+                    # one warning per second is the log-flooding shape this
+                    # project has already been bitten by twice.
+                    if "clipboard_read_capped" not in self._warned_errors:
+                        self._warned_errors.add("clipboard_read_capped")
+                        logger.warning(
+                            "Clipboard block is %d bytes (%d chars) — reading "
+                            "the first %d chars only; consumers truncate well "
+                            "below this anyway",
+                            size_bytes,
+                            max_chars,
+                            _READ_CAP_CHARS,
+                        )
+                    max_chars = _READ_CAP_CHARS
+                if _READ_BREADCRUMBS:
+                    write_breadcrumb("read_globallock_enter")
                 ptr = _k32.GlobalLock(handle)
                 if not ptr:
                     return None
                 try:
-                    return ctypes.wstring_at(ptr)
+                    raw = ctypes.wstring_at(ptr, max_chars)
                 finally:
                     _k32.GlobalUnlock(handle)
+                    if _READ_BREADCRUMBS:
+                        write_breadcrumb("read_globalunlock_exit")
+                # wstring_at(ptr, n) returns exactly n chars including any
+                # trailing NUL padding (GlobalSize includes the terminator and
+                # the allocator may round the block up), so trim at the first
+                # terminator to reproduce the previous return value for every
+                # well-formed clipboard payload.
+                return raw.split("\x00", 1)[0]
             finally:
                 _u32.CloseClipboard()
+                if _READ_BREADCRUMBS:
+                    write_breadcrumb("read_close_exit")
         except Exception as exc:
             self._warn_once("clipboard_read", exc)
             return None
+        finally:
+            clipboard_lock.release()
 
     _warned_errors: set = set()
 
