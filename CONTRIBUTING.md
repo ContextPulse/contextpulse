@@ -45,11 +45,26 @@ Emergency bypass (use sparingly, never on main): `git push --no-verify`
 
 ## Running Tests
 
-```bash
-# Full suite
-pytest packages/ -x -q
+**Run this before you push.** It is the one command that mirrors what GitHub
+Actions runs, job for job:
 
-# Single package
+```bash
+bash scripts/ci-tests.sh          # everything CI runs on this platform (~100s)
+bash scripts/ci-tests.sh --fast   # lint + the guards `pytest packages/` misses (~2s)
+bash scripts/ci-tests.sh --list   # print the commands without running them
+```
+
+`pytest packages/` alone is **not** enough, and this is not a style preference.
+CI's `test-cross-platform` job also runs `tests/test_config_readers.py`, which
+lives in the root `tests/` directory that `packages/` never collects. A pull
+request has already gone red on exactly that gap after its author ran the
+package tests and saw green. The pre-push hook runs the fast set on every push
+and the full set before a push to a public remote, so in normal work you do not
+have to remember this.
+
+While iterating on one package, the narrow commands are still the fast loop:
+
+```bash
 pytest packages/screen/tests/ -x -q
 pytest packages/voice/tests/ -x -q
 pytest packages/touch/tests/ -x -q
@@ -57,7 +72,14 @@ pytest packages/memory/tests/ -x -q
 pytest packages/project/tests/ -x -q
 ```
 
-All tests must pass before submitting a PR.
+Two things `ci-tests.sh` deliberately does not claim. It cannot catch
+platform-only failures: the Linux and macOS jobs need the runners, and that
+class has caused about half of this repository's red builds. And if you change
+a job in `.github/workflows/ci.yml`, change the matching block in
+`scripts/ci-tests.sh` in the same commit. A local command that has drifted from
+CI is worse than no local command, because it buys false confidence.
+
+All tests must pass before submitting a pull request.
 
 ## Code Style
 

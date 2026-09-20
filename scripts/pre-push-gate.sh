@@ -178,6 +178,70 @@ if [ "${CLAUDECODE:-}" = "1" ] || [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
     fi
 fi
 
+# --- WILL THIS PUSH GO RED? ---------------------------------------------------
+#
+# Added 2026-09-20, after David asked why failure emails keep arriving. The
+# answer for the local half was that CONTRIBUTING.md and README.md named
+# `pytest packages/ -x -q`, which never collects the root `tests/` directory,
+# while ci.yml's test-cross-platform job runs tests/test_config_readers.py.
+# Pull request #19 failed four jobs on exactly that gap: its author ran the
+# documented command, saw green, and pushed.
+#
+# scripts/ci-tests.sh is now the single command that mirrors ci.yml, and this
+# block runs it. Two tiers, because a gate that costs two minutes on every
+# push is how a repo teaches itself `--no-verify` -- a reflex this gate's own
+# comments were tuned to avoid:
+#
+#   every push        --fast   lint + the root-tests gap      ~2s here
+#   public remote     full     every job this platform can run ~100s here
+#
+# The full set runs only where a red build is visible and costs an email. A
+# push to the private work-in-progress remote stays cheap on purpose.
+#
+# What this CANNOT catch: platform-only failures. Headless input libraries on
+# Linux runners, inode reuse on ext4, the macOS job. Those need the runners by
+# definition, and roughly half this repo's red builds have been that class.
+#
+# Escape hatch, for a genuine emergency only:
+#   CONTEXTPULSE_SKIP_CI_TESTS=1 git push ...
+# It skips the test block and NOTHING else -- the publication gate below still
+# runs. Prefer it over --no-verify, which turns off the content gate too.
+
+CI_TESTS="$(git rev-parse --show-toplevel 2>/dev/null)/scripts/ci-tests.sh"
+
+if [ -n "${CONTEXTPULSE_SKIP_CI_TESTS:-}" ]; then
+    echo "pre-push: CI test check SKIPPED (CONTEXTPULSE_SKIP_CI_TESTS set)." >&2
+    echo "pre-push: the publication gate below still runs." >&2
+elif [ ! -f "$CI_TESTS" ]; then
+    echo "pre-push: scripts/ci-tests.sh not found -- skipping the CI test check." >&2
+else
+    # DEST_VISIBILITY is set above only for agent pushes; compute it for
+    # David's own shell too, and fail toward the thorough option when unsure.
+    CI_SCOPE_VIS="${DEST_VISIBILITY:-$(remote_visibility "$REMOTE_URL")}"
+    if [ "$CI_SCOPE_VIS" = "PRIVATE" ]; then
+        CI_MODE="--fast"
+    else
+        CI_MODE=""   # full set: public, internal or unresolvable destination
+    fi
+
+    echo "pre-push: running the checks GitHub Actions runs (${CI_MODE:---full})..."
+    if ! bash "$CI_TESTS" $CI_MODE; then
+        echo "" >&2
+        echo "PRE-PUSH REFUSED -- these checks also run in GitHub Actions, so this" >&2
+        echo "push would turn the build red and mail David about it." >&2
+        echo "" >&2
+        echo "  Reproduce and iterate locally with:" >&2
+        echo "    bash scripts/ci-tests.sh $CI_MODE" >&2
+        echo "" >&2
+        echo "  Genuine emergency only:" >&2
+        echo "    CONTEXTPULSE_SKIP_CI_TESTS=1 git push ..." >&2
+        echo "  (skips this block only; the publication gate still runs. Do NOT" >&2
+        echo "   reach for --no-verify, which turns off the content gate as well.)" >&2
+        echo "" >&2
+        exit 1
+    fi
+fi
+
 PRE_PUBLISH="$HOME/Projects/AgentConfig/scripts/pre-publish.py"
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
 
