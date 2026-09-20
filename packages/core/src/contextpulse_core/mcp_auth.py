@@ -338,7 +338,15 @@ def load_or_create_token(token_file: Path | str | None = None, _attempt: int = 0
     os.close(fd)
     restrict_to_user(path)
     try:
-        path.write_text(token, encoding="utf-8")
+        # flush + fsync, not write_text: closing the handle hands the bytes to
+        # the OS cache, it does not put them on the platter. This function
+        # returns the token to a caller that writes it straight into a client
+        # config, so a power cut before the cache flushed would leave a
+        # configured client pointing at an EMPTY token file.
+        with open(path, "wb") as handle:
+            handle.write(token.encode("utf-8"))
+            handle.flush()
+            os.fsync(handle.fileno())
     except OSError:
         # Leave no empty file behind -- it would poison every later read.
         path.unlink(missing_ok=True)

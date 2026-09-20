@@ -410,6 +410,29 @@ def test_a_new_token_is_redacted_by_the_capture_pipeline(tmp_path):
     assert "MCP Access" in cleaned, "redaction ate the surrounding context"
 
 
+def test_the_token_is_forced_to_disk_before_it_is_handed_out(tmp_path, monkeypatch):
+    """R2-2, token half. write_text() closing the handle hands the bytes to the
+    OS cache, not to the platter. load_or_create_token returns the token to a
+    caller that immediately prints it into a client config; a power cut before
+    the cache flushed leaves an EMPTY token file behind a configured client --
+    the B1-5 shape, arrived at from the other direction.
+    """
+    synced: list[int] = []
+    real_fsync = os.fsync
+
+    def fsync_spy(fd):
+        result = real_fsync(fd)
+        synced.append(os.fstat(fd).st_size)
+        return result
+
+    monkeypatch.setattr(mcp_auth.os, "fsync", fsync_spy)
+    token = mcp_auth.load_or_create_token(tmp_path / "mcp_token")
+
+    assert len(token.encode("utf-8")) in synced, (
+        f"the token file was never fsynced: {synced}"
+    )
+
+
 # ── 7: file permissions, both platforms ──────────────────────────────
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX mode bits")

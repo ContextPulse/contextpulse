@@ -145,6 +145,86 @@ class TestAtomicWriteWithBackup:
         assert not list(tmp_path.glob("*.tmp"))
 
 
+class TestTheWriteSurvivesPowerLossNotOnlyAKill:
+    """R2-2. `write_text()` closing the handle hands the bytes to the OS cache;
+    it does not force them to the platter. A power cut just after `os.replace()`
+    can therefore leave the target present, renamed and EMPTY -- the exact end
+    state B1-2's atomic write exists to prevent, now with the original already
+    replaced.
+
+    The second half is ordering: the backup is a copy of Claude Code's OAuth
+    material, so it must be restricted while it is still empty, the way
+    `load_or_create_token` does it for the token file.
+    """
+
+    def test_the_temp_file_is_forced_to_disk_before_the_replace(self, tmp_path, monkeypatch):
+        cfg = tmp_path / ".claude.json"
+        cfg.write_text("{}", encoding="utf-8")
+        events: list[tuple[str, int]] = []
+        real_fsync, real_replace = os.fsync, os.replace
+
+        def fsync_spy(fd):
+            result = real_fsync(fd)
+            events.append(("fsync", os.fstat(fd).st_size))
+            return result
+
+        def replace_spy(src, dst):
+            events.append(("replace", os.stat(src).st_size))
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(setup_mod.os, "fsync", fsync_spy)
+        monkeypatch.setattr(setup_mod.os, "replace", replace_spy)
+        setup_client("claude-code", token=TOKEN, paths=[cfg])
+
+        assert ("replace", cfg.stat().st_size) in events, events
+        index = events.index(("replace", cfg.stat().st_size))
+        assert ("fsync", cfg.stat().st_size) in events[:index], (
+            f"the temp file reached os.replace() unsynced: {events}"
+        )
+
+    def test_the_backup_is_restricted_before_its_contents_are_written(self, tmp_path, monkeypatch):
+        """Create-restricted-then-write. Inverted, a copy of the user's OAuth
+        material exists on disk under inherited permissions, however briefly."""
+        cfg = tmp_path / ".claude.json"
+        cfg.write_text(
+            json.dumps({"oauthAccount": {"accessToken": "not-a-real-token"}}),
+            encoding="utf-8",
+        )
+        size_when_restricted: dict[str, int] = {}
+
+        def restrict_spy(path):
+            size_when_restricted[Path(path).name] = Path(path).stat().st_size
+            return True
+
+        monkeypatch.setattr(setup_mod.mcp_auth, "restrict_to_user", restrict_spy)
+        setup_client("claude-code", token=TOKEN, paths=[cfg])
+
+        backups = [n for n in size_when_restricted if n.endswith(BACKUP_SUFFIX)]
+        assert backups, f"the backup was never restricted: {sorted(size_when_restricted)}"
+        assert size_when_restricted[backups[0]] == 0, (
+            "the backup already held the OAuth material when it was restricted"
+        )
+
+    def test_the_backup_is_forced_to_disk_too(self, tmp_path, monkeypatch):
+        cfg = tmp_path / ".claude.json"
+        original = json.dumps({"keep": "me"})
+        cfg.write_text(original, encoding="utf-8")
+        synced: list[int] = []
+        real_fsync = os.fsync
+
+        def fsync_spy(fd):
+            result = real_fsync(fd)
+            synced.append(os.fstat(fd).st_size)
+            return result
+
+        monkeypatch.setattr(setup_mod.os, "fsync", fsync_spy)
+        setup_client("claude-code", token=TOKEN, paths=[cfg])
+
+        assert len(original.encode("utf-8")) in synced, (
+            f"the backup was never fsynced: {synced}"
+        )
+
+
 def _read(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
