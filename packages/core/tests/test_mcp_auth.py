@@ -11,6 +11,7 @@ mcp_unified rather than a hand-copied dict, so a change to the production
 settings shows up here instead of drifting silently.
 """
 
+import asyncio
 import json
 import os
 import stat
@@ -142,6 +143,73 @@ def test_no_token_with_foreign_origin_is_401_not_403(auth_client):
     """Ordering: the bearer wrapper is outermost, so auth decides first."""
     resp = _post(auth_client, {"Origin": "http://evil.example"})
     assert resp.status_code == 401
+
+
+# ── the SSE shape production actually serves ─────────────────────────
+
+def test_gate_holds_on_the_sse_response_shape():
+    """The fixture above sets json_response=True; production does not.
+
+    Same gate, the response body framing differs. Without this, every
+    assertion in this file describes a server configuration that is not the
+    one shipped.
+    """
+    app = FastMCP(
+        "t", host="127.0.0.1", port=PORT, stateless_http=True,
+        transport_security=mcp_unified.build_transport_security(PORT),
+    )
+
+    @app.tool()
+    def dummy_probe() -> str:
+        """Present so tools/list is non-empty."""
+        return "ok"
+
+    wrapped = mcp_auth.BearerAuthASGI(app.streamable_http_app(), TOKEN)
+    with TestClient(wrapped, base_url=BASE_URL) as client:
+        assert _post(client).status_code == 401
+        ok = _post(client, {"Authorization": f"Bearer {TOKEN}"})
+        assert ok.status_code == 200, ok.text
+        assert ok.headers["content-type"].startswith("text/event-stream")
+        assert "dummy_probe" in ok.text
+
+
+# ── non-http scopes ──────────────────────────────────────────────────
+
+def test_lifespan_scope_passes_through():
+    """Eating lifespan would leave the session manager unstarted."""
+    seen = []
+
+    async def inner(scope, receive, send):
+        seen.append(scope["type"])
+
+    wrapper = mcp_auth.BearerAuthASGI(inner, TOKEN)
+    asyncio.run(wrapper({"type": "lifespan"}, _noop_receive, _noop_send))
+    assert seen == ["lifespan"]
+
+
+def test_websocket_scope_is_refused_not_forwarded():
+    """A future websocket route must not inherit an ungated path."""
+    seen = []
+    sent = []
+
+    async def inner(scope, receive, send):
+        seen.append(scope["type"])
+
+    async def send(message):
+        sent.append(message)
+
+    wrapper = mcp_auth.BearerAuthASGI(inner, TOKEN)
+    asyncio.run(wrapper({"type": "websocket"}, _noop_receive, send))
+    assert seen == [], "websocket scope reached the app without authentication"
+    assert sent == [{"type": "websocket.close", "code": 1008}]
+
+
+async def _noop_receive():
+    return {"type": "lifespan.startup"}
+
+
+async def _noop_send(message):
+    return None
 
 
 # ── 6: token file lifecycle ──────────────────────────────────────────

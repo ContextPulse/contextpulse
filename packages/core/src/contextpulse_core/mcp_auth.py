@@ -263,9 +263,11 @@ def verify(presented: str | None, expected: str | None) -> bool:
 class BearerAuthASGI:
     """Pure-ASGI bearer gate, wrapped OUTSIDE the MCP Starlette app.
 
-    Non-HTTP scopes (lifespan, and websocket if it ever appears) pass straight
-    through -- the streamable-http app's lifespan is what starts the session
-    manager, so eating it would hang the server.
+    Only `lifespan` passes through ungated -- that scope is what starts the
+    session manager, so eating it would hang the server, and it carries no
+    request. Everything that is not `http` is refused rather than forwarded:
+    the app has no websocket routes today, and "we forward what we do not
+    understand" is how an unauthenticated path appears the day it gains one.
     """
 
     def __init__(self, app, token: str) -> None:
@@ -275,8 +277,15 @@ class BearerAuthASGI:
         self._token = token
 
     async def __call__(self, scope, receive, send) -> None:
-        if scope.get("type") != "http":
+        scope_type = scope.get("type")
+        if scope_type == "lifespan":
             await self.app(scope, receive, send)
+            return
+        if scope_type != "http":
+            logger.warning("Refusing %s scope on the MCP endpoint", scope_type)
+            if scope_type == "websocket":
+                # Closing before accept fails the handshake (HTTP 403).
+                await send({"type": "websocket.close", "code": 1008})
             return
 
         header = None
