@@ -28,6 +28,8 @@ Capture, storage and search all run on your machine, and there is no telemetry. 
 - Voice LLM cleanup sends the text of a dictation to Anthropic's API to fix grammar and strip filler words. It needs an API key in `voice_anthropic_api_key` (or `ANTHROPIC_API_KEY`) and `voice_always_use_llm` turned on. The same key lets the vocabulary learner send recent transcript pairs to Anthropic to find words that speech recognition keeps mishearing.
 - The fact consolidator, `scripts/probe_consolidator.py`, pipes recent captured events to the Claude CLI to distill them into facts. That prompt carries app names, window titles and the captured text itself. It runs only when you run the script or schedule it.
 
+Captured text is redacted before it is stored and again before any MCP tool returns it. Rows written before 0.1.1 are redacted in place by a one-time sweep on the first daemon or MCP-server start after upgrade; `scripts/purge_clipboard_secrets.py` is there if you want to run it by hand. See [SECURITY.md](SECURITY.md) for what the filter covers and what it does not.
+
 **A note on MCP clients.** Once your agent reads a tool result, what happens to it next is that client's decision, not ours. A local model keeps it on the machine. A cloud-backed client sends it to its provider like any other prompt. That applies to every context tool you give an agent, and ContextPulse cannot see or control the hop.
 
 ```
@@ -159,6 +161,8 @@ contextpulse --setup claude-code   # configures MCP + installs skills
 # or: contextpulse --setup all     # both
 ```
 
+`contextpulse --setup` writes the authenticated `contextpulse` entry into Claude Code, Cursor and Gemini CLI, creating the access token if this is the first run. Re-run it after regenerating the token.
+
 Start ContextPulse:
 
 ```bash
@@ -178,11 +182,16 @@ Add to `~/.claude.json`:
   "mcpServers": {
     "contextpulse": {
       "type": "http",
-      "url": "http://127.0.0.1:8420/mcp"
+      "url": "http://127.0.0.1:8420/mcp",
+      "headers": { "Authorization": "Bearer YOUR_TOKEN_HERE" }
     }
   }
 }
 ```
+
+The endpoint requires an access token. ContextPulse generates one per install on first use and stores it with user-only permissions at `%APPDATA%\ContextPulse\mcp_token` (macOS: `~/Library/Application Support/ContextPulse/mcp_token`; Linux: `$XDG_CONFIG_HOME/ContextPulse/mcp_token`). Print yours with `contextpulse-mcp --print-config claude-code`, or find it in the tray under **Settings -> MCP Access**. See [docs/mcp-configs](docs/mcp-configs/README.md) for Cursor, Gemini CLI, Claude Desktop and troubleshooting.
+
+The token defends against other local callers: other accounts on the machine, sandboxed applications with loopback access, and other MCP clients and agents. It does not defend against a process already running as you, which can read the token file and the databases directly.
 </details>
 
 ## MCP Tools

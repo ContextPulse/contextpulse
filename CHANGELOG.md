@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The local MCP endpoint now requires a per-install bearer token. The token is
+  generated on first use, stored with user-only file permissions, and surfaced
+  in the tray under Settings -> MCP Access, via `contextpulse --setup`, and via
+  `contextpulse-mcp --print-config <client>`.
+- `contextpulse-mcp --print-config [claude-code|cursor|gemini|claude-desktop]`.
+
+### Changed
+
+- `contextpulse --setup` writes an authenticated `http` entry under the server
+  name `contextpulse` and removes the stale stdio `contextpulse-sight` entry
+  earlier builds wrote. Other servers in the config are preserved.
+- Host/Origin protection is now configured explicitly rather than relying on
+  FastMCP's localhost auto-default, and the allowed hosts pin the port.
+- Minimum `mcp` is now 1.26.
+
+### Breaking
+
+- Existing MCP clients get `401` until their config gains the `Authorization`
+  header. Fix: `contextpulse --setup`, restart the MCP server, reconnect the
+  client. `CONTEXTPULSE_MCP_AUTH=off` or `contextpulse-mcp --no-auth` restores
+  the old unauthenticated behaviour and logs a warning banner; there is no
+  other grace path and it is not persistable in `config.json`.
+
 ## [0.1.1] - 2026-09-19
 
 ### Security
