@@ -20,8 +20,34 @@ from pathlib import Path
 from typing import Any
 
 from contextpulse_core.redact import redact_sensitive
+from contextpulse_core.search_filter import keep_rows_matching_redacted_text
 
 logger = logging.getLogger(__name__)
+
+# Both memory FTS tables are declared tokenize='porter unicode61'. The shadow
+# index the oracle filter builds over the REDACTED text must name the same one,
+# or it answers a different question from the one that produced the rows.
+_MEMORY_FTS_TOKENIZER = "porter unicode61"
+
+
+def _warm_indexed_text(row: dict[str, Any]) -> str:
+    """What memories_fts indexes: key, value and the tag list."""
+    tags = row.get("tags")
+    if isinstance(tags, (list, tuple)):
+        tags = " ".join(str(t) for t in tags)
+    return " ".join([
+        str(row.get("key") or ""), str(row.get("value") or ""), str(tags or ""),
+    ])
+
+
+def _warm_like_text(row: dict[str, Any]) -> str:
+    """What the LIKE fallback matches on: key and value only."""
+    return " ".join([str(row.get("key") or ""), str(row.get("value") or "")])
+
+
+def _cold_indexed_text(row: dict[str, Any]) -> str:
+    """What cold_fts indexes, which is also what its LIKE fallback matches."""
+    return str(row.get("text_content") or "")
 
 
 class MemoryQuotaExceeded(Exception):
@@ -277,6 +303,20 @@ class WarmTier:
         return [self._row_to_dict(r) for r in rows]
 
     def search(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
+        """FTS search over the warm tier, MATCHING REDACTED TEXT.
+
+        This matched the raw stored `value` through memories_fts while the MCP
+        tool returned `{"count": len(results), ...}` with the results scrubbed
+        -- output redacted, count computed over raw text, which is an
+        extraction oracle (review S-1). Entries written before this package
+        began redacting are still raw on disk and are exactly the population an
+        attacker would probe.
+
+        Candidates are re-matched against their redacted rendering through the
+        same porter tokenizer, so the count describes what a caller could have
+        learned from reading the redacted rows.
+        """
+        used_fts = True
         with self._lock:
             try:
                 cursor = self._conn.execute(
@@ -290,13 +330,19 @@ class WarmTier:
                 rows = cursor.fetchall()
             except sqlite3.OperationalError:
                 # FTS syntax error — fall back to LIKE
+                used_fts = False
                 like = f"%{query}%"
                 cursor = self._conn.execute(
                     "SELECT * FROM memories WHERE key LIKE ? OR value LIKE ? LIMIT ?",
                     (like, like, limit),
                 )
                 rows = cursor.fetchall()
-        return [self._row_to_dict(r) for r in rows]
+        return keep_rows_matching_redacted_text(
+            query,
+            [self._row_to_dict(r) for r in rows],
+            _warm_indexed_text if used_fts else _warm_like_text,
+            tokenize=_MEMORY_FTS_TOKENIZER if used_fts else None,
+        )
 
     def semantic_search(
         self, query_embedding: list[float], limit: int = 20
@@ -500,6 +546,13 @@ class ColdTier:
         return written
 
     def search(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
+        """FTS search over the archive, MATCHING REDACTED TEXT.
+
+        Same oracle as WarmTier.search and the same fix (review S-1). The cold
+        tier is the older half of the store, so it is the MORE likely of the two
+        to be holding pre-redaction text.
+        """
+        used_fts = True
         with self._lock:
             try:
                 cursor = self._conn.execute(
@@ -511,12 +564,18 @@ class ColdTier:
                     (query, limit),
                 )
             except sqlite3.OperationalError:
+                used_fts = False
                 cursor = self._conn.execute(
                     "SELECT * FROM cold_summaries WHERE text_content LIKE ? ORDER BY window_start DESC LIMIT ?",
                     (f"%{query}%", limit),
                 )
             rows = cursor.fetchall()
-        return [dict(r) for r in rows]
+        return keep_rows_matching_redacted_text(
+            query,
+            [dict(r) for r in rows],
+            _cold_indexed_text,
+            tokenize=_MEMORY_FTS_TOKENIZER if used_fts else None,
+        )
 
     def optimize(self) -> None:
         """Run PRAGMA optimize to refresh FTS5 index statistics."""
