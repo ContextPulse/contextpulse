@@ -63,6 +63,38 @@ SECRET_FAMILIES = [
         "PRIVATE_KEY",
     ),
     ("connection_string", "postgres://appuser:zqconnstrglued88@db.invalid:5432/app", "CONN_STRING"),
+    # Added after the adversarial review (S3): sixteen shapes the table missed,
+    # two of which the module docstring already claimed to cover.
+    (
+        "openssh_private_key",
+        "-----BEGIN OPENSSH PRIVATE KEY-----\nzqopensshneedle0123456789abcdef\n"
+        "-----END OPENSSH PRIVATE KEY-----",
+        "PRIVATE_KEY",
+    ),
+    (
+        "ec_private_key",
+        "-----BEGIN EC PRIVATE KEY-----\nzqecneedle0123456789abcdef\n-----END EC PRIVATE KEY-----",
+        "PRIVATE_KEY",
+    ),
+    (
+        "generic_private_key",
+        "-----BEGIN PRIVATE KEY-----\nzqgenericneedle0123456789abc\n-----END PRIVATE KEY-----",
+        "PRIVATE_KEY",
+    ),
+    ("https_userinfo", "https://admin:zqhttpsneedle44@internal.invalid/panel", "CONN_STRING"),
+    ("ssh_userinfo", "ssh://deploy:zqsshneedle55@host.invalid", "CONN_STRING"),
+    ("http_basic", "Authorization: Basic enFiYXNpY25lZWRsZTAxMjM0NTY3", "BASIC_AUTH"),
+    ("slack_bot_token", "xoxb-1234567890-zqslackneedle0123456789", "SLACK_TOKEN"),
+    ("slack_app_token", "xapp-1-A0ZQSLACKAPP-zqslackappneedle0123", "SLACK_TOKEN"),
+    ("stripe_live_key", "sk_live_zqstripeneedle0123456789", "STRIPE_KEY"),
+    ("stripe_restricted_key", "rk_live_zqstriperestricted0123456", "STRIPE_KEY"),
+    # AIza + exactly 35, npm_ + exactly 36 -- the real vendor lengths.
+    ("google_api_key", "AIzaZqGoogleNeedle0123456789abcdefghijk", "GOOGLE_KEY"),
+    ("npm_token", "npm_zqnpmneedle0123456789abcdefghijklmno", "NPM_TOKEN"),
+    ("github_fine_grained_pat", "github_pat_zqfinegrainedneedle0123456789", "GH_TOKEN"),
+    ("github_user_token", "ghu_zqgithubuserneedle0123456789abcdefgh", "GH_TOKEN"),
+    ("twilio_sid", "AC0123456789abcdef0123456789abcdef", "TWILIO_SID"),
+    ("amex_15_digit", "3782 822463 10005", "CC"),
 ]
 
 FAMILY_IDS = [f[0] for f in SECRET_FAMILIES]
@@ -86,6 +118,22 @@ NEEDLES = {
     "ssn": "987-65-4321",
     "private_key": "zqprivatekeyglued0123456789abcdef",
     "connection_string": "zqconnstrglued88",
+    "openssh_private_key": "zqopensshneedle0123456789abcdef",
+    "ec_private_key": "zqecneedle0123456789abcdef",
+    "generic_private_key": "zqgenericneedle0123456789abc",
+    "https_userinfo": "zqhttpsneedle44",
+    "ssh_userinfo": "zqsshneedle55",
+    "http_basic": "enFiYXNpY25lZWRsZTAxMjM0NTY3",
+    "slack_bot_token": "zqslackneedle0123456789",
+    "slack_app_token": "zqslackappneedle0123",
+    "stripe_live_key": "sk_live_zqstripeneedle0123456789",
+    "stripe_restricted_key": "rk_live_zqstriperestricted0123456",
+    "google_api_key": "AIzaZqGoogleNeedle0123456789abcdefghijk",
+    "npm_token": "npm_zqnpmneedle0123456789abcdefghijklmno",
+    "github_fine_grained_pat": "github_pat_zqfinegrainedneedle0123456789",
+    "github_user_token": "ghu_zqgithubuserneedle0123456789abcdefgh",
+    "twilio_sid": "AC0123456789abcdef0123456789abcdef",
+    "amex_15_digit": "3782 822463 10005",
 }
 
 
@@ -112,6 +160,8 @@ class TestGluedFormsAreRedacted:
         if f[0] in {
             "aws_access_key", "openai_style_key", "anthropic_style_key",
             "github_ghp_token", "github_ghs_token", "github_gho_token", "jwt",
+            "slack_bot_token", "stripe_live_key", "google_api_key", "npm_token",
+            "github_fine_grained_pat", "github_user_token", "twilio_sid",
         }
     ]
     TOKEN_IDS = [f[0] for f in TOKEN_FAMILIES]
@@ -159,6 +209,14 @@ class TestBenignStringsAreNotRedacted:
             "build 12345678901234567890 finished",
             # Ordinary prose that merely contains the letters.
             "the whisk-broom is in the basket",
+            # Added with the S3 widening -- each new vendor pattern is a new
+            # chance to over-match ordinary text.
+            "ACCOUNTS RECEIVABLE summary",          # AC..., not 32 hex
+            "the basic plan costs less",            # "basic" without base64
+            "npm_modules is not a real directory",  # npm_ with a short tail
+            "see https://docs.invalid/guide:2 now",  # colon in a path, no userinfo
+            "run ssh://host.invalid/repo.git",      # scheme, no userinfo at all
+            "invoice 378282246310 filed",           # 12 digits, not an Amex
         ],
     )
     def test_benign_survives(self, benign):
@@ -174,6 +232,44 @@ class TestBenignStringsAreNotRedacted:
         # The glued sk- rule needs 32+ characters. 31 must not fire.
         text = "task-" + "a" * 31
         assert redact_sensitive(text) == text
+
+
+class TestBareAwsSecretIsContextual:
+    """A bare AWS secret is 40 base64 characters with no prefix and no label.
+
+    Redacting every 40-character run would scrub hashes, git object ids and
+    base64 lines out of OCR text wholesale. The console's copy button gives you
+    the value alone, but it is pasted next to the access key id it belongs to,
+    so the pairing is the signal.
+    """
+
+    SECRET_40 = "zqAWSbareNeedle0123456789abcdefGHIJKLMNO"
+    AKIA = "AKIAZQCONTEXTNEEDL01"
+
+    def test_redacted_when_an_akia_is_present(self):
+        text = f"{self.AKIA}\n{self.SECRET_40}\n"
+        cleaned, counts = redact_with_counts(text)
+        assert self.SECRET_40 not in cleaned, "bare secret survived next to its key id"
+        assert counts.get("AWS_SECRET") == 1
+        assert counts.get("AWS_KEY") == 1
+
+    def test_not_redacted_on_its_own(self):
+        # Exactly the same 40 characters, no AKIA anywhere. Must survive, or
+        # the pattern is a general 40-character shredder.
+        text = f"blob {self.SECRET_40} committed"
+        assert redact_sensitive(text) == text
+
+    def test_a_sha1_next_to_an_akia_is_collateral_and_accepted(self):
+        # Honest about the cost: with an AKIA in scope, ANY 40-character
+        # base64-ish run in the same text is redacted, including a git SHA-1.
+        # Pinned so the trade-off is visible rather than discovered later.
+        sha = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+        cleaned = redact_sensitive(f"{self.AKIA} at commit {sha}")
+        assert sha not in cleaned
+
+    def test_the_same_sha1_alone_is_untouched(self):
+        sha = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+        assert redact_sensitive(f"at commit {sha}") == f"at commit {sha}"
 
 
 class TestPayloadKeyCoverage:

@@ -90,15 +90,67 @@ _PATTERNS: list[tuple[re.Pattern, str]] = [
     # SSN (XXX-XX-XXXX)
     (re.compile(r"(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)"), "[REDACTED:SSN]"),
 
-    # Private key blocks
-    (re.compile(r"-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----[\s\S]*?-----END\s+(?:RSA\s+)?PRIVATE\s+KEY-----"),
+    # Private key blocks -- ANY armour type, not just RSA. OPENSSH and EC are
+    # what `ssh-keygen` and `openssl ecparam` produce and are the likeliest
+    # thing on a clipboard right after someone copies a key; the old pattern
+    # allowed only "(RSA )?PRIVATE KEY" while the module docstring advertised
+    # "BEGIN PRIVATE KEY blocks" generally.
+    (re.compile(r"-----BEGIN\s+[A-Z0-9 ]*PRIVATE\s+KEY-----[\s\S]*?-----END\s+[A-Z0-9 ]*PRIVATE\s+KEY-----"),
      "[REDACTED:PRIVATE_KEY]"),
 
-    # Connection strings with passwords
-    (re.compile(r"(?i)(?:mysql|postgres|mongodb|redis)://\S+:\S+@"), "[REDACTED:CONN_STRING]://***:***@"),
+    # Connection strings with passwords -- any scheme, not a fixed list of
+    # four. https://admin:pw@host and ssh://user:pw@host leak the same way
+    # postgres:// does. The userinfo character classes exclude "/" and "@" so
+    # this cannot run across a path or a second URL.
+    (re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@"), "[REDACTED:CONN_STRING]://***:***@"),
 
     # Bearer tokens
     (re.compile(r"(?i)bearer\s+[a-zA-Z0-9_.-]{20,}"), "[REDACTED:BEARER]"),
+    # HTTP Basic -- the base64 decodes to user:password.
+    (re.compile(r"(?i)basic\s+[A-Za-z0-9+/]{16,}={0,2}"), "[REDACTED:BASIC_AUTH]"),
+
+    # Vendor token prefixes. Each is distinctive enough to need no anchor,
+    # which also gives the glued case for free.
+    (re.compile(r"github_pat_[A-Za-z0-9_]{20,}"), "[REDACTED:GH_TOKEN]"),
+    (re.compile(r"ghu_[a-zA-Z0-9]{36,}"), "[REDACTED:GH_TOKEN]"),
+    (re.compile(r"xox[abpres]-[A-Za-z0-9-]{10,}"), "[REDACTED:SLACK_TOKEN]"),
+    (re.compile(r"xapp-[0-9]-[A-Za-z0-9-]{10,}"), "[REDACTED:SLACK_TOKEN]"),
+    # Stripe uses an UNDERSCORE, so the sk- pattern never matched it.
+    (re.compile(r"[sr]k_(?:live|test)_[A-Za-z0-9]{16,}"), "[REDACTED:STRIPE_KEY]"),
+    (re.compile(r"AIza[A-Za-z0-9_-]{35}"), "[REDACTED:GOOGLE_KEY]"),
+    (re.compile(r"npm_[A-Za-z0-9]{36}"), "[REDACTED:NPM_TOKEN]"),
+    # Twilio account SID: AC + exactly 32 hex. The hex requirement is what
+    # keeps this off ordinary words beginning "AC".
+    (re.compile(r"AC[0-9a-f]{32}"), "[REDACTED:TWILIO_SID]"),
+
+    # American Express is 15 digits, not 16, so the card pattern above misses
+    # it entirely. Amex always starts 34 or 37, which keeps this off arbitrary
+    # 15-digit runs.
+    (re.compile(r"(?<!\d)3[47]\d{2}[\s-]?\d{6}[\s-]?\d{5}(?!\d)"), "[REDACTED:CC]"),
+]
+
+
+# Patterns that only fire when something ELSE in the same text says they should.
+#
+# A bare AWS secret access key is 40 characters of base64 with no prefix and no
+# label -- the shape of a hash, a git blob id, a base64 line, or half a JWT.
+# Redacting every 40-character run would scrub OCR text wholesale, which is the
+# over-redaction failure this file works hard to avoid. But the AWS console's
+# copy button gives you the value ALONE, and it is almost always pasted next to
+# the access key id it belongs with.
+#
+# So: match it only when an AKIA-shaped id appears in the same text. That is a
+# real pairing in practice and essentially never a coincidence.
+#
+# Triggers are evaluated against the ORIGINAL text, before any substitution --
+# otherwise the AKIA would have already been rewritten to [REDACTED:AWS_KEY]
+# and the trigger would never fire.
+_CONTEXTUAL_PATTERNS: list[tuple[re.Pattern, re.Pattern, str]] = [
+    (
+        re.compile(r"AKIA[0-9A-Z]{16,}"),
+        re.compile(r"(?<![A-Za-z0-9/+])[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=])"),
+        "[REDACTED:AWS_SECRET]",
+    ),
 ]
 
 
@@ -156,7 +208,16 @@ def redact_with_counts(text: str) -> tuple[str, dict[str, int]]:
     if not text:
         return text, {}
     counts: dict[str, int] = {}
-    for pattern, replacement in _PATTERNS:
+
+    # Evaluated against the ORIGINAL text: by the time the main table has run,
+    # the trigger it looks for has itself been replaced.
+    armed = [
+        (pattern, replacement)
+        for trigger, pattern, replacement in _CONTEXTUAL_PATTERNS
+        if trigger.search(text)
+    ]
+
+    for pattern, replacement in [*_PATTERNS, *armed]:
         text, n = pattern.subn(replacement, text)
         if n:
             category = category_of(replacement)
