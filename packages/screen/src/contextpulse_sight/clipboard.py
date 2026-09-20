@@ -83,11 +83,20 @@ class ClipboardMonitor:
         seq = _get_clipboard_sequence()
         if seq == self._sequence_number:
             return
-        self._sequence_number = seq
 
         text = _get_clipboard_text()
         if not text:
+            # Deliberately do NOT commit `seq` here. Since
+            # cp-daemon-heap-corruption-after-paste, the Win32 read also
+            # returns None when a paste holds the clipboard lock — and a paste
+            # is exactly when the clipboard content is most worth capturing.
+            # Retiring the sequence on a read that produced nothing would drop
+            # that change permanently; leaving it pending costs one extra
+            # IsClipboardFormatAvailable call per second for as long as the
+            # clipboard holds a non-text item, which is the cheap half of the
+            # read and never reaches GlobalLock.
             return
+        self._sequence_number = seq
 
         # Debounce: skip if too soon after last capture
         now = time.time()
