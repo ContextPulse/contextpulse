@@ -270,9 +270,27 @@ def record_usage(conn: sqlite3.Connection, tool: str, query: str, hit_count: int
     conn.commit()
 
 
-def usage_summary(conn: sqlite3.Connection) -> dict[str, Any]:
-    """Aggregate tool_usage into total/with-hits counts, overall and per tool."""
-    rows = conn.execute("SELECT tool, hit_count FROM tool_usage").fetchall()
+def usage_summary(
+    conn: sqlite3.Connection, since_ts: float | None = None
+) -> dict[str, Any]:
+    """Aggregate tool_usage into total/with-hits counts, overall and per tool.
+
+    ``since_ts`` is a unix epoch and is INCLUSIVE (``called_at >= since_ts``),
+    matching the journal's own ``ts >= ?`` so that both halves of a usage
+    report agree on the boundary. Passing None counts everything.
+
+    This parameter exists because the report that consumes this function takes
+    a --since and could only apply it to the other half, so a report carrying
+    one date printed a windowed save count beside an all-time call count. The
+    Phase 0 restart gate is specified as a count of calls in a window; without
+    this the instrument could not express the window it was being read for.
+    """
+    sql = "SELECT tool, hit_count FROM tool_usage"
+    params: tuple[float, ...] = ()
+    if since_ts is not None:
+        sql += " WHERE called_at >= ?"
+        params = (since_ts,)
+    rows = conn.execute(sql, params).fetchall()
     by_tool: dict[str, dict[str, int]] = {}
     calls_with_hits = 0
     for r in rows:

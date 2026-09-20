@@ -541,3 +541,80 @@ def test_usage_summary_counts_and_breaks_down_by_tool(tmp_path):
         "facts_about": {"calls": 2, "with_hits": 1},
         "context_at": {"calls": 1, "with_hits": 1},
     }
+
+
+class TestUsageSummaryHonoursSince:
+    """The report's two halves must cover the same window.
+
+    Found 2026-09-19: ``probe_usage_report.py --since`` filtered the
+    confirmed-save count and not the tool-call count, so a report carrying one
+    date printed an all-time figure beside a windowed one. That matters beyond
+    tidiness -- the Phase 0 restart gate is specified as a count of tool calls
+    in a window, and the instrument could not express the window. The
+    workaround was arithmetic against a recorded baseline, which is a thing a
+    future session has to remember to do.
+    """
+
+    @staticmethod
+    def _at(conn, tool, epoch, hit_count=1):
+        """Write a tool_usage row at a chosen time. record_usage always stamps
+        now, so the timestamp is set directly -- the aggregate is what is under
+        test, not the writer."""
+        conn.execute(
+            "INSERT INTO tool_usage (called_at, tool, query, hit_count)"
+            " VALUES (?, ?, ?, ?)",
+            (epoch, tool, "q", hit_count),
+        )
+        conn.commit()
+
+    # Computed, not typed from expectation -- the first draft of these was a
+    # year out and every ordering assertion still passed, because relative
+    # order was all they tested. The comments were the only thing that was
+    # wrong, which is the worst place for it.
+    OLD = 1787529600.0   # 2026-08-24T00:00:00Z
+    NEW = 1789862400.0   # 2026-09-20T00:00:00Z
+    CUT = 1789776000.0   # 2026-09-19T00:00:00Z
+
+    def test_since_excludes_calls_before_the_boundary(self, tmp_path):
+        conn = probe.connect_probe(tmp_path / "probe.db")
+        self._at(conn, "facts_about", self.OLD)
+        self._at(conn, "facts_about", self.NEW)
+        assert probe.usage_summary(conn)["total_calls"] == 2
+        windowed = probe.usage_summary(conn, since_ts=self.CUT)
+        assert windowed["total_calls"] == 1, (
+            "the tool-call count ignored --since, so the report's two halves "
+            "covered different ranges while showing one date"
+        )
+        assert windowed["by_tool"] == {"facts_about": {"calls": 1, "with_hits": 1}}
+
+    def test_since_filters_calls_with_hits_too(self, tmp_path):
+        conn = probe.connect_probe(tmp_path / "probe.db")
+        self._at(conn, "facts_about", self.OLD, hit_count=3)
+        self._at(conn, "context_at", self.NEW, hit_count=0)
+        windowed = probe.usage_summary(conn, since_ts=self.CUT)
+        assert windowed["total_calls"] == 1
+        assert windowed["calls_with_hits"] == 0, (
+            "a pre-window call with hits leaked into the windowed hit count"
+        )
+
+    def test_a_call_exactly_on_the_boundary_is_included(self, tmp_path):
+        conn = probe.connect_probe(tmp_path / "probe.db")
+        self._at(conn, "facts_about", self.CUT)
+        assert probe.usage_summary(conn, since_ts=self.CUT)["total_calls"] == 1, (
+            "--since is inclusive on the journal side (ts >= ?); the two sides "
+            "must agree on the boundary or a call on the cut date is counted "
+            "by one half and not the other"
+        )
+
+    def test_no_since_still_counts_everything(self, tmp_path):
+        conn = probe.connect_probe(tmp_path / "probe.db")
+        self._at(conn, "facts_about", self.OLD)
+        self._at(conn, "context_at", self.NEW)
+        assert probe.usage_summary(conn)["total_calls"] == 2
+        assert probe.usage_summary(conn, since_ts=None)["total_calls"] == 2
+
+    def test_window_with_no_calls_reports_zero_not_absence(self, tmp_path):
+        conn = probe.connect_probe(tmp_path / "probe.db")
+        self._at(conn, "facts_about", self.OLD)
+        windowed = probe.usage_summary(conn, since_ts=self.NEW)
+        assert windowed == {"total_calls": 0, "calls_with_hits": 0, "by_tool": {}}
