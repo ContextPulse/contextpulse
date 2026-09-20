@@ -62,10 +62,45 @@ _activity_db = ActivityDB()
 _event_bus: EventBus | None = None
 
 
+_migration_done = False
+
+
+def _ensure_secret_migration() -> None:
+    """Sweep pre-redaction rows before this process serves anything.
+
+    The daemon runs the same sweep at startup, but the MCP server can be a
+    SEPARATE PROCESS and can be the one that starts first -- and it is the one
+    with the search tools, which is where the count oracle lives. The marker
+    lives in a table inside activity.db, so both processes checking is safe and
+    only one does the work.
+
+    Guarded by a process-local flag as well, purely to avoid re-opening the
+    database on every tool call; correctness comes from the marker, not this.
+
+    Backgrounded for the same reason as the daemon's: it is a full-table scan,
+    and a tool call must not block on one. The search paths redact
+    independently, so a sweep still in flight costs nothing.
+    """
+    global _migration_done
+    if _migration_done:
+        return
+    _migration_done = True
+    try:
+        from contextpulse_core.daemon import start_secret_migration
+
+        start_secret_migration()
+    except Exception:
+        # Never let a cleanup stop the server from answering. The search paths
+        # redact independently, so a failed sweep degrades to the previous
+        # behaviour rather than opening a hole.
+        logger.warning("secret migration skipped at MCP startup", exc_info=True)
+
+
 def _get_event_bus() -> EventBus:
     """Lazy-init EventBus (reads the same activity.db as the daemon)."""
     global _event_bus
     if _event_bus is None:
+        _ensure_secret_migration()
         _event_bus = EventBus(_activity_db.db_path)
     return _event_bus
 
@@ -940,6 +975,9 @@ def get_event_timeline(minutes_ago: float = 5.0, modality: str | None = None) ->
 
 
 def main():
+    # Before the transport opens, not lazily on first search: a standalone
+    # sight MCP server may be the only process that ever touches this store.
+    _ensure_secret_migration()
     mcp_app.run(transport="stdio")
 
 

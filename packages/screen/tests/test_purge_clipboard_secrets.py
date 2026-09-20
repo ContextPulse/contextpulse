@@ -196,10 +196,21 @@ class TestApplyRemovesSecretsEverywhere:
         for value in (CLIP_SECRET, OCR_SECRET, "zqpurgepw123"):
             assert value not in out
 
-    def test_apply_writes_a_backup_first(self, purge, fixture_db, capsys):
-        purge.main(["--db", str(fixture_db), "--apply"])
+    def test_apply_keeps_a_backup_only_when_asked(self, purge, fixture_db, capsys):
+        """The backup is a byte-complete copy of everything being scrubbed.
+
+        It used to be written, announced and never removed, so a successful run
+        reported every secret gone while a full plaintext copy sat beside
+        activity.db -- inside any folder backup or sync covering that directory
+        (review S5). It is now deleted once the verification re-scan passes.
+        """
+        purge.main(["--db", str(fixture_db), "--apply", "--keep-backup"])
         backups = list(fixture_db.parent.glob("activity.db.pre-purge-*.bak"))
         assert len(backups) == 1
+        out = capsys.readouterr().out
+        assert "still contains the UNREDACTED rows" in out, (
+            "keeping the backup must say loudly what it holds"
+        )
         # The backup is a real, readable database that still holds the
         # original rows -- the purge is recoverable, not destructive.
         conn = sqlite3.connect(str(backups[0]))
@@ -208,6 +219,31 @@ class TestApplyRemovesSecretsEverywhere:
         finally:
             conn.close()
         assert any(CLIP_SECRET in (r or "") for r in rows)
+
+    def test_apply_deletes_the_backup_by_default(self, purge, fixture_db, capsys):
+        purge.main(["--db", str(fixture_db), "--apply"])
+        assert list(fixture_db.parent.glob("activity.db.pre-purge-*.bak")) == [], (
+            "a plaintext copy of every scrubbed row was left on disk"
+        )
+        assert "backup deleted" in capsys.readouterr().out
+
+    def test_a_failed_verification_keeps_the_backup(self, purge, fixture_db, capsys, monkeypatch):
+        """Deleting it on a FAILED run would destroy the recovery path."""
+        real_apply = purge.apply_updates
+
+        def apply_then_break(conn, clipboard_updates, event_updates):
+            real_apply(conn, clipboard_updates, event_updates)
+            conn.execute(
+                "INSERT INTO events_fts(rowid, window_title, app_name, text_content) "
+                "VALUES (999999, 'stale', 'stale', 'stale')"
+            )
+            conn.commit()
+
+        monkeypatch.setattr(purge, "apply_updates", apply_then_break)
+        rc = purge.main(["--db", str(fixture_db), "--apply"])
+        assert rc == 1
+        assert len(list(fixture_db.parent.glob("activity.db.pre-purge-*.bak"))) == 1
+        assert "The backup has been kept." in capsys.readouterr().err
 
     def test_apply_preserves_clean_rows_and_timestamps(self, purge, fixture_db):
         conn = sqlite3.connect(str(fixture_db))
@@ -302,11 +338,19 @@ class TestPayloadKeyCoverage:
         assert self.BURST_SECRET not in payloads
 
     def test_scan_keys_track_the_spine_schema(self, purge):
+        from contextpulse_core.redact import _redactable_payload_keys
         from contextpulse_core.spine.events import _TEXT_PAYLOAD_KEYS
 
         # If a text key is added to the event schema it must not silently
-        # escape the purge scan.
-        assert tuple(purge._PAYLOAD_TEXT_KEYS) == tuple(_TEXT_PAYLOAD_KEYS)
+        # escape the purge scan. The scan key list is now the SUPERSET the
+        # redactor declares -- the spine's five plus raw_transcript,
+        # original_text and corrected_text, which carry captured text but are
+        # not FTS-indexed -- so this asserts containment rather than equality.
+        scanned = set(_redactable_payload_keys())
+        missing = set(_TEXT_PAYLOAD_KEYS) - scanned
+        assert not missing, f"spine text keys not scanned by the purge: {sorted(missing)}"
+        for key in ("raw_transcript", "original_text", "corrected_text"):
+            assert key in scanned
 
 
 class TestWindowTitleScope:
