@@ -95,6 +95,9 @@ SECRET_FAMILIES = [
     ("github_user_token", "ghu_zqgithubuserneedle0123456789abcdefgh", "GH_TOKEN"),
     ("twilio_sid", "AC0123456789abcdef0123456789abcdef", "TWILIO_SID"),
     ("amex_15_digit", "3782 822463 10005", "CC"),
+    # ContextPulse's own MCP access token. The Settings dialog shows the bare
+    # value, so it has to match with no keyword in front of it.
+    ("cp_mcp_token", "cpmcp_zqmcptokenneedle0123456789abcdefghij", "CP_MCP_TOKEN"),
 ]
 
 FAMILY_IDS = [f[0] for f in SECRET_FAMILIES]
@@ -134,6 +137,7 @@ NEEDLES = {
     "github_user_token": "ghu_zqgithubuserneedle0123456789abcdefgh",
     "twilio_sid": "AC0123456789abcdef0123456789abcdef",
     "amex_15_digit": "3782 822463 10005",
+    "cp_mcp_token": "cpmcp_zqmcptokenneedle0123456789abcdefghij",
 }
 
 
@@ -162,6 +166,7 @@ class TestGluedFormsAreRedacted:
             "github_ghp_token", "github_ghs_token", "github_gho_token", "jwt",
             "slack_bot_token", "stripe_live_key", "google_api_key", "npm_token",
             "github_fine_grained_pat", "github_user_token", "twilio_sid",
+            "cp_mcp_token",
         }
     ]
     TOKEN_IDS = [f[0] for f in TOKEN_FAMILIES]

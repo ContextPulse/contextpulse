@@ -50,6 +50,17 @@ logger = logging.getLogger(__name__)
 TOKEN_FILENAME = "mcp_token"
 TOKEN_FILE = APPDATA_DIR / TOKEN_FILENAME
 
+# Tokens carry a fixed prefix so ContextPulse's own OCR redaction can
+# recognise one on sight. Without it a bare token_urlsafe string matches no
+# pattern in contextpulse_sight.redact, so a screenshot taken while the
+# Settings dialog is showing the token stored the token itself, unredacted, in
+# activity.db -- readable back out through get_screen_text and search_history.
+# The clipboard copy was always safe because it is embedded in a snippet that
+# says "Bearer "; the on-screen value was not.
+# Nothing VERIFIES the prefix: tokens issued before this existed stay valid,
+# and verify() is a plain constant-time compare of whatever is on disk.
+TOKEN_PREFIX = "cpmcp_"
+
 AUTH_ENV_VAR = "CONTEXTPULSE_MCP_AUTH"
 AUTH_DISABLED_PREFIX = "MCP AUTH DISABLED"
 
@@ -224,9 +235,15 @@ def restrict_to_user(path: Path) -> bool:
 def _read_existing(path: Path) -> str | None:
     """Read a token that another process may still be writing.
 
-    Returns None if the file does not exist. Raises if it exists but stays
-    empty -- an empty token must never be treated as "no auth configured",
-    because verify() would then be comparing against "" for every caller.
+    Returns None when there is no usable token: the file is absent, or it
+    stayed empty for the whole retry window. The retries matter -- a second
+    process claims the name before it writes the secret, and a loser that gave
+    up instantly would delete the winner's file.
+
+    An empty token is never returned as a token. verify() would then be
+    comparing every caller against "", and while verify() refuses an empty
+    expected value, encoding that safety in two places invites one of them to
+    change.
     """
     for _ in range(_READ_RETRIES):
         try:
@@ -239,13 +256,10 @@ def _read_existing(path: Path) -> str | None:
         if token:
             return token
         time.sleep(_READ_RETRY_SLEEP)
-    raise RuntimeError(
-        f"MCP token file {path} exists but is empty. Delete it and restart the "
-        "MCP server to generate a new token."
-    )
+    return None
 
 
-def load_or_create_token(token_file: Path | str | None = None) -> str:
+def load_or_create_token(token_file: Path | str | None = None, _attempt: int = 0) -> str:
     """Return this install's MCP bearer token, creating it on first use.
 
     Race-safe against a second process (the daemon watchdog and a hand-started
@@ -257,6 +271,15 @@ def load_or_create_token(token_file: Path | str | None = None) -> str:
 
     Permissions are applied to the empty claimed file BEFORE the secret bytes
     are written, so the token never exists on disk under a permissive ACL.
+
+    A file that exists but holds no usable token is replaced, not refused.
+    Raising there bricked the endpoint permanently: uvicorn never started, the
+    watchdog relaunched into the same crash every loop, and nothing recovered
+    until a human deleted the file. An empty file provably cannot be a live
+    credential -- no client can be holding it -- so regenerating is strictly
+    safer than refusing to start. It is logged at WARNING because a token file
+    that emptied itself means a client needs reconfiguring, and this repo has
+    a documented history of a filename-pattern secret scanner zeroing files.
     """
     path = Path(token_file) if token_file is not None else TOKEN_FILE
 
@@ -264,15 +287,30 @@ def load_or_create_token(token_file: Path | str | None = None) -> str:
     if existing:
         return existing
 
+    if path.exists():
+        logger.warning(
+            "MCP token file %s exists but holds no token -- generating a new one. "
+            "Any client configured with the previous token must be re-run through "
+            "`contextpulse --setup`.",
+            path,
+        )
+        path.unlink(missing_ok=True)
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    token = secrets.token_urlsafe(32)
+    token = TOKEN_PREFIX + secrets.token_urlsafe(32)
     try:
         fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError:
+        # Someone else claimed the name between our read and our create.
         lost = _read_existing(path)
         if lost:
             return lost
-        raise RuntimeError(f"MCP token file {path} vanished mid-creation") from None
+        if _attempt >= 1:
+            raise RuntimeError(
+                f"MCP token file {path} keeps coming back empty. Delete it and "
+                "restart the MCP server."
+            ) from None
+        return load_or_create_token(path, _attempt=_attempt + 1)
 
     os.close(fd)
     restrict_to_user(path)

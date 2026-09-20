@@ -325,12 +325,89 @@ def test_load_or_create_token_is_race_safe_across_threads(tmp_path):
     assert not list(tmp_path.glob("*.tmp")), "temp files left behind"
 
 
-def test_empty_token_file_raises_rather_than_returning_empty(tmp_path):
-    """A zero-byte token file must fail loudly, never authenticate everyone."""
+def test_empty_token_file_is_replaced_not_refused(tmp_path, caplog):
+    """B1-5. Raising here bricked the endpoint: uvicorn never started and the
+    watchdog relaunched into the same crash forever. An empty file cannot be a
+    live credential, so regenerating is strictly safer than refusing."""
     target = tmp_path / "mcp_token"
     target.write_text("", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="empty"):
-        mcp_auth.load_or_create_token(target)
+    caplog.set_level("WARNING")
+
+    token = mcp_auth.load_or_create_token(target)
+
+    assert token
+    assert target.read_text(encoding="utf-8").strip() == token
+    assert any("holds no token" in r.message for r in caplog.records)
+
+
+def test_whitespace_only_token_file_is_replaced(tmp_path):
+    target = tmp_path / "mcp_token"
+    target.write_text("   \n\t\n", encoding="utf-8")
+    assert mcp_auth.load_or_create_token(target).strip()
+
+
+def test_a_replaced_empty_token_file_is_still_permission_restricted(tmp_path):
+    """The regeneration path must not skip the ACL the create path applies."""
+    target = tmp_path / "mcp_token"
+    target.write_text("", encoding="utf-8")
+    mcp_auth.load_or_create_token(target)
+    if sys.platform == "win32":
+        out = subprocess.run(
+            ["icacls", str(target)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
+        ).stdout
+        assert len(mcp_auth.parse_icacls_aces(out, target)) == 1
+    else:
+        assert stat.S_IMODE(os.stat(target).st_mode) == 0o600
+
+
+def test_a_server_survives_an_emptied_token_file(tmp_path):
+    """The end that matters: build_http_app does not raise, so uvicorn starts."""
+    target = tmp_path / "mcp_token"
+    target.write_text("", encoding="utf-8")
+    app = mcp_unified.build_http_app(_dummy_fastmcp(), token_file=target)
+    token = target.read_text(encoding="utf-8").strip()
+    with TestClient(app, base_url=BASE_URL) as client:
+        assert _post(client).status_code == 401
+        assert _post(client, {"Authorization": f"Bearer {token}"}).status_code == 200
+
+
+# ── token shape ──────────────────────────────────────────────────────
+
+def test_a_new_token_carries_the_redactable_prefix(tmp_path):
+    """B1-6. The Settings dialog renders the bare token with no "Bearer " in
+    front of it, so it needs a shape ContextPulse's own OCR redaction knows."""
+    token = mcp_auth.load_or_create_token(tmp_path / "mcp_token")
+    assert token.startswith(mcp_auth.TOKEN_PREFIX)
+    assert len(token) >= len(mcp_auth.TOKEN_PREFIX) + 43
+
+
+def test_the_prefix_is_not_required_to_verify(tmp_path):
+    """Tokens issued before the prefix existed must keep working."""
+    legacy = "a" * 43
+    target = tmp_path / "mcp_token"
+    target.write_text(legacy, encoding="utf-8")
+    assert mcp_auth.load_or_create_token(target) == legacy
+    assert mcp_auth.verify(legacy, legacy) is True
+
+
+def test_a_new_token_is_redacted_by_the_capture_pipeline(tmp_path):
+    """The claim the prefix exists to make, against a REAL generated token.
+
+    packages/core/tests/test_redact.py pins the pattern against a synthetic
+    value. This pins the two ends together: whatever load_or_create_token
+    actually produces must be something the shipped redactor removes. A
+    pattern and a generator can each be correct and still not meet.
+    """
+    from contextpulse_core.redact import redact_sensitive
+
+    token = mcp_auth.load_or_create_token(tmp_path / "mcp_token")
+    screen_text = f"MCP Access\n{token}\nToken file: C:\\Users\\x\\mcp_token"
+    cleaned = redact_sensitive(screen_text)
+
+    assert token not in cleaned
+    assert "[REDACTED:CP_MCP_TOKEN]" in cleaned
+    assert "MCP Access" in cleaned, "redaction ate the surrounding context"
 
 
 # ── 7: file permissions, both platforms ──────────────────────────────
