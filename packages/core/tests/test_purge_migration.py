@@ -28,6 +28,7 @@ from contextpulse_core.redact import redact_sensitive
 
 CONTROL_WORD = "zqcontrol"
 CLIP_SECRET = "sk-zqmigrationneedle0123456789ABCD"
+OCR_SECRET = "ghp_zqmigrationocr0123456789abcdefghijkl"
 BURST_SECRET = "ghp_zqmigrationburst0123456789abcdefghij"
 FACT_SECRET = "AKIAZQMIGRATIONFACT1"
 OBS_SECRET = "password: zqmigrationobs42"
@@ -40,6 +41,15 @@ def _activity_db(tmp_path):
     db_path = tmp_path / "activity.db"
     db = ActivityDB(db_path=db_path)
     db.record_clipboard(timestamp=time.time(), text=f"{CONTROL_WORD} {CLIP_SECRET}")
+    # The `activity` table is the largest text store in the product and the
+    # first sweep never opened it (review B-2). update_ocr is the daemon's own
+    # writer and stores what it is given, which is what a pre-fix row is.
+    row_id = db.record(
+        timestamp=time.time(),
+        window_title=f"{CONTROL_WORD} editor",
+        app_name="Code.exe",
+    )
+    db.update_ocr(row_id, f"{CONTROL_WORD} {OCR_SECRET}", 0.9)
     db.close()
 
     bus = EventBus(db_path)
@@ -108,9 +118,32 @@ def _event_payloads(db_path):
         conn.close()
 
 
+def _activity_text(db_path):
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return " ".join(
+            " ".join(str(c or "") for c in row)
+            for row in conn.execute(
+                "SELECT ocr_text, window_title, app_name FROM activity"
+            )
+        )
+    finally:
+        conn.close()
+
+
+def _activity_fts_hits(db_path, term):
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return conn.execute(
+            "SELECT count(*) FROM activity_fts WHERE activity_fts MATCH ?", (term,)
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+
 class TestFixturesAreRedactable:
     @pytest.mark.parametrize(
-        "secret", [CLIP_SECRET, BURST_SECRET, FACT_SECRET, OBS_SECRET]
+        "secret", [CLIP_SECRET, OCR_SECRET, BURST_SECRET, FACT_SECRET, OBS_SECRET]
     )
     def test_pattern_removes_it(self, secret):
         assert secret not in redact_sensitive(secret)
@@ -129,6 +162,37 @@ class TestEnsureMigrated:
         assert CLIP_SECRET not in _clipboard_text(db_path)
         assert BURST_SECRET not in _event_payloads(db_path)
         assert CONTROL_WORD in _clipboard_text(db_path), "context was destroyed"
+
+    def test_sweeps_the_activity_table(self, tmp_path):
+        """Review B-2: the sweep scanned `clipboard` and `events` only.
+
+        `activity.ocr_text` is guaranteed to hold unredacted secrets after
+        upgrade for two reasons the redaction branch itself created -- sixteen
+        pattern shapes that did not exist when those rows were OCR'd, and the
+        word-boundary gap that left every glued token raw -- plus any period
+        with redact_ocr_text=False. And it is reachable through search_history.
+        """
+        db_path = _activity_db(tmp_path)
+        assert OCR_SECRET in _activity_text(db_path), "fixture is not raw -- vacuous"
+
+        purge.ensure_migrated(db_path)
+
+        assert OCR_SECRET not in _activity_text(db_path), (
+            "activity.ocr_text was not swept"
+        )
+        assert CONTROL_WORD in _activity_text(db_path), "context was destroyed"
+
+    def test_rebuilds_the_activity_fts_index(self, tmp_path):
+        """A search index still holding the old terms is still an oracle."""
+        db_path = _activity_db(tmp_path)
+        assert _activity_fts_hits(db_path, OCR_SECRET) == 1, "fixture not indexed"
+
+        purge.ensure_migrated(db_path)
+
+        assert _activity_fts_hits(db_path, CONTROL_WORD) == 1, (
+            "the whole index was lost, so the assertion below is vacuous"
+        )
+        assert _activity_fts_hits(db_path, OCR_SECRET) == 0
 
     def test_rebuilds_the_fts_index(self, tmp_path):
         db_path = _activity_db(tmp_path)

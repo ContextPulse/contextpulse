@@ -107,6 +107,83 @@ def scan_clipboard(conn: sqlite3.Connection) -> tuple[Tally, list[tuple[int, str
     return tally, updates
 
 
+def scan_activity(
+    conn: sqlite3.Connection, include_titles: bool = False
+) -> tuple[Tally, Tally, list[tuple[str, str, str, int]]]:
+    """Find `activity` rows carrying secrets. Returns (ocr_tally, title_tally, updates).
+
+    THE LARGEST TEXT STORE IN THE PRODUCT, and the first sweep never opened it
+    (review B-2). It is guaranteed to hold unredacted secrets after upgrade for
+    two reasons the redaction work itself created: sixteen pattern shapes that
+    did not exist when those rows were OCR'd, and the word-boundary gap that
+    left every glued token raw. Add any period with redact_ocr_text=False.
+
+    Titles are tallied SEPARATELY and rewritten only under include_titles, for
+    the same measured reason as `events` -- on real data the CREDENTIAL pattern
+    fires overwhelmingly on ordinary window titles containing "password:" or
+    "token:", and scrubbing those by default is a far larger blast radius than
+    the vulnerability being closed.
+    """
+    ocr_tally = Tally()
+    title_tally = Tally()
+    updates: list[tuple[str, str, str, int]] = []
+
+    for row in conn.execute(
+        "SELECT id, ocr_text, window_title, app_name FROM activity"
+    ).fetchall():
+        ocr_tally.rows_scanned += 1
+        title_tally.rows_scanned += 1
+
+        ocr, ocr_counts = redact_with_counts(row["ocr_text"] or "")
+        ocr_tally.add(ocr_counts)
+
+        title, title_counts = redact_with_counts(row["window_title"] or "")
+        app, app_counts = redact_with_counts(row["app_name"] or "")
+        merged: dict[str, int] = {}
+        for counts in (title_counts, app_counts):
+            for category, n in counts.items():
+                merged[category] = merged.get(category, 0) + n
+        title_tally.add(merged)
+
+        rewrite_titles = include_titles and bool(merged)
+        if ocr_counts or rewrite_titles:
+            updates.append((
+                # ocr_text is nullable and must stay NULL if it was NULL --
+                # writing "" would turn "not OCR'd yet" into "OCR'd, empty".
+                ocr if row["ocr_text"] is not None else None,
+                title if rewrite_titles else (row["window_title"] or ""),
+                app if rewrite_titles else (row["app_name"] or ""),
+                row["id"],
+            ))
+
+    return ocr_tally, title_tally, updates
+
+
+def apply_activity_updates(
+    conn: sqlite3.Connection, updates: list[tuple[str, str, str, int]]
+) -> None:
+    """Rewrite `activity` rows and rebuild its FTS index.
+
+    Kept separate from apply_updates rather than folded into it: that function's
+    signature is part of the CLI's contract and is monkeypatched in tests.
+
+    The rebuild is belt AND braces. Unlike `events`, `activity` DOES carry an
+    AFTER UPDATE trigger into activity_fts, so the index should already be in
+    step -- but a store whose triggers failed to create (ActivityDB._init_schema
+    swallows OperationalError) would otherwise keep serving the pre-sweep terms,
+    and a stale index is still an oracle.
+    """
+    if not updates:
+        return
+    with conn:  # one transaction; rolls back on any exception
+        conn.executemany(
+            "UPDATE activity SET ocr_text = ?, window_title = ?, app_name = ? WHERE id = ?",
+            updates,
+        )
+        if table_exists(conn, "activity_fts"):
+            conn.execute("INSERT INTO activity_fts(activity_fts) VALUES('rebuild')")
+
+
 def scan_events(
     conn: sqlite3.Connection, include_titles: bool = False
 ) -> tuple[Tally, Tally, list[tuple[int, str, str, str]]]:
@@ -357,13 +434,15 @@ def ensure_migrated(
 
         clip_tally, clip_updates = scan_clipboard(conn)
         evt_tally, _title_tally, evt_updates = scan_events(conn, include_titles=False)
+        act_tally, _act_titles, act_updates = scan_activity(conn, include_titles=False)
         if clip_updates or evt_updates:
             apply_updates(conn, clip_updates, evt_updates)
-        for tally in (clip_tally, evt_tally):
+        apply_activity_updates(conn, act_updates)
+        for tally in (clip_tally, evt_tally, act_tally):
             for category, n in tally.categories.items():
                 counts[category] = counts.get(category, 0) + n
 
-        rows = clip_tally.rows_affected + evt_tally.rows_affected
+        rows = clip_tally.rows_affected + evt_tally.rows_affected + act_tally.rows_affected
         with conn:
             conn.execute(
                 "INSERT OR REPLACE INTO cp_migrations (name, applied_at, rows_affected) "

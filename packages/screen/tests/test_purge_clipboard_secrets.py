@@ -33,8 +33,10 @@ SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "purge_clipboard_secr
 # the post-purge assertions would pass vacuously.
 CLIP_SECRET = "zqpurgeclipneedle0123456789"
 OCR_SECRET = "zqpurgeocrneedle0123456789abcdefghij"  # 36 chars: ghp_ needs 36+
+ACT_SECRET = "zqpurgeactneedle0123456789abcdefghij"  # 36 chars: ghp_ needs 36+
 CLIP_TEXT = f"deploy log\nsk-{CLIP_SECRET}\npassword: zqpurgepw123\n"
 OCR_TEXT = f"terminal\nghp_{OCR_SECRET}\n"
+ACT_TEXT = f"screen capture\nghp_{ACT_SECRET}\n"
 TITLE_TEXT = "session 4111-1111-1111-1111"
 
 
@@ -70,6 +72,12 @@ def fixture_db(tmp_path):
     )
     module.emit_window_focus("Chrome", "an ordinary window title")
 
+    # The `activity` table, which the first version of this script never
+    # opened (review B-2). These are the rows search_history reads.
+    act_id = db.record(timestamp=now, window_title=TITLE_TEXT, app_name="Terminal")
+    db.update_ocr(act_id, ACT_TEXT, 0.9)
+    db.record(timestamp=now + 1, window_title="an ordinary window title", app_name="Chrome")
+
     module.stop()
     bus.close()
     db.close()
@@ -97,6 +105,80 @@ def _all_text(db_path):
         return blob
     finally:
         conn.close()
+
+
+def _activity_text(db_path):
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return " ".join(
+            " ".join(str(c or "") for c in row)
+            for row in conn.execute(
+                "SELECT ocr_text, window_title, app_name FROM activity"
+            )
+        )
+    finally:
+        conn.close()
+
+
+def _activity_fts_hits(db_path, term):
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return conn.execute(
+            "SELECT count(*) FROM activity_fts WHERE activity_fts MATCH ?", (term,)
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+
+class TestActivityTableIsCovered:
+    """Review B-2: the script asserted clipboard / events / events_fts and
+    swept exactly those, so it printed "verified: re-scan finds 0 remaining
+    matches" while a key OCR'd off screen last month sat untouched in
+    `activity.ocr_text` -- still reachable through search_history."""
+
+    def test_the_dry_run_reports_it(self, purge, fixture_db, capsys):
+        purge.main(["--db", str(fixture_db)])
+        out = capsys.readouterr().out
+        assert "activity table" in out
+        assert ACT_SECRET not in out, "the report printed a value"
+
+    def test_apply_scrubs_it(self, purge, fixture_db):
+        assert ACT_SECRET in _activity_text(fixture_db), "fixture not raw -- vacuous"
+        assert purge.main(["--db", str(fixture_db), "--apply"]) == 0
+        assert ACT_SECRET not in _activity_text(fixture_db)
+        assert "screen capture" in _activity_text(fixture_db), "context destroyed"
+
+    def test_apply_rebuilds_the_activity_index(self, purge, fixture_db):
+        assert _activity_fts_hits(fixture_db, ACT_SECRET) == 1, "fixture not indexed"
+        purge.main(["--db", str(fixture_db), "--apply"])
+        assert _activity_fts_hits(fixture_db, "capture") == 1, (
+            "the whole index was lost, so the assertion below is vacuous"
+        )
+        assert _activity_fts_hits(fixture_db, ACT_SECRET) == 0
+
+    def test_verification_fails_if_activity_is_left_behind(
+        self, purge, fixture_db, capsys, monkeypatch
+    ):
+        """The point of B-2 is the "verified" LINE, not only the sweep: a run
+        that skips this table must not be able to claim zero remaining."""
+        monkeypatch.setattr(purge, "apply_activity_updates", lambda conn, updates: None)
+        rc = purge.main(["--db", str(fixture_db), "--apply"])
+        err = capsys.readouterr().err
+        assert rc == 1
+        assert "FAILED VERIFICATION" in err
+        assert "activity" in err
+
+    def test_a_database_without_the_activity_table_is_a_refusal(self, purge, tmp_path):
+        stray = tmp_path / "half.db"
+        conn = sqlite3.connect(str(stray))
+        conn.execute("CREATE TABLE clipboard (id INTEGER, text TEXT)")
+        conn.execute("CREATE TABLE events (rowid_ INTEGER)")
+        conn.execute("CREATE VIRTUAL TABLE events_fts USING fts5(a)")
+        conn.commit()
+        conn.close()
+        with pytest.raises(SystemExit) as exc:
+            purge.main(["--db", str(stray)])
+        assert "activity" in str(exc.value)
 
 
 class TestDryRunIsTheDefault:
