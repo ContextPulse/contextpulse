@@ -8,6 +8,8 @@ LLM-based transcript cleanup (direct API only).
 import logging
 import re
 
+from contextpulse_core.redact import redact_sensitive
+
 logger = logging.getLogger(__name__)
 
 # Filler words/sounds to strip
@@ -146,8 +148,30 @@ def clean_basic(text: str) -> str:
 
 
 def clean_with_llm(text: str, profile_context: str = "") -> str:
-    """Polish text using Claude API for natural, professional output."""
+    """Polish text using Claude API for natural, professional output.
+
+    A dictation that carries a secret pattern is NOT sent. This is the only
+    place in the voice path where captured text leaves the machine, and the
+    obvious fix -- redact, then send -- does not work here: the cleaned text
+    this returns is what gets pasted into the user's cursor, so sending the
+    redacted copy would paste "[REDACTED:CREDENTIAL]" instead of what they
+    said. Placeholder-and-restore would work but depends on a language model
+    returning a marker unmangled, which is not a property worth betting a
+    secret on.
+
+    So it fails CLOSED to clean_basic(): no egress, and the user still gets
+    their text verbatim. The cost is that a dictation containing a secret
+    misses the LLM polish, which is the right trade at this size.
+    """
     from contextpulse_voice.config import get_api_key
+
+    if redact_sensitive(text) != text:
+        logger.warning(
+            "Dictation matches a secret pattern -- skipping LLM cleanup so the "
+            "text is not sent off the machine (falling back to rule-based)",
+        )
+        return clean_basic(text)
+
     api_key = get_api_key()
     if not api_key:
         logger.debug("No API key configured — skipping LLM cleanup")

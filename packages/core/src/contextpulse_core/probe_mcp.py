@@ -19,6 +19,7 @@ from datetime import datetime
 from mcp.server.fastmcp import FastMCP
 
 from contextpulse_core import probe
+from contextpulse_core.redact import redact_sensitive
 
 mcp_app = FastMCP("ContextPulse Probe")
 logger = logging.getLogger(__name__)
@@ -34,14 +35,24 @@ def _fmt_ts(ts: float | None) -> str:
 
 
 def _fmt_facts(hits: list[dict]) -> str:
+    """Render probe facts for an MCP client, scrubbing secrets on the way out.
+
+    facts_about and context_at are LIVE tools, and probe.db is a DERIVED store:
+    facts written by consolidator runs before the capture-side fixes quote
+    pre-fix event text, including clipboard text, and no purge of activity.db
+    touches them. Going forward the consolidator's input is redacted at
+    probe._extract_text, so this covers the backlog.
+    """
     lines = []
     for h in hits:
         conf = h.get("confidence", 0.5)
         srcs = h.get("source_event_ids") or []
         src = f" [src:{len(srcs)}]" if srcs else ""
+        entity = redact_sensitive(str(h.get("entity") or ""))
+        fact = redact_sensitive(str(h.get("fact") or ""))
         lines.append(
             f"- ({_fmt_ts(h.get('valid_from'))}, conf {conf:.2f}) "
-            f"{h.get('entity')}: {h.get('fact')}{src}"
+            f"{entity}: {fact}{src}"
         )
     return "\n".join(lines)
 
