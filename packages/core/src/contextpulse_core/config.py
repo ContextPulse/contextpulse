@@ -258,16 +258,23 @@ def _copy_layer(data: dict) -> dict:
 
 
 def _read_json_layer() -> dict:
-    """Return the parsed config.json, cached on (path, mtime_ns, size)."""
+    """Return the parsed config.json, cached on (path, content bytes).
+
+    The key is the file's bytes, not its stat: a windows-latest runner served
+    two same-length writes 10 ms apart with an identical mtime_ns, so any
+    timestamp-based key can miss a change. config.json is a few hundred
+    bytes; reading it per call costs microseconds and parsing is what the
+    cache saves.
+    """
     global _CACHE, _FAILED_KEY
 
     path = CONFIG_FILE
     try:
-        st = path.stat()
+        raw = path.read_bytes()
     except (OSError, ValueError):
         return {}  # no file (or an unusable path): defaults + env only
 
-    key = (str(path), st.st_mtime_ns, st.st_size)
+    key = (str(path), raw)
     cache = _CACHE
     if cache is not None and cache[0] == key:
         return cache[1]
@@ -281,7 +288,7 @@ def _read_json_layer() -> dict:
         return last_good if last_good is not None else {}
 
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(raw.decode("utf-8"))
         if not isinstance(data, dict):
             raise ValueError(f"top-level JSON value is {type(data).__name__}, expected object")
     except (OSError, ValueError) as exc:
