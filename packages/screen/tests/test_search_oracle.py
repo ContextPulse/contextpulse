@@ -147,6 +147,41 @@ class TestEventSearchIsNotATokenOracle:
         finally:
             bus.close()
 
+    @pytest.mark.parametrize("probe", ["zqoracles*", "zqoracleneedles*", "zqoracle*"])
+    def test_a_stemmed_probe_cannot_survive_the_filter(self, tmp_path, probe):
+        """Review S-4: the filter was a literal substring test, events_fts is porter.
+
+        events_fts is declared tokenize='porter unicode61', so FTS matches on
+        STEMS. The first filter asked `term in raw and term not in red` -- a
+        literal containment test. Appending an "s" to a probe gives a term whose
+        STEM still hits the secret token but whose literal form is not a
+        substring of the row, so the rule never fired and the count signal
+        survived. Demonstrated by the reviewer end to end.
+
+        The fix re-runs the query through an FTS index built over the REDACTED
+        text with the same tokenizer, so the query parser and the stemmer are
+        the same ones that produced the hit.
+        """
+        from contextpulse_core.spine import EventBus
+
+        db_path = _raw_store(tmp_path)
+        bus = EventBus(db_path)
+        try:
+            # Positive control on the same index and the same query SHAPE: a
+            # stemmed prefix probe against non-secret content must still work,
+            # or this assertion passes by breaking search rather than by
+            # closing the oracle.
+            assert len(bus.search("zqcontrols*", minutes_ago=60)) == 1, (
+                "the stemmed-prefix control found nothing -- search is broken, "
+                "so the assertion below proves nothing"
+            )
+            assert bus.search(probe, minutes_ago=60) == [], (
+                f"{probe!r} still returns a row: the stemmer routes around the "
+                "filter and the count is an oracle again"
+            )
+        finally:
+            bus.close()
+
     def test_stemmed_and_ordinary_matches_still_work(self, tmp_path):
         """The filter is narrow on purpose: it must not break the search.
 
