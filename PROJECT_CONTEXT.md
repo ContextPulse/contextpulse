@@ -247,11 +247,21 @@ paid cloud tier under active evaluation.
    acknowledgment this project drafts is unsendable under its own identity rule,
    because Gmail stamps the account default on a draft with no `From` and that
    carries his full name into correspondence with an outside reporter.
-7. Decide whether `infra/infra-bak/` is the intended home for the AMI/boot scripts or
-   an abandoned backup (`cp-infra-scripts-moved-to-bak-docs-dead`). `infra/ami/` and
-   `infra/boot/` are now empty and five doc references across three skills are dead.
-   Nothing is lost — it was a move. `.gitignore` ignores `infra/` wholesale, so this
-   appears in no diff and no commit; a path gate is the only thing that sees it.
+7. **DECIDED 2026-09-20, abandoned backup.** The five AMI/boot scripts are back at
+   `infra/ami/` and `infra/boot/`, and `check-doc-paths.py` now reports `0 dead,
+   0 unverifiable, 464 paths`. Basis for the call: three skills reference the
+   canonical paths and nothing anywhere references `infra-bak`, no journal row
+   records the move, and its timestamp (Sep 19 12:25) ties it to the public-repo
+   cleanup rather than to a decision about the scripts.
+
+   `infra/infra-bak/` is NOT empty and was not removed. It holds three dotfiles —
+   `ami/.bake-instance-id`, `ami/.dev-instance-id`, `boot/.josh-worker-id`, each a
+   single EC2 instance id. Those are the sensitive residue the 09-19 cleanup existed
+   to separate out, and `.dev-instance-id` is named in `open-source-readiness` as the
+   leak no filename pattern catches. They stay put: the restored scripts do not read
+   them (`grep -rn "instance-id" infra/ami/*.sh infra/boot/*.sh` returns nothing), and
+   whether the instances behind them still exist is Rocky's, filed as
+   `cp-infra-bak-holds-three-ec2-instance-ids`.
 
 **Settled 2026-09-19, listed here only so they are not re-proposed:** public CI and
 Security are green with zero open PRs and the Dependabot noise is closed by config
