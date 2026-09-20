@@ -7,6 +7,13 @@ alongside screenshots. Stores in the activity database for searchable history.
 
 Filters noise: ignores rapid copy-paste loops, very short clips (<5 chars),
 and duplicate consecutive content.
+
+Secret redaction is ALWAYS ON for clipboard text and has no opt-out. The
+clipboard is the highest-secret channel this daemon touches -- it is where a
+password manager, a `kubectl get secret`, or a copied API key lands -- and the
+product advertises pre-storage redaction. Unlike OCR (gated on
+`redact_ocr_text`), there is no legitimate reason to store a clipboard secret
+verbatim, so no setting can turn this off.
 """
 
 import hashlib
@@ -17,6 +24,7 @@ import time
 from contextpulse_core.platform import get_platform_provider
 
 from contextpulse_sight.activity import ActivityDB
+from contextpulse_sight.redact import redact_sensitive
 
 logger = logging.getLogger("contextpulse.sight.clipboard")
 
@@ -91,15 +99,32 @@ class ClipboardMonitor:
         if len(text) < _MIN_LENGTH:
             return
 
-        # Skip duplicate consecutive content
+        # Redact BEFORE anything else touches the text. Two reasons this has
+        # to come first and not just "before the DB write":
+        #   1. Before truncation -- every pattern has a minimum length
+        #      (ghp_ needs 36 trailing chars, sk- needs 20), so a token the
+        #      10,000-char cut splits in half no longer matches anything and
+        #      its leading half would be stored verbatim.
+        #   2. Before the dedupe compare -- _last_text lives for the life of
+        #      the process, and holding a raw secret there defeats the point
+        #      of redacting the copy that reaches disk.
+        # Both persistence paths below (ActivityDB.record_clipboard and
+        # SightModule.emit_clipboard, which lands in `events`/`events_fts`)
+        # read this one redacted value, so neither can drift from the other.
+        text = redact_sensitive(text)
+
+        # Skip duplicate consecutive content. The dedupe key is the
+        # pre-truncation value: comparing against the truncated copy meant a
+        # paste over _MAX_LENGTH never matched itself (full text vs stored
+        # text + "[... truncated]" marker) and was re-captured on every tick.
         if text == self._last_text:
             return
+        self._last_text = text
 
         # Truncate very large pastes
         if len(text) > _MAX_LENGTH:
             text = text[:_MAX_LENGTH] + f"\n[... truncated at {_MAX_LENGTH} chars]"
 
-        self._last_text = text
         self._last_capture_time = now
 
         # Store in activity DB
@@ -107,7 +132,10 @@ class ClipboardMonitor:
             timestamp=now,
             text=text,
         )
-        # Dual-write: emit clipboard event to EventBus
+        # Dual-write: emit clipboard event to EventBus. The hash is taken over
+        # the redacted text on purpose -- hashing the raw value would leave a
+        # brute-forceable digest of a short secret (a PIN, a 4-digit code)
+        # sitting in a table the redaction exists to keep clean.
         if self._sight_module:
             hash_val = hashlib.sha256(text.encode()).hexdigest()[:16]
             self._sight_module.emit_clipboard(
