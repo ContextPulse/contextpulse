@@ -100,8 +100,16 @@ _PATTERNS: list[tuple[re.Pattern, str]] = [
     # Generic "password", "secret", "token", "api_key" followed by value
     (re.compile(r"(?i)(?:password|passwd|pwd|secret|token|api[_-]?key)\s*[:=]\s*\S{6,}"), "[REDACTED:CREDENTIAL]"),
 
-    # JWT tokens (eyJ base64...)
-    (re.compile(r"eyJ[a-zA-Z0-9_-]{20,}\.eyJ[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,}"), "[REDACTED:JWT]"),
+    # JWT tokens (eyJ base64...). The per-segment floor is 8, not 20: what
+    # makes this pattern specific is the SHAPE -- three dot-separated base64url
+    # runs, two of them opening with `eyJ` (base64url for `{"`) -- and not the
+    # length of any one of them. A 20-character floor silently excluded both
+    # ends of the real range: `{"alg":"none"}` encodes to 16 characters after
+    # the prefix and `{"sub":"1"}` to 12, so a subject-only token issued by an
+    # internal service passed through capture verbatim. Found 2026-09-20 by
+    # testing the 0.1.1 advisory's published claim against this table instead
+    # of against the fixtures, all of which used long segments.
+    (re.compile(r"eyJ[a-zA-Z0-9_-]{8,}\.eyJ[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}"), "[REDACTED:JWT]"),
 
     # Credit card numbers live in _VALIDATED_PATTERNS below -- shape alone is
     # not enough to call a digit run a card.
