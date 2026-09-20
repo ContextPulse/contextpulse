@@ -69,44 +69,48 @@ class TestEffectiveInterval:
 
 
 class TestAutoIntervalIdleConfig:
-    def test_default_idle_interval_is_30s(self, monkeypatch):
-        monkeypatch.delenv("CONTEXTPULSE_AUTO_INTERVAL_IDLE", raising=False)
-        import importlib
+    """The three interval keys, as the daemon resolves them.
 
-        from contextpulse_sight import config as config_mod
-        importlib.reload(config_mod)
-        assert config_mod.AUTO_INTERVAL_IDLE == 30
+    These tests used to reload contextpulse_sight.config and read its module
+    constants. That module no longer declares a tunable: the keys live in
+    contextpulse_core.config, and what matters is what the capture loop gets
+    from them, which is covered end-to-end in
+    test_app_config_controls.py::TestIntervalsAreLive (including the loop
+    honouring a change with no restart). Kept here, at the declaration level,
+    because this file is where someone looks for the idle-interval contract.
+    """
 
-    def test_default_idle_threshold_is_60s(self, monkeypatch):
-        monkeypatch.delenv("CONTEXTPULSE_AUTO_IDLE_THRESHOLD", raising=False)
-        import importlib
+    def test_defaults(self, isolated_config):
+        from contextpulse_core.config import load_config
 
-        from contextpulse_sight import config as config_mod
-        importlib.reload(config_mod)
-        assert config_mod.AUTO_IDLE_THRESHOLD == 60
+        cfg = load_config()
+        assert cfg["auto_interval"] == 5
+        assert cfg["auto_interval_idle"] == 30
+        assert cfg["auto_idle_threshold"] == 60
 
-    def test_idle_interval_override(self, monkeypatch):
-        monkeypatch.setenv("CONTEXTPULSE_AUTO_INTERVAL_IDLE", "120")
-        import importlib
+    def test_saved_values_win_over_defaults(self, isolated_config):
+        from contextpulse_core.config import load_config, save_config
 
-        from contextpulse_sight import config as config_mod
-        importlib.reload(config_mod)
-        assert config_mod.AUTO_INTERVAL_IDLE == 120
+        save_config({"auto_interval_idle": 120, "auto_idle_threshold": 300})
+        cfg = load_config()
+        assert cfg["auto_interval_idle"] == 120
+        assert cfg["auto_idle_threshold"] == 300
 
-    def test_idle_threshold_override(self, monkeypatch):
-        monkeypatch.setenv("CONTEXTPULSE_AUTO_IDLE_THRESHOLD", "300")
-        import importlib
+    def test_env_wins_over_a_saved_value(self, isolated_config, monkeypatch):
+        from contextpulse_core.config import load_config, save_config
 
-        from contextpulse_sight import config as config_mod
-        importlib.reload(config_mod)
-        assert config_mod.AUTO_IDLE_THRESHOLD == 300
+        save_config({"auto_interval_idle": 120})
+        monkeypatch.setenv("CONTEXTPULSE_AUTO_INTERVAL_IDLE", "45")
+        assert load_config()["auto_interval_idle"] == 45
 
-    def test_idle_interval_clamped_above_zero(self, monkeypatch):
+    def test_idle_interval_clamped_above_zero(self, isolated_config, monkeypatch):
         # 0 or negative would mean "always re-capture instantly", which is
-        # a footgun. Floor at 1 like other interval configs.
-        monkeypatch.setenv("CONTEXTPULSE_AUTO_INTERVAL_IDLE", "0")
-        import importlib
+        # a footgun. Floor at 1 like other interval configs. The clamp now
+        # applies to a hand-edited config.json too, not only to env.
+        from contextpulse_core.config import load_config, save_config
 
-        from contextpulse_sight import config as config_mod
-        importlib.reload(config_mod)
-        assert config_mod.AUTO_INTERVAL_IDLE >= 1
+        monkeypatch.setenv("CONTEXTPULSE_AUTO_INTERVAL_IDLE", "0")
+        assert load_config()["auto_interval_idle"] >= 1
+        monkeypatch.delenv("CONTEXTPULSE_AUTO_INTERVAL_IDLE")
+        save_config({"auto_interval_idle": 0})
+        assert load_config()["auto_interval_idle"] >= 1

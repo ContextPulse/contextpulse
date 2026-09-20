@@ -1,4 +1,11 @@
-"""Tests for buffer.py — rolling buffer, change detection, pruning."""
+"""Tests for buffer.py — rolling buffer, change detection, pruning.
+
+The three tunables this module reads (buffer_max_age, change_threshold,
+jpeg_quality) are set here the way a user sets them: save_config, the call
+the Settings dialog makes. Patching the module constant they used to be
+proved only that the constant was honoured -- never that a saved value ever
+reached it, which is precisely what was broken.
+"""
 
 import json
 import time
@@ -6,6 +13,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
+from contextpulse_core.config import save_config
 from PIL import Image
 
 
@@ -194,9 +202,9 @@ class TestChangeDetection:
 class TestPruning:
     """Test that old frames are pruned correctly."""
 
-    def test_old_frames_pruned(self, tmp_buffer_dir):
-        with patch("contextpulse_sight.buffer.BUFFER_DIR", tmp_buffer_dir), \
-             patch("contextpulse_sight.buffer.BUFFER_MAX_AGE", 1):
+    def test_old_frames_pruned(self, tmp_buffer_dir, isolated_config):
+        save_config({"buffer_max_age": 1})
+        with patch("contextpulse_sight.buffer.BUFFER_DIR", tmp_buffer_dir):
             from contextpulse_sight.buffer import RollingBuffer
             buf = RollingBuffer()
             # Create a frame with an old timestamp (10 seconds ago)
@@ -210,9 +218,9 @@ class TestPruning:
             assert not old_frame.exists()
             assert not old_txt.exists()
 
-    def test_recent_frames_kept(self, tmp_buffer_dir):
-        with patch("contextpulse_sight.buffer.BUFFER_DIR", tmp_buffer_dir), \
-             patch("contextpulse_sight.buffer.BUFFER_MAX_AGE", 300):
+    def test_recent_frames_kept(self, tmp_buffer_dir, isolated_config):
+        save_config({"buffer_max_age": 300})
+        with patch("contextpulse_sight.buffer.BUFFER_DIR", tmp_buffer_dir):
             from contextpulse_sight.buffer import RollingBuffer
             buf = RollingBuffer()
             # Create a recent frame
@@ -392,3 +400,74 @@ class TestGetLatestForMonitor:
             txt = tmp_buffer_dir / "1000000000000_m0.txt"
             txt.write_text('{"text": "hello", "confidence": 0.9}')
             assert buf.get_latest_for_monitor(0) is None  # only returns .jpg
+
+
+class TestSavedSettingsReachTheBuffer:
+    """T11-T13: the three Settings controls this module owns are live."""
+
+    def test_jpeg_quality_changes_the_bytes_on_disk(self, tmp_buffer_dir, isolated_config):
+        """T11: a saved quality reaches the JPEG encoder, not just the dialog."""
+        from contextpulse_sight.buffer import RollingBuffer
+
+        img = _make_different_image()  # the SAME noisy image both times
+        with patch("contextpulse_sight.buffer.BUFFER_DIR", tmp_buffer_dir):
+            save_config({"jpeg_quality": 10})
+            low = RollingBuffer().add(img, monitor_index=0)
+            save_config({"jpeg_quality": 95})
+            high = RollingBuffer().add(img, monitor_index=1)
+
+        assert low and high
+        low_bytes = low[0].stat().st_size
+        high_bytes = high[0].stat().st_size
+        assert low_bytes < high_bytes, (
+            f"quality 10 produced {low_bytes} bytes and quality 95 produced "
+            f"{high_bytes}: the setting is not reaching img.save()"
+        )
+
+    def test_buffer_max_age_is_read_per_prune_not_per_process(
+        self, tmp_buffer_dir, isolated_config
+    ):
+        """T12: the same buffer object honours a change with no restart."""
+        from contextpulse_sight.buffer import RollingBuffer
+
+        with patch("contextpulse_sight.buffer.BUFFER_DIR", tmp_buffer_dir):
+            save_config({"buffer_max_age": 300})
+            buf = RollingBuffer()
+            old_ts = int((time.time() - 10) * 1000)
+            old_frame = tmp_buffer_dir / f"{old_ts}_m0.jpg"
+            _make_image().save(old_frame, format="JPEG")
+
+            buf._prune()
+            assert old_frame.exists(), "a 10s-old frame was pruned at max_age=300"
+
+            time.sleep(0.01)
+            save_config({"buffer_max_age": 1})
+            buf._prune()
+            assert not old_frame.exists(), (
+                "the new max_age did not take effect on an existing buffer -- "
+                "the value is bound at import, not read per prune"
+            )
+
+    def test_change_threshold_decides_whether_a_frame_is_stored(
+        self, tmp_buffer_dir, isolated_config
+    ):
+        """T13: 0 stores a near-identical frame, 100 skips a different one."""
+        from contextpulse_sight.buffer import RollingBuffer
+
+        with patch("contextpulse_sight.buffer.BUFFER_DIR", tmp_buffer_dir):
+            save_config({"change_threshold": 0})
+            buf = RollingBuffer()
+            buf.add(_make_image(color=(100, 100, 100)))
+            assert buf.add(_make_image(color=(100, 100, 100))), (
+                "threshold 0 must store even an identical frame"
+            )
+
+            time.sleep(0.01)
+            save_config({"change_threshold": 100})
+            buf2 = RollingBuffer()
+            buf2.add(_make_image(color=(0, 0, 0)))
+            # black -> mid grey is a ~78% diff: plainly different, still under
+            # the threshold, so it must be skipped.
+            assert buf2.add(_make_image(color=(200, 200, 200))) is False, (
+                "threshold 100 must skip a frame whose diff is under 100%"
+            )

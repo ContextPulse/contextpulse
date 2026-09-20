@@ -277,32 +277,52 @@ def test_buffer():
 # 4. Privacy controls
 # ---------------------------------------------------------------------------
 
-def test_privacy():
+def test_privacy(tmp_path, monkeypatch):
+    """The blocklist, set the way the Settings dialog sets it.
+
+    Was: mutate contextpulse_sight.config.BLOCKLIST_PATTERNS in place. That
+    list was built from an env var at import and was the ONLY thing this
+    check touched -- so it passed for a control that no saved setting could
+    reach. The config file is redirected into tmp_path first: this is a UAT
+    that runs on a live machine, and the real %APPDATA%/ContextPulse/
+    config.json belongs to a daemon that may be running right now.
+    """
     _section("4. Privacy Controls")
-    import contextpulse_sight.config as cfg
-    from contextpulse_sight.privacy import get_foreground_window_title, is_blocked
+    import contextpulse_core.config as cfg_mod
+    from contextpulse_core.config import save_config
+    from contextpulse_sight.privacy import get_foreground_window_title, is_blocked, is_title_blocked
 
     title = get_foreground_window_title()
     _label("get_foreground_window_title()", "PASS",
            f"'{title[:40]}...'" if len(title) > 40 else f"'{title}'")
 
-    orig_patterns = cfg.BLOCKLIST_PATTERNS[:]
-    cfg.BLOCKLIST_PATTERNS.clear()
-    assert not is_blocked()
-    _label("is_blocked() with empty blocklist", "PASS", "returns False")
+    monkeypatch.setattr(cfg_mod, "APPDATA_DIR", tmp_path / "ContextPulse")
+    monkeypatch.setattr(cfg_mod, "CONFIG_FILE", tmp_path / "ContextPulse" / "config.json")
+    monkeypatch.delenv("CONTEXTPULSE_BLOCKLIST", raising=False)
+    monkeypatch.delenv("CONTEXTPULSE_BLOCKLIST_FILE", raising=False)
+    cfg_mod.clear_config_cache()
+    try:
+        save_config({"blocklist_patterns": []})
+        assert not is_blocked()
+        _label("is_blocked() with empty blocklist", "PASS", "returns False")
 
-    if title:
-        snippet = title[:10]
-        cfg.BLOCKLIST_PATTERNS.append(snippet)
-        assert is_blocked()
-        _label("is_blocked() with matching pattern", "PASS",
-               f"blocked on '{snippet}'")
-    else:
-        _label("is_blocked() with matching pattern", "SKIP",
-               "no foreground title")
+        save_config({"blocklist_patterns": ["1Password"]})
+        assert is_title_blocked("1Password - Login")
+        assert not is_title_blocked("app.py - Visual Studio Code")
+        _label("saved pattern reaches is_title_blocked()", "PASS",
+               "'1Password - Login' blocked, editor not")
 
-    cfg.BLOCKLIST_PATTERNS.clear()
-    cfg.BLOCKLIST_PATTERNS.extend(orig_patterns)
+        if title.strip():
+            snippet = title.strip()[:10]
+            save_config({"blocklist_patterns": [snippet]})
+            assert is_blocked()
+            _label("is_blocked() with matching pattern", "PASS",
+                   f"blocked on '{snippet}'")
+        else:
+            _label("is_blocked() with matching pattern", "SKIP",
+                   "no foreground title")
+    finally:
+        cfg_mod.clear_config_cache()
 
 
 # ---------------------------------------------------------------------------

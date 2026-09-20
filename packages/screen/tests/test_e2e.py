@@ -204,14 +204,14 @@ class TestDaemonToMCPFlow:
             app.do_quick_capture()
             assert app.buffer.frame_count() == 0
 
-    def test_buffer_pruning_removes_old_frames(self, tmp_path):
-        """Frames older than BUFFER_MAX_AGE are pruned."""
-        buf_dir = tmp_path / "buffer"
+    def test_buffer_pruning_removes_old_frames(self, tmp_path, isolated_config):
+        """Frames older than the configured buffer_max_age are pruned."""
+        from contextpulse_core.config import save_config
 
-        with (
-            patch("contextpulse_sight.buffer.BUFFER_DIR", buf_dir),
-            patch("contextpulse_sight.buffer.BUFFER_MAX_AGE", 1),  # 1 second
-        ):
+        buf_dir = tmp_path / "buffer"
+        save_config({"buffer_max_age": 1})  # 1 second
+
+        with patch("contextpulse_sight.buffer.BUFFER_DIR", buf_dir):
             buf = RollingBuffer()
             buf.add(_make_image(color=(10, 10, 10)))
             assert buf.frame_count() == 1

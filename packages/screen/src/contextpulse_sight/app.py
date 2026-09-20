@@ -12,6 +12,7 @@ from pathlib import Path
 import pystray
 
 # Core productization imports (settings, first-run, licensing)
+from contextpulse_core.config import _DEFAULTS
 from contextpulse_core.config import get as cfg_get
 from contextpulse_core.first_run import is_first_run, show_welcome_dialog
 from contextpulse_core.license_dialog import show_nag_dialog
@@ -26,14 +27,8 @@ from contextpulse_sight.activity import ActivityDB
 from contextpulse_sight.buffer import RollingBuffer
 from contextpulse_sight.clipboard import ClipboardMonitor
 from contextpulse_sight.config import (
-    AUTO_IDLE_THRESHOLD,
-    AUTO_INTERVAL,
-    AUTO_INTERVAL_IDLE,
-    BUFFER_MAX_AGE,
-    CHANGE_THRESHOLD,
     FILE_LATEST,
     FILE_REGION,
-    OCR_DIFF_THRESHOLD,
     OUTPUT_DIR,
 )
 from contextpulse_sight.events import EventDetector
@@ -48,6 +43,75 @@ from contextpulse_sight.privacy import (
 from contextpulse_sight.sight_module import SightModule
 
 _WARNING_COLOR = _COLORS.get("dark", {}).get("warning", "#F0B429")
+
+# -- Hotkeys ---------------------------------------------------------------
+# The four hotkey_* keys were declared in config, shown in the Settings
+# dialog, saved to config.json -- and read by nothing: the dispatch table
+# below was a literal {"s": ..., "a": ..., "z": ..., "p": ...} and the tray
+# labels were the string "(Ctrl+Shift+S)". Changing a hotkey in Settings
+# changed the file and nothing else (dead-controls ledger rows 11-14).
+#
+# Deliberately local to app.py. Voice has its own _parse_hotkey which returns
+# pynput key SETS for hold-to-talk -- a different model (press-and-hold vs
+# fire-on-press), so sharing one parser would mean serving two semantics from
+# one function.
+
+# Order fixed so a formatted label reads Ctrl+Shift+Alt, never Shift+Ctrl.
+_HOTKEY_MODIFIERS: tuple[str, ...] = ("ctrl", "shift", "alt")
+
+# pynput Key attribute names per modifier; the first one found pressed wins.
+_MODIFIER_KEY_NAMES: dict[str, tuple[str, ...]] = {
+    "ctrl": ("ctrl_l", "ctrl_r"),
+    "shift": ("shift_l", "shift_r"),
+    "alt": ("alt_l", "alt_r", "alt_gr"),
+}
+
+# config key -> the action it fires. Order is the tray-menu order.
+_HOTKEY_KEYS: tuple[str, ...] = (
+    "hotkey_capture",
+    "hotkey_all_monitors",
+    "hotkey_region",
+    "hotkey_pause",
+)
+
+
+def _parse_hotkey_spec(spec: str) -> tuple[frozenset[str], str] | None:
+    """Parse "ctrl+shift+s" into (frozenset{"ctrl","shift"}, "s").
+
+    Returns None for anything unusable: an unknown modifier, a key that is
+    not a single a-z letter, or a spec with no modifier at all (a bare letter
+    would fire on every keystroke, which is worse than ignoring it).
+    """
+    tokens = [t.strip().lower() for t in str(spec).split("+") if t.strip()]
+    if len(tokens) < 2:
+        return None
+    *mods, letter = tokens
+    if len(letter) != 1 or not ("a" <= letter <= "z"):
+        return None
+    if any(m not in _HOTKEY_MODIFIERS for m in mods):
+        return None
+    return frozenset(mods), letter
+
+
+def parse_hotkey(spec: str, default: str) -> tuple[frozenset[str], str]:
+    """Parse a hotkey spec, falling back to `default` with a warning."""
+    parsed = _parse_hotkey_spec(spec)
+    if parsed is not None:
+        return parsed
+    logger.warning(
+        "Hotkey %r is not usable (expected modifier+letter, e.g. %r) -- using %r",
+        spec, default, default,
+    )
+    fallback = _parse_hotkey_spec(default)
+    if fallback is None:  # only reachable if _DEFAULTS itself is malformed
+        raise ValueError(f"default hotkey {default!r} is itself unparseable")
+    return fallback
+
+
+def format_hotkey(mods: frozenset[str], letter: str) -> str:
+    """Render a parsed hotkey for a menu label: "Ctrl+Shift+S"."""
+    ordered = [m.capitalize() for m in _HOTKEY_MODIFIERS if m in mods]
+    return "+".join([*ordered, letter.upper()])
 
 
 def should_run_ocr(diff_pct: float, force_ocr: bool, threshold: float) -> bool:
@@ -131,6 +195,22 @@ class ContextPulseSightApp:
         self._clipboard_monitor = (
             ClipboardMonitor(self.activity_db) if self._clipboard_enabled() else None
         )
+
+        # Hotkeys are startup-bound by design: pynput binds a listener once
+        # and the Settings dialog already tells the user a restart is needed.
+        # Parsed here so the dispatch table AND the tray labels come from the
+        # same values -- the labels were hardcoded strings that could not
+        # disagree with the dispatch table because neither read the config.
+        self._hotkeys: dict[str, tuple[frozenset[str], str]] = {
+            key: parse_hotkey(cfg_get(key, _DEFAULTS[key]), _DEFAULTS[key])
+            for key in _HOTKEY_KEYS
+        }
+        self._hotkey_actions = {
+            "hotkey_capture": lambda: self._in_thread(self.do_quick_capture),
+            "hotkey_all_monitors": lambda: self._in_thread(self.do_all_capture),
+            "hotkey_region": lambda: self._in_thread(self.do_region_capture),
+            "hotkey_pause": self.toggle_pause,
+        }
 
         # Spine dual-write: EventBus + SightModule
         self._event_bus = EventBus(self.activity_db.db_path)
@@ -330,6 +410,12 @@ class ContextPulseSightApp:
         if is_blocked():
             window_title = "[BLOCKED]"
 
+        # Read once per capture cycle rather than per monitor, so every frame
+        # in one cycle is judged against the same threshold.
+        ocr_diff_threshold = float(
+            cfg_get("ocr_diff_threshold", _DEFAULTS["ocr_diff_threshold"])
+        )
+
         now = time.time()
         for idx, img, native_img in monitors:
             result = self.buffer.add(img, monitor_index=idx)
@@ -356,10 +442,10 @@ class ContextPulseSightApp:
                 # Queue for background OCR — pass native-res image for
                 # higher OCR accuracy (buffer stores downscaled JPEG).
                 # Skip OCR on near-identical frames (cursor blinks, clock
-                # ticks) per OCR_DIFF_THRESHOLD; force_ocr=True bypasses
+                # ticks) per ocr_diff_threshold; force_ocr=True bypasses
                 # the gate for event-driven captures.
                 if frame_path and isinstance(frame_path, Path):
-                    if should_run_ocr(diff_pct, force_ocr, OCR_DIFF_THRESHOLD):
+                    if should_run_ocr(diff_pct, force_ocr, ocr_diff_threshold):
                         # window_title/app_name were read ONCE above for the
                         # system-wide foreground window, which is only what
                         # THIS frame shows when idx is the cursor monitor.
@@ -380,7 +466,7 @@ class ContextPulseSightApp:
                     else:
                         logger.debug(
                             "OCR skipped m%d (diff=%.1f%% < %.1f%%)",
-                            idx, diff_pct, OCR_DIFF_THRESHOLD,
+                            idx, diff_pct, ocr_diff_threshold,
                         )
 
                 if idx == cursor_idx:
@@ -394,10 +480,24 @@ class ContextPulseSightApp:
         self.activity_db.prune()
         return True
 
+    def _intervals(self) -> tuple[float, float, float]:
+        """(auto_interval, auto_interval_idle, auto_idle_threshold), read live.
+
+        Called once per loop iteration -- the loop already ticks every second,
+        so this costs one stat() per second and is what makes all three
+        settable without a restart, including 0 -> N and N -> 0.
+        """
+        return (
+            float(cfg_get("auto_interval", _DEFAULTS["auto_interval"])),
+            float(cfg_get("auto_interval_idle", _DEFAULTS["auto_interval_idle"])),
+            float(cfg_get("auto_idle_threshold", _DEFAULTS["auto_idle_threshold"])),
+        )
+
     def _auto_capture_loop(self):
+        base_interval, idle_interval, idle_threshold = self._intervals()
         logger.info(
             "Auto-capture started (active=%ds, idle=%ds after %ds quiet)",
-            AUTO_INTERVAL, AUTO_INTERVAL_IDLE, AUTO_IDLE_THRESHOLD,
+            base_interval, idle_interval, idle_threshold,
         )
         consecutive_errors = 0
         last_capture_time = 0.0
@@ -405,29 +505,39 @@ class ContextPulseSightApp:
         last_logged_mode = "active"  # debounce mode-transition logs
         _last_paused_log = 0.0  # debounce "paused" log messages
         while not self.stop_event.is_set():
-            if self._should_skip_quiet():
-                # When paused/blocked, sleep longer to avoid log spam and CPU waste.
-                # Log at most once per 60 seconds instead of every second.
+            base_interval, idle_interval, idle_threshold = self._intervals()
+            # auto_interval 0 means "no automatic capture". It is handled HERE
+            # rather than by declining to start the thread, which is what both
+            # start sites used to do: a thread that was never started cannot
+            # notice the user setting the interval back to 5, so 0 was a
+            # one-way trip until the next daemon restart. Same quiet branch as
+            # paused/blocked -- the thread stays alive and re-reads.
+            if base_interval <= 0 or self._should_skip_quiet():
+                # When off/paused/blocked, sleep longer to avoid log spam and
+                # CPU waste. Log at most once per 60 seconds, not every second.
                 now = time.time()
                 if now - _last_paused_log >= 60:
-                    logger.info("Auto-capture paused (will check every 5s)")
+                    if base_interval <= 0:
+                        logger.info("Auto-capture off (auto_interval=0; re-checking every 5s)")
+                    else:
+                        logger.info("Auto-capture paused (will check every 5s)")
                     _last_paused_log = now
                 self.stop_event.wait(5)
                 continue
             now = time.time()
             event_fired = self._event_detector.has_pending_event()
 
-            # Adaptive interval: stretch to AUTO_INTERVAL_IDLE after
-            # AUTO_IDLE_THRESHOLD seconds of no events; snap back to
-            # AUTO_INTERVAL on any event. (Phase A3, 2026-04-29.)
+            # Adaptive interval: stretch to auto_interval_idle after
+            # auto_idle_threshold seconds of no events; snap back to
+            # auto_interval on any event. (Phase A3, 2026-04-29.)
             current_interval = effective_interval(
                 now=now,
                 last_active_time=last_active_time,
-                base_interval=AUTO_INTERVAL,
-                idle_interval=AUTO_INTERVAL_IDLE,
-                idle_threshold=AUTO_IDLE_THRESHOLD,
+                base_interval=base_interval,
+                idle_interval=idle_interval,
+                idle_threshold=idle_threshold,
             )
-            mode = "idle" if current_interval > AUTO_INTERVAL else "active"
+            mode = "idle" if current_interval > base_interval else "active"
             if mode != last_logged_mode:
                 logger.info(
                     "Auto-capture mode -> %s (interval=%.0fs)", mode, current_interval,
@@ -467,13 +577,13 @@ class ContextPulseSightApp:
                         "Auto-capture failed (%d consecutive)", consecutive_errors
                     )
                     if consecutive_errors >= 5:
-                        backoff = min(30, AUTO_INTERVAL * consecutive_errors)
+                        backoff = min(30, base_interval * consecutive_errors)
                         logger.warning(
                             "Too many capture errors, backing off %ds", backoff
                         )
                         self.stop_event.wait(backoff)
                         continue
-            # Check more frequently than AUTO_INTERVAL to catch events promptly
+            # Check more frequently than the interval to catch events promptly
             self.stop_event.wait(1)
         logger.info("Auto-capture stopped")
 
@@ -544,6 +654,14 @@ class ContextPulseSightApp:
         self._pressed_keys.discard(key)
 
     def _get_key_letter(self, key) -> str | None:
+        """The a-z letter a key represents, or None if it is not one.
+
+        TypeError/ValueError are caught alongside AttributeError because this
+        runs inside the pynput on_press callback: anything raised here kills
+        the listener thread, and every hotkey with it, for a key that simply
+        was not a letter. ord() raises TypeError for a non-string .char and
+        ValueError for a multi-character one.
+        """
         try:
             ch = key.char
             if ch is not None:
@@ -551,37 +669,51 @@ class ContextPulseSightApp:
                 if 1 <= code <= 26:
                     return chr(code + 96)
                 return ch.lower()
-        except AttributeError:
+        except (AttributeError, TypeError, ValueError):
             pass
         try:
             vk = key.vk
             if vk is not None and 0x41 <= vk <= 0x5A:
                 return chr(vk + 32)
-        except AttributeError:
+        except (AttributeError, TypeError, ValueError):
             pass
         return None
 
-    def _check_hotkeys(self):
-        ctrl = (keyboard.Key.ctrl_l in self._pressed_keys
-                or keyboard.Key.ctrl_r in self._pressed_keys)
-        shift = (keyboard.Key.shift_l in self._pressed_keys
-                 or keyboard.Key.shift_r in self._pressed_keys)
-        if not (ctrl and shift):
-            return
+    def _in_thread(self, target) -> None:
+        threading.Thread(target=target, daemon=True).start()
 
-        hotkey_map = {
-            "s": lambda: threading.Thread(target=self.do_quick_capture, daemon=True).start(),
-            "a": lambda: threading.Thread(target=self.do_all_capture, daemon=True).start(),
-            "z": lambda: threading.Thread(target=self.do_region_capture, daemon=True).start(),
-            "p": self.toggle_pause,
-        }
+    def _pressed_modifiers(self) -> frozenset[str]:
+        """Which of ctrl/shift/alt are currently held."""
+        held = set()
+        for mod, names in _MODIFIER_KEY_NAMES.items():
+            for name in names:
+                key = getattr(keyboard.Key, name, None)
+                if key is not None and key in self._pressed_keys:
+                    held.add(mod)
+                    break
+        return frozenset(held)
+
+    def _check_hotkeys(self):
+        """Fire the action whose configured hotkey is exactly what is held.
+
+        The modifier set must match exactly, rather than merely contain the
+        configured ones: with four user-settable combos, a subset test would
+        let ctrl+shift+alt+s fire the ctrl+shift+s action AND any ctrl+alt+s
+        binding at once, and which one won would depend on dict order.
+        """
+        pressed_mods = self._pressed_modifiers()
+        if not pressed_mods:
+            return
 
         for key in list(self._pressed_keys):
             letter = self._get_key_letter(key)
-            if letter and letter in hotkey_map:
-                hotkey_map[letter]()
-                self._pressed_keys.clear()
-                return
+            if not letter:
+                continue
+            for name, (mods, hotkey_letter) in self._hotkeys.items():
+                if hotkey_letter == letter and mods == pressed_mods:
+                    self._hotkey_actions[name]()
+                    self._pressed_keys.clear()
+                    return
 
     # -- System tray -------------------------------------------------------
 
@@ -589,19 +721,23 @@ class ContextPulseSightApp:
         if hasattr(self, "tray") and self.tray:
             self.tray.icon = create_icon(_WARNING_COLOR if self.paused else None)
 
+    def _hotkey_label(self, key: str) -> str:
+        """"(Ctrl+Shift+S)" for the tray, built from the configured hotkey."""
+        return f"({format_hotkey(*self._hotkeys[key])})"
+
     def _create_tray_menu(self):
         return pystray.Menu(
             pystray.MenuItem(
-                "Quick Capture (Ctrl+Shift+S)",
-                lambda: threading.Thread(target=self.do_quick_capture, daemon=True).start(),
+                f"Quick Capture {self._hotkey_label('hotkey_capture')}",
+                lambda: self._in_thread(self.do_quick_capture),
             ),
             pystray.MenuItem(
-                "All Monitors (Ctrl+Shift+A)",
-                lambda: threading.Thread(target=self.do_all_capture, daemon=True).start(),
+                f"All Monitors {self._hotkey_label('hotkey_all_monitors')}",
+                lambda: self._in_thread(self.do_all_capture),
             ),
             pystray.MenuItem(
-                "Region (Ctrl+Shift+Z)",
-                lambda: threading.Thread(target=self.do_region_capture, daemon=True).start(),
+                f"Region {self._hotkey_label('hotkey_region')}",
+                lambda: self._in_thread(self.do_region_capture),
             ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
@@ -610,7 +746,10 @@ class ContextPulseSightApp:
                 enabled=False,
             ),
             pystray.MenuItem(
-                lambda _: "Resume" if self.paused else "Pause",
+                lambda _: (
+                    f"{'Resume' if self.paused else 'Pause'} "
+                    f"{self._hotkey_label('hotkey_pause')}"
+                ),
                 lambda: self.toggle_pause(),
             ),
             pystray.MenuItem(
@@ -670,7 +809,9 @@ class ContextPulseSightApp:
         logger.info("ContextPulse Sight starting -- output: %s", OUTPUT_DIR)
         logger.info(
             "Auto-capture: every %ds, buffer: %ds, change threshold: %.1f%%",
-            AUTO_INTERVAL, BUFFER_MAX_AGE, CHANGE_THRESHOLD,
+            cfg_get("auto_interval", _DEFAULTS["auto_interval"]),
+            cfg_get("buffer_max_age", _DEFAULTS["buffer_max_age"]),
+            cfg_get("change_threshold", _DEFAULTS["change_threshold"]),
         )
 
         self.hotkey_listener = keyboard.Listener(
@@ -689,17 +830,21 @@ class ContextPulseSightApp:
         self._ocr_worker.start()
         self._start_clipboard_monitor()
 
-        if AUTO_INTERVAL > 0:
-            self._capture_thread = threading.Thread(
-                target=self._auto_capture_loop, daemon=True
-            )
-            self._capture_thread.start()
+        # Started unconditionally. auto_interval == 0 is handled INSIDE the
+        # loop; gating the thread on it here meant the watchdog never ran
+        # either, so with auto_interval=0 a dead OCR worker, event detector or
+        # hotkey listener was never restarted -- and the interval could not be
+        # turned back on without a restart.
+        self._capture_thread = threading.Thread(
+            target=self._auto_capture_loop, daemon=True
+        )
+        self._capture_thread.start()
 
-            # Watchdog restarts capture thread if it dies
-            self._watchdog_thread = threading.Thread(
-                target=self._watchdog_loop, daemon=True
-            )
-            self._watchdog_thread.start()
+        # Watchdog restarts capture thread if it dies
+        self._watchdog_thread = threading.Thread(
+            target=self._watchdog_loop, daemon=True
+        )
+        self._watchdog_thread.start()
 
         self.tray = pystray.Icon(
             name="ContextPulse Sight",
@@ -707,7 +852,11 @@ class ContextPulseSightApp:
             title="ContextPulse Sight - Active",
             menu=self._create_tray_menu(),
         )
-        logger.info("Tray icon ready. Hotkeys: Ctrl+Shift+S/A/Z/P")
+        logger.info(
+            "Tray icon ready. Hotkeys: %s",
+            ", ".join(f"{k.removeprefix('hotkey_')}={format_hotkey(*v)}"
+                      for k, v in self._hotkeys.items()),
+        )
         self.tray.run()
 
 

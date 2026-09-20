@@ -19,16 +19,20 @@ import time
 from pathlib import Path
 
 import numpy as np
+from contextpulse_core.config import _DEFAULTS
+from contextpulse_core.config import get as cfg_get
 from PIL import Image
 
-from contextpulse_sight.config import (
-    BUFFER_DIR,
-    BUFFER_MAX_AGE,
-    CHANGE_THRESHOLD,
-    JPEG_QUALITY,
-)
+from contextpulse_sight.config import BUFFER_DIR
 
 logger = logging.getLogger("contextpulse.sight.buffer")
+
+# buffer_max_age, change_threshold and jpeg_quality are read at the point of
+# use, not bound here. They are all three settable in the Settings dialog, and
+# a module constant captured at import is the reason saving one of them did
+# nothing until the daemon was restarted (cp-settings-dialog-disconnected-
+# from-daemon). A read is one stat() against an mtime-cached parse, which is
+# affordable per frame.
 
 # Pattern to parse frame filenames: {timestamp}_m{monitor}.jpg or .txt
 _FRAME_RE = re.compile(r"^(\d+)_m(\d+)\.(jpg|txt)$")
@@ -85,7 +89,7 @@ class RollingBuffer:
         last = self._last_frames.get(monitor_index)
         if last is not None:
             diff_pct = self._diff_pct(arr, last)
-            if diff_pct < CHANGE_THRESHOLD:
+            if diff_pct < cfg_get("change_threshold", _DEFAULTS["change_threshold"]):
                 return False
         else:
             diff_pct = 100.0  # first frame for this monitor
@@ -95,7 +99,7 @@ class RollingBuffer:
         path = BUFFER_DIR / f"{ts}_m{monitor_index}.jpg"
         if img.mode == "RGBA":
             img = img.convert("RGB")
-        img.save(path, format="JPEG", quality=JPEG_QUALITY)
+        img.save(path, format="JPEG", quality=cfg_get("jpeg_quality", _DEFAULTS["jpeg_quality"]))
         self._prune()
         return path, round(diff_pct, 1)
 
@@ -135,11 +139,14 @@ class RollingBuffer:
 
     def _has_changed(self, current: np.ndarray, last: np.ndarray) -> bool:
         """Compare current frame to last. Returns True if meaningfully different."""
-        return self._diff_pct(current, last) >= CHANGE_THRESHOLD
+        return self._diff_pct(current, last) >= cfg_get(
+            "change_threshold", _DEFAULTS["change_threshold"]
+        )
 
     def _prune(self):
-        """Remove frames older than BUFFER_MAX_AGE seconds."""
-        cutoff = (time.time() - BUFFER_MAX_AGE) * 1000
+        """Remove frames older than the configured buffer_max_age seconds."""
+        max_age = cfg_get("buffer_max_age", _DEFAULTS["buffer_max_age"])
+        cutoff = (time.time() - max_age) * 1000
         # Prune .jpg files and their .txt sidecars
         for f in BUFFER_DIR.glob("*.jpg"):
             try:

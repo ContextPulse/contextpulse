@@ -74,13 +74,12 @@ class SightModule(ModalityModule):
             "error": self._error,
         }
 
-    def get_config_schema(self) -> dict[str, Any]:
-        return {
-            "capture_interval": {"type": "number", "default": 5, "description": "Seconds between captures"},
-            "ocr_enabled": {"type": "boolean", "default": True, "description": "Enable OCR on captured frames"},
-            "clipboard_enabled": {"type": "boolean", "default": True, "description": "Monitor clipboard changes"},
-            "diff_threshold": {"type": "number", "default": 0.01, "description": "Minimum diff score to emit event"},
-        }
+    # There is deliberately no get_config_schema(). It was a third
+    # declaration site for settings that contextpulse_core.config._DEFAULTS
+    # already owns, and it had drifted from both of the others: it named
+    # "capture_interval" and "diff_threshold", which match no config key, and
+    # its diff_threshold default of 0.01 was a fraction where the buffer gate
+    # is a percentage (0.5). Nothing in production ever called it.
 
     def _emit(self, event: ContextEvent) -> None:
         """Emit an event via the registered callback. Swallows errors."""
