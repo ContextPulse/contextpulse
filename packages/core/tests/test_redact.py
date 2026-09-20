@@ -291,7 +291,7 @@ class TestSecondReviewFalsePositives:
         )
 
     def test_glued_sk_key_still_matches(self):
-        secret = "sk-A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6"
+        secret = "sk-A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6"  # synthetic
         assert secret[3:] not in redact_sensitive(f"deploynotesx{secret} trailing")
 
 
