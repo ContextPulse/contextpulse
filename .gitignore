@@ -148,3 +148,10 @@ infra/
 # Any instance-id / worker-id marker file, wherever a script drops one.
 .*-instance-id
 .*-worker-id
+
+# MCP client configs carry a live bearer token. setup.py only ever writes
+# under $HOME and refuses anything cwd-relative (see _is_user_scoped), so
+# these should never appear here at all -- this is the belt to that braces.
+.cursor/
+.claude.json
+*.contextpulse-bak

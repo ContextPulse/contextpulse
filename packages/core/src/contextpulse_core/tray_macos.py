@@ -21,6 +21,7 @@ class ContextPulseMenuBar(rumps.App):
             rumps.MenuItem("Pause Capture", callback=self.toggle_pause),
             rumps.MenuItem("Open Screenshots", callback=self.open_screenshots),
             rumps.MenuItem("Settings...", callback=self.open_settings),
+            rumps.MenuItem("Copy MCP Token", callback=self.copy_mcp_token),
             None,  # separator
             rumps.MenuItem("Quit", callback=self.quit_app),
         ]
@@ -35,6 +36,11 @@ class ContextPulseMenuBar(rumps.App):
     def open_settings(self, _):
         from contextpulse_core.settings import show_settings
         show_settings()
+
+    def copy_mcp_token(self, _):
+        """Copy the Claude Code MCP snippet, token included, to the clipboard."""
+        from contextpulse_core.daemon import _copy_mcp_token
+        _copy_mcp_token()
 
     def quit_app(self, _):
         self.daemon.shutdown()

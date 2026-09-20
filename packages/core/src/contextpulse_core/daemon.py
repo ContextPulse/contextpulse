@@ -200,6 +200,42 @@ def _refuse_if_session_0() -> None:
     sys.exit(1)
 
 
+def _copy_mcp_token(notify=None) -> None:
+    """Put the Claude Code MCP snippet, token included, on the clipboard.
+
+    Runs on a spawned thread from the tray callback -- never inline, because
+    blocking a pystray menu callback blocks the whole message pump. And the
+    copy itself goes through clipboard_lock.copy_text: pyperclip.copy calls
+    EmptyClipboard, and doing that while the sight poller holds a GlobalLock'd
+    pointer is the 0xC0000374 heap corruption the lock exists to prevent.
+
+    `notify` is the daemon's tray notifier, so a clipboard that was busy
+    reaches the user the same way every other tray failure does instead of
+    only a log line.
+    """
+    from contextpulse_core import mcp_auth
+    from contextpulse_core.clipboard_lock import copy_text
+
+    try:
+        snippet = mcp_auth.config_snippet("claude-code")
+    except Exception:
+        logger.exception("Could not build the MCP client config")
+        if notify:
+            notify("ContextPulse", "Could not read the MCP token — see the log.")
+        return
+
+    if copy_text(snippet, what="the MCP client config"):
+        logger.info("Copied MCP client config to the clipboard")
+        return
+
+    if notify:
+        notify(
+            "ContextPulse",
+            "Clipboard busy — MCP config not copied. Try again, or run "
+            "contextpulse-mcp --print-config claude-code",
+        )
+
+
 def start_secret_migration() -> threading.Thread:
     """Run the sweep on a background thread and return it.
 
@@ -745,6 +781,12 @@ class ContextPulseDaemon:
                 "Enter License Key",
                 lambda: threading.Thread(target=show_nag_dialog, daemon=True).start(),
             ),
+            pystray.MenuItem(
+                "Copy MCP Token",
+                lambda: threading.Thread(
+                    target=_copy_mcp_token, args=(self._notify_tray,), daemon=True,
+                ).start(),
+            ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit", self._quit),
         )
@@ -976,22 +1018,36 @@ def main() -> None:
 
     # Handle --setup flag for MCP config + companion skills
     if "--setup" in sys.argv:
-        from contextpulse_sight.setup import print_config, setup_all
+        from contextpulse_sight.setup import KNOWN_CLIENTS, print_config, setup_all, setup_client
         idx = sys.argv.index("--setup")
-        if idx + 1 < len(sys.argv) and sys.argv[idx + 1] == "print":
+        target = sys.argv[idx + 1].lower() if idx + 1 < len(sys.argv) else ""
+        if target == "print":
             print_config()
+            return
+
+        if target in KNOWN_CLIENTS:
+            # `--setup claude-code` configures claude-code and NOTHING else.
+            # It used to fall through to setup_all(), which also configured
+            # Cursor -- whose path was cwd-relative, so running this from a
+            # checkout wrote the live token into the working tree of a public
+            # repo. Naming a client now means that client only.
+            setup_client(target)
+        elif target and not target.startswith("-"):
+            print(f"Unknown client: {target}")
+            print(f"Supported: {', '.join(KNOWN_CLIENTS)}, print")
+            return
         else:
-            # Configure MCP servers
             setup_all()
-            # Install companion skills
-            print("\n--- Companion Skills ---")
-            from contextpulse_core.skill_setup import install_skills
-            force = "--force" in sys.argv
-            install_skills("claude-code", force=force)
-            install_skills("gemini", force=force)
-            # Show ecosystem status
-            from contextpulse_core.skill_setup import print_ecosystem_status
-            print_ecosystem_status()
+
+        # Install companion skills (both the all-clients and single-client paths)
+        print("\n--- Companion Skills ---")
+        from contextpulse_core.skill_setup import install_skills
+        force = "--force" in sys.argv
+        install_skills("claude-code", force=force)
+        install_skills("gemini", force=force)
+        # Show ecosystem status
+        from contextpulse_core.skill_setup import print_ecosystem_status
+        print_ecosystem_status()
         return
 
     # Handle --status flag

@@ -129,6 +129,12 @@ function Start-McpServer {
     # dead endpoint until the watchdog was manually restarted.
     param([int]$MaxAttempts = 3)
 
+    # Liveness is a TCP connect, and stays one. Since 2026-09-19 the endpoint
+    # requires a bearer token, so an HTTP probe would have to either read the
+    # token file or be served by an unauthenticated /health route -- and that
+    # route would hand any local process a way to fingerprint ContextPulse,
+    # which is the exact surface the token exists to close. A listening socket
+    # is all this supervisor needs to decide whether to relaunch.
     $listening = Test-NetConnection -ComputerName 127.0.0.1 -Port $McpPort -WarningAction SilentlyContinue
     if ($listening.TcpTestSucceeded) {
         return
@@ -147,7 +153,8 @@ function Start-McpServer {
 
         Write-Log "Unified MCP server started (pid=$($mcpProc.Id))"
 
-        # Wait briefly and verify it came up
+        # Wait briefly and verify it came up. TCP only -- see the note above:
+        # a token-bearing HTTP probe is not worth an unauthenticated route.
         Start-Sleep -Seconds 3
         $check = Test-NetConnection -ComputerName 127.0.0.1 -Port $McpPort -WarningAction SilentlyContinue
         if ($check.TcpTestSucceeded) {

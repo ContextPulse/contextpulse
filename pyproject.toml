@@ -33,7 +33,11 @@ dependencies = [
     "Pillow>=10.0,<13",
     "numpy>=1.26,<3",
     "rapidocr-onnxruntime>=1.2,<2",
-    "mcp>=1.0,<2",
+    # Floor is 1.26: mcp.server.transport_security and FastMCP.streamable_http_app()
+    # are what the local-auth wrapper in contextpulse_core.mcp_auth binds to, and
+    # both are verified present at 1.26.0 only. The old >=1.0 floor was fiction --
+    # nothing ever resolved it. Upper bound: mcp 2.0.0 removed mcp.server.fastmcp.
+    "mcp>=1.26,<2",
     "faster-whisper>=1.0,<2",
     "sounddevice>=0.4,<1",
     "pyperclip>=1.8,<2",
@@ -52,7 +56,7 @@ Documentation = "https://github.com/ContextPulse/contextpulse#readme"
 [project.optional-dependencies]
 # contextpulse-memory source is vendored via packages.find; mcp[cli] is the only
 # extra third-party need the memory sub-package declares beyond the base deps.
-memory = ["mcp[cli]>=1.0,<2"]
+memory = ["mcp[cli]>=1.26,<2"]
 macos = [
     "pyobjc-framework-Cocoa>=12.1",
     "pyobjc-framework-Quartz>=10.0",

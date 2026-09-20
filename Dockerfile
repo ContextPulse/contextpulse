@@ -8,7 +8,10 @@
 # exposes the tool catalog for Glama's registry listing.
 #
 # Users install the real daemon locally from https://github.com/ContextPulse/contextpulse
-# and point their MCP client at localhost:8420/mcp.
+# and point their MCP client at localhost:8420/mcp, with the access token that
+# install generates (`contextpulse-mcp --print-config claude-code`, or the tray
+# under Settings -> MCP Access). This stub serves a catalog only and has no
+# token of its own -- there is nothing local for it to expose.
 
 FROM python:3.12-slim
 

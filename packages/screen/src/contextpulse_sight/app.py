@@ -728,7 +728,10 @@ def main():
             else:
                 setup_client(target)
         else:
-            print("Usage: contextpulse-sight --setup {claude-code|cursor|gemini|all|print}")
+            print(
+                "Usage: contextpulse-sight --setup "
+                "{claude-code|cursor|gemini|claude-desktop|all|print}"
+            )
             _sys.exit(1)
         return
 

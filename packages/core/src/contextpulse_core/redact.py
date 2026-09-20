@@ -119,6 +119,14 @@ _PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"[sr]k_(?:live|test)_[A-Za-z0-9]{16,}"), "[REDACTED:STRIPE_KEY]"),
     (re.compile(r"AIza[A-Za-z0-9_-]{35}"), "[REDACTED:GOOGLE_KEY]"),
     (re.compile(r"npm_[A-Za-z0-9]{36}"), "[REDACTED:NPM_TOKEN]"),
+    # ContextPulse's own MCP access token. It carries this prefix
+    # (contextpulse_core.mcp_auth.TOKEN_PREFIX) for exactly one reason: so this
+    # table can recognise it. The Settings dialog renders the bare value with
+    # no "Bearer " in front of it, and without this pattern a screenshot of
+    # that dialog stored the live token in activity.db, readable back out
+    # through get_screen_text and search_history -- the product capturing the
+    # credential to the product.
+    (re.compile(r"cpmcp_[A-Za-z0-9_-]{20,}"), "[REDACTED:CP_MCP_TOKEN]"),
     # Twilio account SID: AC + exactly 32 hex. The hex requirement is what
     # keeps this off ordinary words beginning "AC".
     (re.compile(r"AC[0-9a-f]{32}"), "[REDACTED:TWILIO_SID]"),

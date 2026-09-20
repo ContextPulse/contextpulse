@@ -23,7 +23,7 @@ classifiers = [
 requires-python = ">=3.12"
 dependencies = [
     "contextpulse-core",
-    "mcp[cli]>=1.0,<2",
+    "mcp[cli]>=1.26,<2",
     "numpy>=1.26,<3",
     "onnxruntime>=1.17,<2",
     "tokenizers>=0.19,<1",
