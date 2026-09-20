@@ -503,11 +503,32 @@ class TestLastGoodOnParseFailure:
     def test_recovers_when_the_file_becomes_valid_again(self, isolated_config):
         appdata, config_file = isolated_config
         appdata.mkdir(parents=True, exist_ok=True)
-        config_file.write_text(json.dumps({"auto_interval": 11}))
+
+        def write(text: str) -> None:
+            # Direct writes, not save_config(): bump mtime explicitly so the
+            # three writes cannot share one filesystem timestamp tick (they
+            # did on a windows-latest runner, and "11" and "12" are the same
+            # size, so the reader's (mtime_ns, size) key saw no change).
+            config_file.write_text(text)
+            st = config_file.stat()
+            os.utime(config_file, ns=(st.st_atime_ns, st.st_mtime_ns + 10_000_000))
+
+        write(json.dumps({"auto_interval": 11}))
         assert load_config()["auto_interval"] == 11
-        config_file.write_text("{ broken")
+        write("{ broken")
         assert load_config()["auto_interval"] == 11
-        config_file.write_text(json.dumps({"auto_interval": 12}))
+        write(json.dumps({"auto_interval": 12}))
+        assert load_config()["auto_interval"] == 12
+
+    def test_two_same_size_saves_in_one_tick_both_reach_the_reader(self, isolated_config):
+        """save_config() nudges mtime when a save would reuse the previous stamp."""
+        appdata, config_file = isolated_config
+        appdata.mkdir(parents=True, exist_ok=True)
+        save_config({"auto_interval": 11})
+        assert load_config()["auto_interval"] == 11
+        first = config_file.stat().st_mtime_ns
+        save_config({"auto_interval": 12})  # same length as 11
+        assert config_file.stat().st_mtime_ns > first
         assert load_config()["auto_interval"] == 12
 
     def test_warns_once_per_failure_not_once_per_read(self, isolated_config, caplog):

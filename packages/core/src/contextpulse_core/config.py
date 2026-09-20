@@ -436,7 +436,19 @@ def save_config(data: dict) -> None:
             elif key not in _DEFAULTS:
                 to_save[key] = val  # unknown keys preserved
         tmp.write_text(json.dumps(to_save, indent=2), encoding="utf-8")
+        try:
+            before = CONFIG_FILE.stat()
+            before_key = (before.st_mtime_ns, before.st_size)
+        except OSError:
+            before_key = None
         os.replace(tmp, CONFIG_FILE)
+        # Readers detect change by (mtime_ns, size). Two same-length saves
+        # inside one filesystem timestamp tick (NTFS coalesces mtime updates)
+        # would otherwise be invisible to them; nudge mtime forward so every
+        # save is a new stamp.
+        after = CONFIG_FILE.stat()
+        if before_key is not None and (after.st_mtime_ns, after.st_size) == before_key:
+            os.utime(CONFIG_FILE, ns=(after.st_atime_ns, after.st_mtime_ns + 1_000_000))
     except Exception:
         logger.exception("Failed to save config.json")
     finally:
