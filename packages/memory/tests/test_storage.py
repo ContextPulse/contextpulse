@@ -5,7 +5,26 @@ from __future__ import annotations
 import time
 
 import pytest
-from contextpulse_memory.storage import ColdTier, HotTier, MemoryStore, WarmTier
+from contextpulse_memory.storage import _COLD_WINDOW, ColdTier, HotTier, MemoryStore, WarmTier
+
+
+def window_safe_now() -> float:
+    """A recent timestamp pinned to the MIDDLE of a cold-tier window.
+
+    ColdTier buckets by ``int(updated_at // _COLD_WINDOW)``. Any test that
+    writes two entries a second apart and expects ONE window is asserting
+    something the wall clock only grants about 899 times in 900: when
+    ``time.time()`` lands on the last second of a window, the two entries
+    land in different buckets and the assertion fails on the boundary
+    rather than on the behaviour under test.
+
+    Caught on PR 15, which changed only ``.github/dependabot.yml`` and so
+    could not have caused a test failure -- identical code had passed on
+    main an hour earlier, which is what made it worth chasing instead of
+    re-running. Staying near the real clock rather than using a fixed
+    epoch keeps any recency logic seeing a plausible timestamp.
+    """
+    return (int(time.time()) // _COLD_WINDOW) * _COLD_WINDOW + _COLD_WINDOW / 2
 
 # ---------------------------------------------------------------------------
 # HotTier tests
@@ -457,7 +476,7 @@ class TestWarmTierEdgeCases:
 class TestColdTierEdgeCases:
     def test_ingest_multiple_windows(self, cold):
         """Entries spanning 2 different 15-minute windows produce 2 summaries."""
-        now = time.time()
+        now = window_safe_now()
         # Two entries 20 minutes apart — guaranteed different 15-min windows
         entries = [
             {"key": "early", "value": "morning data", "updated_at": now - 1200, "modality": None},
@@ -469,7 +488,7 @@ class TestColdTierEdgeCases:
 
     def test_ingest_replaces_same_window(self, cold):
         """Re-ingesting entries in the same window should UPDATE, not duplicate."""
-        now = time.time()
+        now = window_safe_now()
         entries1 = [{"key": "k1", "value": "first pass", "updated_at": now, "modality": None}]
         entries2 = [{"key": "k2", "value": "second pass", "updated_at": now + 1, "modality": None}]
 
@@ -482,7 +501,7 @@ class TestColdTierEdgeCases:
 
     def test_modalities_tracked(self, cold):
         """Verify the modalities field in the cold summary is populated."""
-        now = time.time()
+        now = window_safe_now()
         entries = [
             {"key": "s1", "value": "screen", "updated_at": now, "modality": "sight"},
             {"key": "v1", "value": "voice", "updated_at": now + 1, "modality": "voice"},
@@ -496,9 +515,36 @@ class TestColdTierEdgeCases:
         assert "sight" in modalities
         assert "voice" in modalities
 
+    def test_entries_straddling_a_window_boundary_produce_two_windows(self, cold):
+        """The behaviour the flake was accidentally exercising, asserted on purpose.
+
+        Two entries one second apart across a boundary SHOULD land in separate
+        windows -- that is correct bucketing, not a defect. The tests above
+        were wrong to assume one window from a wall-clock `now`, not the code.
+        Pinning them to a window-safe timestamp removes the coin flip; this
+        test keeps the other side of it covered deterministically, so nobody
+        "fixes" the bucketing later to make a same-window assertion pass.
+        """
+        boundary = (int(time.time()) // _COLD_WINDOW) * _COLD_WINDOW + _COLD_WINDOW - 1
+        entries = [
+            {"key": "s1", "value": "screen", "updated_at": boundary, "modality": "sight"},
+            {"key": "v1", "value": "voice", "updated_at": boundary + 1, "modality": "voice"},
+        ]
+        assert cold.ingest(entries) == 2
+        assert cold.count() == 2
+
+    def test_window_safe_now_is_never_within_a_second_of_a_boundary(self):
+        """The helper's whole job, checked -- otherwise it is decoration."""
+        now = window_safe_now()
+        offset = now % _COLD_WINDOW
+        assert 1 < offset < _COLD_WINDOW - 1, f"offset {offset} is boundary-adjacent"
+        assert int(now // _COLD_WINDOW) == int((now + 1) // _COLD_WINDOW), (
+            "an entry one second later would land in a different window"
+        )
+
     def test_search_fts_syntax_fallback(self, cold):
         """Invalid FTS query falls back to LIKE search."""
-        now = time.time()
+        now = window_safe_now()
         cold.ingest([{"key": "k", "value": "fallback AND OR test", "updated_at": now, "modality": None}])
         # "AND OR" is invalid FTS5 — should fall back to LIKE
         results = cold.search("AND OR")
