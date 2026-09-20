@@ -87,7 +87,14 @@ ENV_READ_ALLOWLIST: dict[str, set[str]] = {
         "CONTEXTPULSE_LOG_REPEAT_THRESHOLD",
         "CONTEXTPULSE_LOG_REPEAT_EVERY",
     },
-    "packages/core/src/contextpulse_core/_thread_caps.py": {"CONTEXTPULSE_CPU_THREADS"},
+    # Both read before config.json is loaded: apply_caps() runs ahead of the
+    # numeric imports, and the Whisper budget is its deliberately separate
+    # sibling (the hot-path cap must not inherit a stale CPU_THREADS value).
+    # Neither has a Settings control; they are operator overrides, not tunables.
+    "packages/core/src/contextpulse_core/_thread_caps.py": {
+        "CONTEXTPULSE_CPU_THREADS",
+        "CONTEXTPULSE_WHISPER_THREADS",
+    },
     "packages/core/src/contextpulse_core/probe.py": {
         "CONTEXTPULSE_ACTIVITY_DB",
         "CONTEXTPULSE_PROBE_DB",
