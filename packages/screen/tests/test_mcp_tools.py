@@ -537,9 +537,10 @@ class TestStorageModeLogic:
             assert result["type"] == "image"
             assert result["chars"] == 0
 
-    def test_always_both_apps_config(self):
-        from contextpulse_sight.config import ALWAYS_BOTH_APPS
-        assert "thinkorswim.exe" in ALWAYS_BOTH_APPS
+    def test_always_both_apps_config(self, isolated_config):
+        from contextpulse_core.config import load_config
+
+        assert "thinkorswim.exe" in load_config()["always_both_apps"]
 
 
 class TestSearchHistoryHonoursTheSavedBlocklist:

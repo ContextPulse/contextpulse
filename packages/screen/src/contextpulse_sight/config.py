@@ -1,92 +1,45 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2025-2026 Jerard Ventures LLC
-"""Configuration loading from environment variables."""
+"""Filesystem paths for the Sight package.
 
-import os
-from pathlib import Path
+This module used to be the second of two config systems. It declared 22
+constants, read them from ``CONTEXTPULSE_*`` environment variables at import,
+and never looked at ``config.json`` -- while ``contextpulse_core.config``
+declared most of the same keys, was what the Settings dialog wrote, and was
+read by almost nothing in the capture path. Every tunable the dialog offered
+was therefore a control over a value the daemon did not use
+(cp-settings-dialog-disconnected-from-daemon).
 
-from dotenv import load_dotenv
+``contextpulse_core.config`` is now the one declaration site. What is left
+here is paths, and nothing else:
 
-# Load optional workspace-level .env from CONTEXTPULSE_DOTENV env var, then local overrides.
-# This avoids hardcoding any specific user's directory structure.
-_workspace_dotenv = os.environ.get("CONTEXTPULSE_DOTENV", "")
-if _workspace_dotenv:
-    load_dotenv(_workspace_dotenv, override=True)
-load_dotenv(override=True)  # local .env overrides everything
+* ``OUTPUT_DIR`` and ``ACTIVITY_DB_PATH`` are re-exported from core so the two
+  packages cannot resolve them differently. They are startup-bound and
+  env-only there by design -- a path is chosen once, when the process opens
+  its files.
+* the four derived paths below hang off ``OUTPUT_DIR``.
 
+There are deliberately NO wrapper constants for tunables. A module-level
+``JPEG_QUALITY = cfg_get("jpeg_quality")`` would look like a fix and be the
+original defect: a value frozen at import, unable to change while the daemon
+runs. Readers call ``contextpulse_core.config.get`` at the point of use.
+"""
 
-def _env(key: str, default: str) -> str:
-    return os.environ.get(key, default)
+from contextpulse_core.config import ACTIVITY_DB_PATH, OUTPUT_DIR
 
+__all__ = [
+    "ACTIVITY_DB_PATH",
+    "BUFFER_DIR",
+    "FILE_ALL",
+    "FILE_LATEST",
+    "FILE_REGION",
+    "OUTPUT_DIR",
+]
 
-# Output directory
-OUTPUT_DIR = Path(_env("CONTEXTPULSE_OUTPUT_DIR", str(Path.home() / "screenshots")))
-
-# Image settings
-MAX_WIDTH = int(_env("CONTEXTPULSE_MAX_WIDTH", "1280"))
-MAX_HEIGHT = int(_env("CONTEXTPULSE_MAX_HEIGHT", "720"))
-JPEG_QUALITY = max(1, min(100, int(_env("CONTEXTPULSE_JPEG_QUALITY", "90"))))
-
-# Auto-capture interval in seconds (default 5s, 0 = disabled)
-AUTO_INTERVAL = max(0, int(_env("CONTEXTPULSE_AUTO_INTERVAL", "5")))
-
-# Adaptive idle interval: when no event has fired (window switch / cursor
-# activity) for AUTO_IDLE_THRESHOLD seconds, the capture loop stretches the
-# interval to AUTO_INTERVAL_IDLE. Snaps back to AUTO_INTERVAL on the next
-# event. This drops idle CPU from ~30% to ~5% on a multi-monitor setup.
-AUTO_INTERVAL_IDLE = max(1, int(_env("CONTEXTPULSE_AUTO_INTERVAL_IDLE", "30")))
-AUTO_IDLE_THRESHOLD = max(1, int(_env("CONTEXTPULSE_AUTO_IDLE_THRESHOLD", "60")))
-
-# Rolling buffer settings
+# Rolling buffer directory
 BUFFER_DIR = OUTPUT_DIR / "buffer"
-BUFFER_MAX_AGE = max(0, int(_env("CONTEXTPULSE_BUFFER_MAX_AGE", "1800")))  # seconds (30 min)
-CHANGE_THRESHOLD = max(0.0, float(_env("CONTEXTPULSE_CHANGE_THRESHOLD", "0.5")))  # % pixel diff
-
-# OCR-skip threshold — frames stored in the buffer below this diff %
-# are NOT enqueued for OCR. Idle screens with cursor blinks / clock ticks
-# usually produce 0.5%-3% diffs, which is enough to update the visual
-# buffer but not worth a 0.2-0.7s OCR pass. Real content changes (window
-# switch, scroll, edit) produce >5% diffs. Set to 0 to disable the gate
-# (fall back to prior behavior of always OCR'ing every stored frame).
-OCR_DIFF_THRESHOLD = max(
-    0.0, float(_env("CONTEXTPULSE_OCR_DIFF_THRESHOLD", "5.0"))
-)  # % pixel diff
-
-# Storage mode: "smart" (text-only when text-heavy, image otherwise),
-#               "visual" (always save image, never text-only),
-#               "both" (always save image + run OCR text),
-#               "text" (always try text-only, image as fallback)
-STORAGE_MODE = _env("CONTEXTPULSE_STORAGE_MODE", "smart").lower()
-if STORAGE_MODE not in ("smart", "visual", "both", "text"):
-    STORAGE_MODE = "smart"
 
 # File paths (stable, overwritten each capture)
 FILE_LATEST = OUTPUT_DIR / "screen_latest.jpg"
 FILE_ALL = OUTPUT_DIR / "screen_all.png"
 FILE_REGION = OUTPUT_DIR / "screen_region.png"
-
-# Event-driven capture settings
-EVENT_POLL_INTERVAL = max(0.1, float(_env("CONTEXTPULSE_EVENT_POLL_INTERVAL", "0.5")))  # seconds
-EVENT_MOVEMENT_THRESHOLD = max(50, int(_env("CONTEXTPULSE_EVENT_MOVEMENT_THRESHOLD", "200")))  # pixels
-EVENT_IDLE_THRESHOLD = max(5, int(_env("CONTEXTPULSE_EVENT_IDLE_THRESHOLD", "30")))  # seconds
-
-# Activity tracking
-ACTIVITY_DB_PATH = OUTPUT_DIR / _env("CONTEXTPULSE_ACTIVITY_DB", "activity.db")
-ACTIVITY_MAX_AGE = max(0, int(_env("CONTEXTPULSE_ACTIVITY_MAX_AGE", "86400")))  # seconds (24h)
-
-# Apps that always keep both image + text (charts, design tools, etc.)
-ALWAYS_BOTH_APPS: list[str] = [
-    p.strip().lower() for p in _env("CONTEXTPULSE_ALWAYS_BOTH", "thinkorswim.exe").split(",") if p.strip()
-]
-
-# Privacy: window title blocklist (case-insensitive substring matching)
-BLOCKLIST_PATTERNS: list[str] = [
-    p.strip() for p in _env("CONTEXTPULSE_BLOCKLIST", "").split(",") if p.strip()
-]
-
-_blocklist_file = Path(_env("CONTEXTPULSE_BLOCKLIST_FILE", ""))
-if _blocklist_file.is_file():
-    for _line in _blocklist_file.read_text(encoding="utf-8").splitlines():
-        _line = _line.strip()
-        if _line and not _line.startswith("#"):
-            BLOCKLIST_PATTERNS.append(_line)

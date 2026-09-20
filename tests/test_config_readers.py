@@ -20,32 +20,29 @@ script, all specified there:
   looks alive from the outside. Excluding the dialog makes those keys read as
   zero-reader, which is the truth about the daemon.
 
-WHY THESE TESTS ARE `xfail(strict=True)` RIGHT NOW
---------------------------------------------------
-This file lands in step 1/2 of the spec, before any reader is rewired. The
-guard is therefore *expected to fail*, and strict xfail is what proves it can
-detect the defect it exists to catch: if someone wires the readers, the test
-starts passing and strict xfail turns that into a hard XPASS failure, forcing
-the marker to be removed rather than quietly leaving a dead guard behind.
+STATE AFTER SPEC STEPS 3-4 (the sight readers), measured, not asserted
+----------------------------------------------------------------------
+The dead-key half is now a REAL guard: it passes, with no marker. Every key
+in `_DEFAULTS` has a production reader outside `config.py`/`settings.py`,
+except the one documented in `CORE_ONLY_KEYS` below -- which is not dead,
+it is consumed inside the loader itself.
 
-Pre-fix baseline, measured on branch feat/config-unification-core at the
-commit that added this file (printed by the tests themselves, see the
-`BASELINE` output line):
+The env-read half is still `xfail(strict=True)`, and the reason is now
+specific rather than a whole-system baseline. Twelve reads remain; five are
+genuinely not tunables and have moved into `ENV_READ_ALLOWLIST` with their
+reasons, leaving SEVEN, all in `contextpulse_voice/config.py` (3) and
+`contextpulse_touch/config.py` (4). Those are spec step 7, which is the
+sibling branch `feat/config-unification-modules`; the marker comes off when
+that lands. Strict xfail alone would only fire once the count reached zero
+and would say nothing about a NEW stray read appearing elsewhere, so
+`test_every_remaining_env_read_is_in_voice_or_touch_config` sits beside it
+as the guard that works during the transition.
 
-* dead keys: the MISLEADING rows 7-17 of `.internal/audit-2026-09-19/
-  dead-controls.md` -- `auto_interval`, `storage_mode`, `jpeg_quality`,
-  `buffer_max_age`, the four `hotkey_*`, `blocklist_patterns`,
-  `always_both_apps`, `blocklist_file` -- plus the keys added in step 1 that
-  have no reader yet (`auto_interval_idle`, `auto_idle_threshold`,
-  `ocr_diff_threshold`) and the sight-side duplicates of row 30
-  (`change_threshold`, `max_width`, `max_height`, `activity_max_age`, the
-  three `event_*`). `memory_enabled`/`memory_tier`/`output_dir` are NOT in the
-  baseline -- step 1 deleted them, which is the first reduction this guard
-  can see.
-* ungoverned env reads: `contextpulse_sight/config.py` (system B, deleted in
-  spec step 4), `contextpulse_voice/config.py` and
-  `contextpulse_touch/config.py` (their `_env`/`os.environ` fallbacks, deleted
-  in step 7), and `daemon.py`'s own `CONTEXTPULSE_ACTIVITY_DB` (step 6).
+Pre-fix baseline this replaces, for the record: 21 dead keys (the MISLEADING
+rows 7-17 of `.internal/audit-2026-09-19/dead-controls.md` plus the row-30
+sight duplicates and the three keys step 1 added) and reads in
+`contextpulse_sight/config.py`, the voice/touch fallbacks and `daemon.py`'s
+own `CONTEXTPULSE_ACTIVITY_DB`.
 """
 
 from __future__ import annotations
@@ -63,6 +60,24 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 EXCLUDED_FROM_READER_SCAN = (
     "packages/core/src/contextpulse_core/config.py",
     "packages/core/src/contextpulse_core/settings.py",
+)
+
+# Keys whose only consumer is the loader itself, which the reader scan
+# excludes on purpose. These can never acquire an "outside" reader, so
+# leaving them in the dead list would make the guard permanently red for a
+# key that is working exactly as designed.
+#
+# blocklist_file: load_config() opens the file and APPENDS its lines to
+# blocklist_patterns, so what every reader downstream sees is the merged
+# blocklist. A second reader would be a second implementation of the merge.
+CORE_ONLY_KEYS: set[str] = {"blocklist_file"}
+
+# The file the seven remaining ungoverned reads live in belongs to spec step
+# 7 (branch feat/config-unification-modules). Named here so a stray read in
+# any OTHER file fails immediately instead of hiding behind the xfail.
+ENV_FILES_AWAITING_STEP_7 = (
+    "packages/voice/src/contextpulse_voice/config.py",
+    "packages/touch/src/contextpulse_touch/config.py",
 )
 
 # Env vars that are legitimately NOT user tunables: paths, diagnostics and
@@ -89,6 +104,23 @@ ENV_READ_ALLOWLIST: dict[str, set[str]] = {
     },
     "packages/knowledge/src/contextpulse_knowledge/mcp_tools.py": {"CONTEXTPULSE_KNOWLEDGE_DB"},
     "packages/memory/src/contextpulse_memory/mcp_server.py": {"CONTEXTPULSE_MEMORY_DIR"},
+    # A token's env-var NAME and the .env search path. Neither is a setting
+    # with a config.json key; the first is where the MCP auth token is read
+    # from, the second is the dotenv location core config itself honours.
+    "packages/core/src/contextpulse_core/mcp_auth.py": {
+        "CONTEXTPULSE_MCP_AUTH",
+        "CONTEXTPULSE_DOTENV",
+    },
+    # Debug trace switches for the clipboard/paste incident work, default
+    # off, no UI, no config key. Deliberately env-only: they exist to be
+    # turned on for one reproduction run.
+    "packages/core/src/contextpulse_core/platform/windows.py": {
+        "CONTEXTPULSE_CLIPBOARD_READ_BREADCRUMBS",
+    },
+    "packages/voice/src/contextpulse_voice/paster.py": {
+        "CONTEXTPULSE_PASTE_BREADCRUMBS",
+        "CONTEXTPULSE_CLIPBOARD_READ_BREADCRUMBS",
+    },
     # A thread-budget diagnostic, the sibling of _thread_caps' variable --
     # not a tunable. The spec expected daemon.py to hold no env reads after
     # step 6; that refers to CONTEXTPULSE_ACTIVITY_DB (line 58), which is
@@ -180,7 +212,7 @@ def _docstring_nodes(tree: ast.AST) -> set[int]:
 
 def _keys_without_readers() -> dict[str, int]:
     """{config key: number of production readers outside config.py/settings.py}."""
-    counts = dict.fromkeys(_DEFAULTS, 0)
+    counts = {k: 0 for k in _DEFAULTS if k not in CORE_ONLY_KEYS}
     for py_file in _source_files():
         if _rel(py_file) in EXCLUDED_FROM_READER_SCAN:
             continue
@@ -270,31 +302,71 @@ def test_no_two_keys_share_an_env_var():
 # ── The guard proper (expected red until the readers are wired) ─────────
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Pre-fix baseline: the MISLEADING rows 7-17 of dead-controls.md plus the "
-        "row-30 sight duplicates and the 3 keys added by spec step 1. Flips to a "
-        "hard XPASS failure -- deliberately -- once spec steps 3-7 wire the readers."
-    ),
-)
 def test_every_config_key_has_a_production_reader():
+    """No marker: this passes as of spec steps 3-4.
+
+    It was xfail(strict=True) against a 21-key baseline until the sight
+    readers were wired. The marker came off rather than being re-pointed at
+    a smaller baseline -- a guard that is allowed to fail cannot report the
+    22nd dead key, and the whole point of this file is to catch the NEXT one.
+    """
     dead = _keys_without_readers()
-    print(f"\nBASELINE dead keys (no reader outside config.py/settings.py): {len(dead)}")
+    print(f"\ndead keys (no reader outside config.py/settings.py): {len(dead)}")
     for key in sorted(dead):
         print(f"  - {key}")
     assert not dead, (
         f"{len(dead)} config key(s) declared in _DEFAULTS with no production reader "
-        f"outside contextpulse_core/config.py and settings.py: {sorted(dead)}"
+        f"outside contextpulse_core/config.py and settings.py: {sorted(dead)}. "
+        f"Either wire a reader, delete the key, or -- if the loader is its only "
+        f"legitimate consumer -- add it to CORE_ONLY_KEYS with the reason."
+    )
+
+
+def test_the_core_only_exemption_is_not_a_back_door():
+    """CORE_ONLY_KEYS must name real keys, and must stay small.
+
+    Without this, the exemption above is a place to quietly park any key that
+    fails the guard, which would turn a working check into a formality.
+    """
+    unknown = sorted(CORE_ONLY_KEYS - set(_DEFAULTS))
+    assert not unknown, f"CORE_ONLY_KEYS names keys _DEFAULTS does not declare: {unknown}"
+    assert len(CORE_ONLY_KEYS) <= 2, (
+        f"CORE_ONLY_KEYS has grown to {sorted(CORE_ONLY_KEYS)}. Each entry is a key "
+        f"the dead-key guard can never see; adding one is a decision, not a fix."
+    )
+
+
+def test_every_remaining_env_read_is_in_voice_or_touch_config():
+    """The working half of the env guard, during the transition.
+
+    The xfail below only fires when the count reaches zero, so on its own it
+    would happily absorb a brand-new ungoverned read in a brand-new module --
+    system B regrowing, which is the thing this file exists to prevent. This
+    one fails the moment a read appears anywhere except the two files spec
+    step 7 rewrites.
+    """
+    strays = sorted(
+        hit for hit in _ungoverned_env_reads()
+        if not hit.startswith(tuple(f"{f}:" for f in ENV_FILES_AWAITING_STEP_7))
+    )
+    assert not strays, (
+        f"{len(strays)} CONTEXTPULSE_* read(s) outside {list(ENV_FILES_AWAITING_STEP_7)}: "
+        f"{strays}. Every tunable belongs in _DEFAULTS/_ENV_MAP; anything that is not a "
+        f"tunable goes in ENV_READ_ALLOWLIST with a reason."
     )
 
 
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "Pre-fix baseline: contextpulse_sight/config.py (system B), the voice/touch "
-        "env fallbacks, and daemon.py's own CONTEXTPULSE_ACTIVITY_DB. Deleted by spec "
-        "steps 4, 6 and 7; strict xfail forces the marker off when they go."
+        "Baseline after spec steps 3-4: SEVEN reads, all of them the _env() "
+        "fallbacks in contextpulse_voice/config.py (CONTEXTPULSE_VOICE_HOTKEY, "
+        "_VOICE_FIX_HOTKEY, _VOICE_MODEL) and contextpulse_touch/config.py "
+        "(CONTEXTPULSE_TOUCH_BURST_TIMEOUT, _CORRECTION_WINDOW, _MIN_BURST_CHARS, "
+        "_MOUSE_DEBOUNCE). Deleted by spec step 7 on branch "
+        "feat/config-unification-modules; strict xfail forces the marker off when "
+        "that lands. contextpulse_sight/config.py and daemon.py's own "
+        "CONTEXTPULSE_ACTIVITY_DB are gone from this list."
     ),
 )
 def test_only_core_config_reads_contextpulse_env_vars():
