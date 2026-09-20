@@ -303,6 +303,29 @@ class TestSecretsNeverReachStorageOrMCP:
         )
 
 
+class TestMonitorAccessorRedactsPreFixRows:
+    """ClipboardMonitor.get_recent() reads rows back out of the store."""
+
+    def test_get_recent_masks_a_raw_row(self, tmp_path):
+        from contextpulse_sight.activity import ActivityDB
+        from contextpulse_sight.clipboard import ClipboardMonitor
+
+        secret = "sk-zqaccessorneedle0123456789ABCD"
+        db = ActivityDB(db_path=tmp_path / "activity.db")
+        try:
+            # Straight to the table, bypassing the monitor -- a pre-fix row.
+            db.record_clipboard(timestamp=time.time(), text=f"{CONTROL_WORD}\n{secret}\n")
+            entries = ClipboardMonitor(db).get_recent(count=5)
+        finally:
+            db.close()
+
+        assert len(entries) == 1
+        assert CONTROL_WORD in entries[0]["text"], "returned nothing to redact"
+        assert secret not in entries[0]["text"]
+        # Other columns must survive the rewrite.
+        assert "timestamp" in entries[0] and "id" in entries[0]
+
+
 class TestPreFixRowsAreRedactedAtTheMCPBoundary:
     """Rows written before the fix are still raw on disk.
 

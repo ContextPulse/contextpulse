@@ -146,8 +146,17 @@ class ClipboardMonitor:
         logger.debug("Clipboard captured: %d chars", len(text))
 
     def get_recent(self, count: int = 10) -> list[dict]:
-        """Get recent clipboard entries."""
-        return self._activity_db.get_clipboard_history(count)
+        """Get recent clipboard entries, with secrets masked.
+
+        Rows written before clipboard redaction shipped are still raw on disk,
+        so reading them back is its own exposure. This accessor currently has
+        no callers, which is exactly why it is worth fixing now rather than
+        when one appears.
+        """
+        return [
+            {**entry, "text": redact_sensitive(entry.get("text", ""))}
+            for entry in self._activity_db.get_clipboard_history(count)
+        ]
 
 
 def _get_clipboard_sequence() -> int:
