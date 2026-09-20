@@ -32,6 +32,7 @@ CLIP_SECRET = "sk-zqmigrationneedle0123456789ABCD"
 OCR_SECRET = "ghp_zqmigrationocr0123456789abcdefghijkl"
 BURST_SECRET = "ghp_zqmigrationburst0123456789abcdefghij"
 FACT_SECRET = "AKIAZQMIGRATIONFACT1"
+MEM_SECRET = "sk-zqmemsweepneedle0123456789ABCD"
 OBS_SECRET = "password: zqmigrationobs42"
 
 
@@ -388,6 +389,139 @@ class TestOneMarkerPerStore:
         db_path = _activity_db(tmp_path)
         purge.ensure_migrated(db_path, probe_db=tmp_path / "absent.db")
         assert f"{purge.MIGRATION_NAME}:probe" in _markers(db_path)
+
+
+def _memory_db(tmp_path):
+    """A warm tier holding one raw pre-fix row, planted through its own writer.
+
+    WarmTier.upsert stores what it is given -- MemoryStore.store is where
+    redaction lives -- so this is exactly the shape of a row written before the
+    memory package began redacting.
+    """
+    from contextpulse_memory.storage import WarmTier
+
+    path = tmp_path / "memory.db"
+    tier = WarmTier(path)
+    tier.upsert(
+        key=f"{CONTROL_WORD}/deploy",
+        value=f"{CONTROL_WORD} {MEM_SECRET}",
+        tags=[CONTROL_WORD, MEM_SECRET],
+        expires_at=None,
+    )
+    tier.close()
+    return path
+
+
+def _memory_cold_db(tmp_path):
+    from contextpulse_memory.storage import ColdTier
+
+    path = tmp_path / "memory_cold.db"
+    tier = ColdTier(path)
+    tier.ingest([{
+        "key": f"{CONTROL_WORD}/archived",
+        "value": f"{CONTROL_WORD} {MEM_SECRET}",
+        "updated_at": time.time(),
+        "modality": "memory",
+    }])
+    tier.close()
+    return path
+
+
+def _table_text(db_path, sql):
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return " ".join(
+            " ".join(str(c or "") for c in row) for row in conn.execute(sql)
+        )
+    finally:
+        conn.close()
+
+
+class TestMemoryStoresAreSwept:
+    """Review S-1, second half: ensure_migrated never opened memory.db.
+
+    Every value stored before the memory package began redacting is still raw
+    on disk AND still indexed, and memory_search reads it. The hot tier needs
+    no sweep -- it is an in-process dict that dies with the daemon.
+    """
+
+    def test_warm_rows_are_swept(self, tmp_path):
+        db_path = _activity_db(tmp_path)
+        memory_db = _memory_db(tmp_path)
+        sql = "SELECT key, value, tags FROM memories"
+        assert MEM_SECRET in _table_text(memory_db, sql), "fixture not raw -- vacuous"
+
+        purge.ensure_migrated(db_path, memory_db=memory_db)
+
+        assert MEM_SECRET not in _table_text(memory_db, sql), "memory.db was not swept"
+        assert CONTROL_WORD in _table_text(memory_db, sql), "context destroyed"
+
+    def test_the_warm_index_is_rebuilt(self, tmp_path):
+        db_path = _activity_db(tmp_path)
+        memory_db = _memory_db(tmp_path)
+
+        purge.ensure_migrated(db_path, memory_db=memory_db)
+
+        conn = sqlite3.connect(str(memory_db))
+        try:
+            assert conn.execute(
+                "SELECT count(*) FROM memories_fts WHERE memories_fts MATCH ?",
+                (CONTROL_WORD,),
+            ).fetchone()[0] == 1, "the whole index was lost -- vacuous"
+            assert conn.execute(
+                "SELECT count(*) FROM memories_fts WHERE memories_fts MATCH ?",
+                ("zqmemsweepneedle0123456789ABCD",),
+            ).fetchone()[0] == 0
+        finally:
+            conn.close()
+
+    def test_cold_rows_are_swept(self, tmp_path):
+        db_path = _activity_db(tmp_path)
+        cold_db = _memory_cold_db(tmp_path)
+        sql = "SELECT text_content, summary_json FROM cold_summaries"
+        assert MEM_SECRET in _table_text(cold_db, sql), "fixture not raw -- vacuous"
+
+        purge.ensure_migrated(db_path, memory_cold_db=cold_db)
+
+        assert MEM_SECRET not in _table_text(cold_db, sql)
+
+    def test_the_swept_summary_json_is_still_valid_json(self, tmp_path):
+        """summary_json is a text column carrying memory KEYS, so it is swept
+        like any other -- but a rewrite that broke the JSON would make the
+        archive unreadable rather than merely redacted."""
+        db_path = _activity_db(tmp_path)
+        cold_db = _memory_cold_db(tmp_path)
+
+        purge.ensure_migrated(db_path, memory_cold_db=cold_db)
+
+        conn = sqlite3.connect(str(cold_db))
+        try:
+            rows = conn.execute("SELECT summary_json FROM cold_summaries").fetchall()
+        finally:
+            conn.close()
+        assert rows, "nothing archived -- vacuous"
+        for (blob,) in rows:
+            assert isinstance(json.loads(blob), dict)
+
+    def test_each_memory_store_carries_its_own_marker(self, tmp_path):
+        db_path = _activity_db(tmp_path)
+        purge.ensure_migrated(
+            db_path,
+            memory_db=_memory_db(tmp_path),
+            memory_cold_db=_memory_cold_db(tmp_path),
+        )
+        markers = _markers(db_path)
+        assert f"{purge.MIGRATION_NAME}:memory" in markers
+        assert f"{purge.MIGRATION_NAME}:memory_cold" in markers
+
+    def test_the_daemon_resolves_the_memory_paths(self):
+        """A sweep nothing passes the paths to is a sweep that never runs."""
+        import inspect
+
+        from contextpulse_core import daemon
+
+        source = inspect.getsource(daemon.run_secret_migration)
+        assert "memory_db" in source and "memory_cold_db" in source
 
 
 class TestDaemonAndMcpBothCallIt:

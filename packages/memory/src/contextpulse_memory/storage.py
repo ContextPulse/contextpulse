@@ -50,6 +50,22 @@ def _cold_indexed_text(row: dict[str, Any]) -> str:
     return str(row.get("text_content") or "")
 
 
+DEFAULT_MEMORY_DIR = Path.home() / ".contextpulse" / "memory"
+
+
+def default_memory_dir() -> Path:
+    """Where memory.db and memory_cold.db live.
+
+    One definition, because the startup secret sweep has to find the same files
+    the MCP server serves from. A second copy of this logic would sweep the
+    default directory while the server read CONTEXTPULSE_MEMORY_DIR, and report
+    a clean zero for a store it never opened.
+    """
+    import os
+
+    return Path(os.environ.get("CONTEXTPULSE_MEMORY_DIR", str(DEFAULT_MEMORY_DIR)))
+
+
 class MemoryQuotaExceeded(Exception):
     """Raised when the warm-tier entry count reaches max_warm_entries."""
 

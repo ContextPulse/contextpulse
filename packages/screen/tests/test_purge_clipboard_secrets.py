@@ -181,6 +181,71 @@ class TestActivityTableIsCovered:
         assert "activity" in str(exc.value)
 
 
+class TestMemoryStoresAreCovered:
+    """Review S-1: memory.db and memory_cold.db were not in the sweep at all,
+    and memory_search reads them."""
+
+    MEM_SECRET = "sk-zqpurgememneedle0123456789ABCD"
+
+    def _memory_dbs(self, tmp_path):
+        from contextpulse_memory.storage import ColdTier, WarmTier
+
+        warm_path, cold_path = tmp_path / "memory.db", tmp_path / "memory_cold.db"
+        warm = WarmTier(warm_path)
+        warm.upsert(
+            key="notes/deploy", value=f"archive note {self.MEM_SECRET}",
+            tags=["ops", self.MEM_SECRET], expires_at=None,
+        )
+        warm.close()
+        cold = ColdTier(cold_path)
+        cold.ingest([{
+            "key": "notes/archived", "value": f"archive note {self.MEM_SECRET}",
+            "updated_at": time.time(), "modality": "memory",
+        }])
+        cold.close()
+        return warm_path, cold_path
+
+    def _text(self, db_path, sql):
+        conn = sqlite3.connect(str(db_path))
+        try:
+            return " ".join(
+                " ".join(str(c or "") for c in row) for row in conn.execute(sql)
+            )
+        finally:
+            conn.close()
+
+    def test_apply_scrubs_both_tiers(self, purge, fixture_db, tmp_path):
+        warm_path, cold_path = self._memory_dbs(tmp_path)
+        warm_sql = "SELECT key, value, tags FROM memories"
+        cold_sql = "SELECT text_content, summary_json FROM cold_summaries"
+        assert self.MEM_SECRET in self._text(warm_path, warm_sql), "vacuous"
+        assert self.MEM_SECRET in self._text(cold_path, cold_sql), "vacuous"
+
+        rc = purge.main([
+            "--db", str(fixture_db), "--apply",
+            "--memory-db", str(warm_path), "--memory-cold-db", str(cold_path),
+        ])
+
+        assert rc == 0
+        assert self.MEM_SECRET not in self._text(warm_path, warm_sql)
+        assert self.MEM_SECRET not in self._text(cold_path, cold_sql)
+        assert "archive note" in self._text(cold_path, cold_sql), "context destroyed"
+
+    def test_the_dry_run_reports_them_without_writing(self, purge, fixture_db, tmp_path, capsys):
+        warm_path, cold_path = self._memory_dbs(tmp_path)
+        before = warm_path.read_bytes()
+
+        purge.main([
+            "--db", str(fixture_db),
+            "--memory-db", str(warm_path), "--memory-cold-db", str(cold_path),
+        ])
+
+        out = capsys.readouterr().out
+        assert "memory.db" in out and "memory_cold.db" in out
+        assert self.MEM_SECRET not in out, "the report printed a value"
+        assert warm_path.read_bytes() == before
+
+
 class TestDryRunIsTheDefault:
     def test_no_args_writes_nothing(self, purge, fixture_db, capsys):
         before = fixture_db.read_bytes()

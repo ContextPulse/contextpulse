@@ -18,15 +18,17 @@ from __future__ import annotations
 import functools
 import json
 import logging
-import os
 import threading
-from pathlib import Path
 
 from contextpulse_core.license import get_license_tier, has_pro_access
 from contextpulse_core.redact import redact_sensitive
 from mcp.server.fastmcp import FastMCP
 
-from contextpulse_memory.storage import MemoryStore, MemoryValueTooLarge
+from contextpulse_memory.storage import (
+    MemoryStore,
+    MemoryValueTooLarge,
+    default_memory_dir,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -65,7 +67,6 @@ def _require_pro(func):
         })
     return wrapper
 
-_DEFAULT_DIR = Path.home() / ".contextpulse" / "memory"
 _store: MemoryStore | None = None
 _store_lock = threading.Lock()
 
@@ -96,7 +97,9 @@ def _get_store() -> MemoryStore:
         return _store
     with _store_lock:
         if _store is None:
-            db_dir = Path(os.environ.get("CONTEXTPULSE_MEMORY_DIR", str(_DEFAULT_DIR)))
+            # Resolved by the storage module so the startup secret sweep and
+            # this server cannot disagree about which files exist.
+            db_dir = default_memory_dir()
             _store = MemoryStore(db_dir)
             logger.info("MemoryStore initialized at %s", db_dir)
     return _store

@@ -344,6 +344,7 @@ def apply_text_table(
     key_column: str,
     text_columns: tuple[str, ...],
     updates: list[tuple],
+    fts_table: str | None = None,
 ) -> None:
     if not updates:
         return
@@ -352,6 +353,13 @@ def apply_text_table(
         conn.executemany(
             f"UPDATE {table} SET {assignments} WHERE {key_column} = ?", updates
         )
+        # cold_summaries carries AFTER INSERT and AFTER DELETE triggers into
+        # cold_fts but NO AFTER UPDATE, so without this the index still holds
+        # the pre-sweep terms -- the same trap `events` has. memories does have
+        # an update trigger; rebuilding anyway costs one statement and removes
+        # the need to remember which is which.
+        if fts_table and table_exists(conn, fts_table):
+            conn.execute(f"INSERT INTO {fts_table}({fts_table}) VALUES('rebuild')")
 
 
 def existing_text_columns(
@@ -367,13 +375,21 @@ def existing_text_columns(
     return tuple(c for c in candidates if c in have)
 
 
-PROBE_FACTS = ("facts", "id", ("entity", "fact"))
-KNOWLEDGE_OBSERVATIONS = ("observations", "id", ("content", "window_title", "url"))
+# (table, key column, candidate text columns, FTS index to rebuild or None)
+PROBE_FACTS = ("facts", "id", ("entity", "fact"), None)
+KNOWLEDGE_OBSERVATIONS = ("observations", "id", ("content", "window_title", "url"), None)
+# memory.db / memory_cold.db. The warm tier indexes key, value AND tags, and
+# all three are stored raw for anything written before the memory package began
+# redacting. summary_json is a text column too: it carries the memory KEYS in
+# each 15-minute window. The hot tier needs no sweep -- it is an in-process
+# dict that dies with the daemon.
+MEMORY_WARM = ("memories", "id", ("key", "value", "tags"), "memories_fts")
+MEMORY_COLD = ("cold_summaries", "id", ("text_content", "summary_json"), "cold_fts")
 
 
 def purge_derived_store(db_path: Path, spec: tuple, apply: bool) -> Tally:
     """Scan (and optionally rewrite) one derived store. Missing DB = empty tally."""
-    table, key_column, candidates = spec
+    table, key_column, candidates, fts_table = spec
     if not db_path.exists():
         return Tally()
     conn = open_db(db_path, read_only=not apply)
@@ -385,7 +401,7 @@ def purge_derived_store(db_path: Path, spec: tuple, apply: bool) -> Tally:
             return Tally()
         tally, updates = scan_text_table(conn, table, key_column, columns)
         if apply:
-            apply_text_table(conn, table, key_column, columns, updates)
+            apply_text_table(conn, table, key_column, columns, updates, fts_table)
         return tally
     finally:
         conn.close()
@@ -464,6 +480,8 @@ def ensure_migrated(
     activity_db: Path,
     probe_db: Path | None = None,
     knowledge_db: Path | None = None,
+    memory_db: Path | None = None,
+    memory_cold_db: Path | None = None,
     name: str = MIGRATION_NAME,
 ) -> dict[str, int]:
     """Redact pre-fix rows in place, once PER STORE, before anything serves them.
@@ -520,6 +538,8 @@ def ensure_migrated(
         for db_path, spec, label in (
             (probe_db, PROBE_FACTS, "probe"),
             (knowledge_db, KNOWLEDGE_OBSERVATIONS, "knowledge"),
+            (memory_db, MEMORY_WARM, "memory"),
+            (memory_cold_db, MEMORY_COLD, "memory_cold"),
         ):
             if db_path is None:
                 continue

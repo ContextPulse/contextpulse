@@ -39,13 +39,15 @@ from pathlib import Path
 # Resolve the package source the same way the tests do, so the script runs from
 # a checkout without an editable install.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-for _pkg in ("screen", "core", "knowledge"):
+for _pkg in ("screen", "core", "knowledge", "memory"):
     _src = _REPO_ROOT / "packages" / _pkg / "src"
     if _src.is_dir() and str(_src) not in sys.path:
         sys.path.insert(0, str(_src))
 
 from contextpulse_core.purge import (  # noqa: E402
     KNOWLEDGE_OBSERVATIONS,
+    MEMORY_COLD,
+    MEMORY_WARM,
     PROBE_FACTS,
     Tally,
     apply_activity_updates,
@@ -132,10 +134,16 @@ def _force_utf8_console() -> None:
             reconfigure(encoding="utf-8", errors="replace")
 
 
-def _derived_paths(args) -> tuple[Path | None, Path | None]:
-    """Resolve probe.db and knowledge.db, honouring explicit overrides."""
-    if args.probe_db is not None or args.knowledge_db is not None:
-        return args.probe_db, args.knowledge_db
+def _derived_paths(args) -> tuple[Path | None, Path | None, Path | None, Path | None]:
+    """Resolve probe.db, knowledge.db and the two memory databases.
+
+    An explicit override of ANY of them turns off discovery for all four, so a
+    run pointed at a fixture directory cannot silently reach into the real
+    stores.
+    """
+    overrides = (args.probe_db, args.knowledge_db, args.memory_db, args.memory_cold_db)
+    if any(o is not None for o in overrides):
+        return overrides
     try:
         from contextpulse_core.probe import default_probe_db
 
@@ -148,7 +156,14 @@ def _derived_paths(args) -> tuple[Path | None, Path | None]:
         knowledge = Path(default_knowledge_db())
     except Exception:  # pragma: no cover - knowledge package absent
         knowledge = None
-    return probe, knowledge
+    try:
+        from contextpulse_memory.storage import default_memory_dir
+
+        memory_dir = Path(default_memory_dir())
+        memory, memory_cold = memory_dir / "memory.db", memory_dir / "memory_cold.db"
+    except Exception:  # pragma: no cover - memory package absent
+        memory, memory_cold = None, None
+    return probe, knowledge, memory, memory_cold
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -161,6 +176,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="probe.db (default: the consolidator's path).")
     parser.add_argument("--knowledge-db", type=Path, default=None,
                         help="knowledge.db (default: the bridge's path).")
+    parser.add_argument("--memory-db", type=Path, default=None,
+                        help="memory.db, the warm tier (default: the store's path).")
+    parser.add_argument("--memory-cold-db", type=Path, default=None,
+                        help="memory_cold.db, the archive (default: the store's path).")
     parser.add_argument("--apply", action="store_true",
                         help="Actually rewrite the rows. Without this, nothing is written.")
     parser.add_argument("--include-titles", action="store_true",
@@ -213,10 +232,12 @@ def main(argv: list[str] | None = None) -> int:
 
         derived_total = 0
         if not args.skip_derived:
-            probe_db, knowledge_db = _derived_paths(args)
+            probe_db, knowledge_db, memory_db, memory_cold_db = _derived_paths(args)
             for path, spec, label in (
                 (probe_db, PROBE_FACTS, "probe.db (facts)"),
                 (knowledge_db, KNOWLEDGE_OBSERVATIONS, "knowledge.db (observations)"),
+                (memory_db, MEMORY_WARM, "memory.db (memories)"),
+                (memory_cold_db, MEMORY_COLD, "memory_cold.db (cold_summaries)"),
             ):
                 if path is None:
                     continue
