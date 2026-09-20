@@ -27,6 +27,17 @@ logger = logging.getLogger("contextpulse.platform.windows")
 # frequency, and it is the line that shows the two threads met at all.
 _READ_BREADCRUMBS = breadcrumbs_enabled("CONTEXTPULSE_CLIPBOARD_READ_BREADCRUMBS", "0")
 
+# Hard cap on how much of a clipboard block is materialised, independent of
+# how big the block is. GlobalSize bounds the read for SAFETY; this bounds it
+# for SIZE. Without it a 200MB text copy allocates 400MB+ in the daemon and
+# holds both the clipboard lock and the Win32 clipboard open long enough for
+# the paster's 2s acquire to fail, dropping a dictation -- the read would be
+# memory-safe and still take the feature down. Sight truncates to 10,000
+# chars immediately afterwards (clipboard.py _MAX_LENGTH), so 1 MiB is ~50x
+# more than any consumer keeps and still small enough to copy in one tick.
+_READ_CAP_CHARS = 1024 * 1024 // 2  # 1 MiB of UTF-16 code units
+
+
 
 class POINT(ctypes.Structure):
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
@@ -123,6 +134,22 @@ class WindowsPlatformProvider(PlatformProvider):
                 max_chars = size_bytes // ctypes.sizeof(ctypes.c_wchar)
                 if not max_chars:
                     return None
+                if max_chars > _READ_CAP_CHARS:
+                    # Logged once, not per poll: a huge clip sits on the
+                    # clipboard for as long as the user leaves it there, and
+                    # one warning per second is the log-flooding shape this
+                    # project has already been bitten by twice.
+                    if "clipboard_read_capped" not in self._warned_errors:
+                        self._warned_errors.add("clipboard_read_capped")
+                        logger.warning(
+                            "Clipboard block is %d bytes (%d chars) — reading "
+                            "the first %d chars only; consumers truncate well "
+                            "below this anyway",
+                            size_bytes,
+                            max_chars,
+                            _READ_CAP_CHARS,
+                        )
+                    max_chars = _READ_CAP_CHARS
                 if _READ_BREADCRUMBS:
                     write_breadcrumb("read_globallock_enter")
                 ptr = _k32.GlobalLock(handle)

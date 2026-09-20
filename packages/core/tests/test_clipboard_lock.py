@@ -91,6 +91,34 @@ class TestReadIsBounded:
 
         assert win.WindowsPlatformProvider().get_clipboard_text() == payload
 
+    def test_an_enormous_block_is_capped(self, monkeypatch, caplog):
+        """GlobalSize bounds the read for SAFETY; _READ_CAP_CHARS for SIZE.
+
+        A 200MB text copy would otherwise allocate 400MB+ in the daemon and
+        hold both the clipboard lock and the Win32 clipboard open long enough
+        for the paster's acquire to time out, dropping a dictation — a read
+        that is memory-safe and still takes the feature down. Sight truncates
+        to 10,000 chars immediately afterwards anyway.
+        """
+        import logging
+
+        from contextpulse_core.platform import windows as win
+
+        # Real memory for what the cap allows, and a GlobalSize that lies far
+        # beyond it — the cap is what keeps the read inside the buffer.
+        buf = ctypes.create_unicode_buffer("A" * win._READ_CAP_CHARS, win._READ_CAP_CHARS + 1)
+        _install_fake_clipboard(monkeypatch, win, buf, 200 * 1024 * 1024)
+        win.WindowsPlatformProvider._warned_errors.discard("clipboard_read_capped")
+
+        with caplog.at_level(logging.WARNING, logger="contextpulse.platform.windows"):
+            got = win.WindowsPlatformProvider().get_clipboard_text()
+            # Second read: the warning must not repeat once a second forever.
+            win.WindowsPlatformProvider().get_clipboard_text()
+
+        assert len(got) == win._READ_CAP_CHARS
+        capped = [r for r in caplog.records if "reading the first" in r.getMessage()]
+        assert len(capped) == 1, "the cap must be logged once, not per poll"
+
     def test_zero_sized_block_reads_nothing(self, monkeypatch):
         """GlobalSize of 0 means there is nothing safe to read."""
         from contextpulse_core.platform import windows as win
