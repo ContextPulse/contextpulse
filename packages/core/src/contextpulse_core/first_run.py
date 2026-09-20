@@ -33,7 +33,7 @@ def mark_first_run_complete() -> None:
 
 def show_welcome_dialog() -> None:
     """Show a welcome dialog for first-time users with hotkey reference."""
-    dlg = gui_theme.create_dialog("ContextPulse — Welcome", width=500, height=400)
+    dlg = gui_theme.create_dialog("ContextPulse — Welcome", width=500, height=470)
 
     frame = tk.Frame(dlg, bg=gui_theme.BG, padx=30, pady=20)
     frame.pack(fill="both", expand=True)
@@ -87,7 +87,35 @@ def show_welcome_dialog() -> None:
         frame,
         "Tray icon: green = active, yellow = paused",
         font=("Segoe UI", 9), fg=gui_theme.TEXT_MUTED,
-    ).pack(pady=(0, 15))
+    ).pack(pady=(0, 10))
+
+    # MCP access — without this line a new user's agent just gets a 401 and
+    # no explanation, because the endpoint now requires a bearer token.
+    gui_theme.make_label(
+        frame,
+        "Your AI agent needs an access token: Settings -> MCP Access,\n"
+        "or run  contextpulse --setup claude-code",
+        font=("Segoe UI", 9), fg=gui_theme.TEXT,
+    ).pack(pady=(0, 8))
+
+    def copy_mcp_config():
+        """Put the Claude Code snippet on the clipboard, token included."""
+        try:
+            import pyperclip
+
+            from contextpulse_core import mcp_auth
+            pyperclip.copy(mcp_auth.config_snippet("claude-code"))
+            status_label.config(text="Copied — paste into ~/.claude.json")
+        except Exception:
+            logger.exception("Could not copy the MCP config snippet")
+            status_label.config(text="Could not copy — see the log")
+
+    status_label = gui_theme.make_label(
+        frame, "", font=("Segoe UI", 8), fg=gui_theme.TEXT_MUTED,
+    )
+
+    btn_frame = tk.Frame(frame, bg=gui_theme.BG)
+    btn_frame.pack(pady=(0, 5))
 
     # Get Started button
     def on_start():
@@ -95,9 +123,16 @@ def show_welcome_dialog() -> None:
         dlg.destroy()
 
     ttk.Button(
-        frame, text="Get Started", style="Accent.TButton",
+        btn_frame, text="Copy MCP config", style="Secondary.TButton",
+        command=copy_mcp_config,
+    ).pack(side="left", padx=(0, 10))
+
+    ttk.Button(
+        btn_frame, text="Get Started", style="Accent.TButton",
         command=on_start,
-    ).pack(pady=(5, 0))
+    ).pack(side="left")
+
+    status_label.pack(pady=(5, 0))
 
     dlg.protocol("WM_DELETE_WINDOW", on_start)
     dlg.wait_window()

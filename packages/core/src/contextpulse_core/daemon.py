@@ -200,6 +200,21 @@ def _refuse_if_session_0() -> None:
     sys.exit(1)
 
 
+def _copy_mcp_token() -> None:
+    """Put the Claude Code MCP snippet, token included, on the clipboard.
+
+    Runs on a spawned thread from the tray callback -- never inline, because
+    blocking a pystray menu callback blocks the whole message pump.
+    """
+    from contextpulse_core import mcp_auth
+    try:
+        import pyperclip
+        pyperclip.copy(mcp_auth.config_snippet("claude-code"))
+        logger.info("Copied MCP client config to the clipboard")
+    except Exception:
+        logger.exception("Could not copy the MCP config to the clipboard")
+
+
 class ContextPulseDaemon:
     """Unified daemon that runs all ContextPulse modules in one process."""
 
@@ -694,6 +709,10 @@ class ContextPulseDaemon:
             pystray.MenuItem(
                 "Enter License Key",
                 lambda: threading.Thread(target=show_nag_dialog, daemon=True).start(),
+            ),
+            pystray.MenuItem(
+                "Copy MCP Token",
+                lambda: threading.Thread(target=_copy_mcp_token, daemon=True).start(),
             ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit", self._quit),

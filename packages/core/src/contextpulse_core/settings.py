@@ -7,6 +7,7 @@ Sections:
   - Hotkeys: 4 configurable hotkeys
   - Privacy: blocklist patterns, always-both apps
   - License: status badge, tier, email, "Enter Key" button
+  - MCP Access: the bearer token clients need, show/copy/regenerate
 Saves to %APPDATA%/ContextPulse/config.json via config module.
 """
 
@@ -14,7 +15,7 @@ import logging
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from contextpulse_core import gui_theme
+from contextpulse_core import gui_theme, mcp_auth
 from contextpulse_core.config import load_config, save_config
 from contextpulse_core.license import (
     get_license_email,
@@ -325,6 +326,114 @@ def _build_and_run() -> None:
         lic_btn_frame, text="Enter License Key", style="Secondary.TButton",
         command=open_license_dialog,
     ).pack(side="left")
+
+    # ── MCP Access Section ────────────────────────────────────────
+    # This section is read-only state, not config: the token lives in its own
+    # file, never in config.json, so save_and_close() must not touch it.
+    _section_header(frame, "MCP Access")
+
+    gui_theme.make_label(
+        frame,
+        "Your AI agent needs this token to reach ContextPulse. Anything holding\n"
+        "it can call every tool, so treat it like a password.",
+        font=("Segoe UI", 9), fg=gui_theme.TEXT_MUTED,
+    ).pack(anchor="w", pady=(0, 6))
+
+    token_state = {"value": "", "shown": False}
+    try:
+        token_state["value"] = mcp_auth.load_or_create_token()
+    except (OSError, RuntimeError):
+        logger.exception("Could not load the MCP access token")
+
+    token_var = tk.StringVar(master=root)
+
+    def _render_token() -> None:
+        token = token_state["value"]
+        if not token:
+            token_var.set("unavailable — see the log")
+        elif token_state["shown"]:
+            token_var.set(token)
+        else:
+            token_var.set(f"{token[:4]}{'•' * 24}{token[-4:]}")
+
+    _render_token()
+
+    tk.Label(
+        frame, textvariable=token_var,
+        font=("Consolas", 9), fg=gui_theme.TEXT, bg=gui_theme.SURFACE,
+        anchor="w", padx=8, pady=6,
+    ).pack(fill="x", pady=(0, 6))
+
+    mcp_btn_frame = tk.Frame(frame, bg=gui_theme.BG)
+    mcp_btn_frame.pack(anchor="w", pady=(0, 5))
+
+    show_btn: dict = {}
+
+    def toggle_show() -> None:
+        token_state["shown"] = not token_state["shown"]
+        _render_token()
+        show_btn["w"].config(text="Hide" if token_state["shown"] else "Show")
+
+    def copy_snippet() -> None:
+        if not token_state["value"]:
+            return
+        try:
+            import pyperclip
+            pyperclip.copy(mcp_auth.config_snippet("claude-code", token=token_state["value"]))
+            messagebox.showinfo(
+                "ContextPulse",
+                "Claude Code config copied. Paste it into ~/.claude.json, then\n"
+                "reconnect contextpulse in the /mcp panel.",
+            )
+        except Exception:
+            logger.exception("Could not copy the MCP config snippet")
+            messagebox.showerror("ContextPulse", "Could not copy to the clipboard — see the log.")
+
+    def regenerate() -> None:
+        if not messagebox.askyesno(
+            "ContextPulse",
+            "Generate a new access token?\n\n"
+            "Every client configured with the old token stops working until you\n"
+            "re-run  contextpulse --setup  and reconnect it.",
+        ):
+            return
+        try:
+            token_state["value"] = mcp_auth.regenerate_token()
+        except (OSError, RuntimeError):
+            logger.exception("Could not regenerate the MCP access token")
+            messagebox.showerror("ContextPulse", "Could not regenerate the token — see the log.")
+            return
+        token_state["shown"] = False
+        _render_token()
+        show_btn["w"].config(text="Show")
+        messagebox.showinfo(
+            "ContextPulse",
+            "New token generated.\n\n"
+            "1. Run  contextpulse --setup  to update your clients\n"
+            "2. Restart the ContextPulse MCP server\n"
+            "3. Reconnect the client",
+        )
+
+    show_btn["w"] = ttk.Button(
+        mcp_btn_frame, text="Show", style="Secondary.TButton", command=toggle_show,
+    )
+    show_btn["w"].pack(side="left", padx=(0, 10))
+
+    ttk.Button(
+        mcp_btn_frame, text="Copy Claude Code snippet", style="Accent.TButton",
+        command=copy_snippet,
+    ).pack(side="left", padx=(0, 10))
+
+    ttk.Button(
+        mcp_btn_frame, text="Regenerate token", style="Secondary.TButton",
+        command=regenerate,
+    ).pack(side="left")
+
+    gui_theme.make_label(
+        frame,
+        f"Token file: {mcp_auth.TOKEN_FILE}",
+        font=("Consolas", 8), fg=gui_theme.TEXT_MUTED,
+    ).pack(anchor="w", pady=(6, 0))
 
     # ── Save & Close ──────────────────────────────────────────────
     # Capture startup values for change detection
