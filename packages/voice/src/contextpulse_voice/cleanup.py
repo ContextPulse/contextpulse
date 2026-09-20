@@ -191,7 +191,9 @@ def clean_with_llm(text: str, profile_context: str = "") -> str:
         if not cleaned:
             logger.warning("LLM returned empty response — ignoring")
             return text
-        logger.info("LLM cleanup: '%s' -> '%s'", text[:50], cleaned[:50])
+        # Lengths, not content -- a dictated password would otherwise sit in a
+        # rotating log file on disk, twice.
+        logger.info("LLM cleanup: %d -> %d chars", len(text), len(cleaned))
         return cleaned
     except Exception:
         logger.exception("LLM cleanup failed — using basic cleanup")

@@ -16,6 +16,7 @@ import threading
 import time
 from typing import Any, Callable
 
+from contextpulse_core.redact import redact_payload
 from contextpulse_core.spine import (
     ContextEvent,
     EventType,
@@ -456,13 +457,24 @@ class VoiceModule(ModalityModule):
             # queries activity.db for this event ~0.1s later. Emitting after
             # paste_text() returns (~0.5s later) means the detector always
             # queries before the row exists, so no correction is ever matched.
+            # Hashed on the text that is actually PASTED, not on the redacted
+            # copy. Touch's CorrectionDetector hashes the clipboard contents and
+            # looks for a transcription event carrying the same digest; hashing
+            # the redacted value would break that correlation for exactly the
+            # dictations that contained a secret.
             paste_hash = hashlib.sha256(text.encode()).hexdigest()[:16]
             self._emit(ContextEvent(
                 modality=Modality.VOICE,
                 event_type=EventType.TRANSCRIPTION,
                 app_name=app_name,
                 window_title=window_title,
-                payload={
+                # Redacted on the way into the event, never on the way into the
+                # paste: what the user dictated still reaches their cursor
+                # verbatim. Only the stored copy is scrubbed, and it is scrubbed
+                # before the EventBus rather than at each of the four readers
+                # (voice MCP, session learner, probe consolidator, knowledge
+                # bridge) that would otherwise each have to remember.
+                payload=redact_payload({
                     "transcript": text,
                     "raw_transcript": raw_text,
                     "confidence": 0.85,  # TODO: get from Whisper segments
@@ -471,13 +483,14 @@ class VoiceModule(ModalityModule):
                     "cleanup_applied": use_llm,
                     "paste_text_hash": paste_hash,
                     "paste_timestamp": time.time(),
-                },
+                }),
             ))
 
             paste_text(text)
             if self._overlay:
                 self._overlay.show_ready()
-            logger.info("Dictated: %s", text[:100])
+            # Lengths, not content: this lands in a rotating log file on disk.
+            logger.info("Dictated %d chars (%d raw)", len(text), len(raw_text))
 
             # Schedule background screen correction harvesting.
             # Wait a few seconds for Claude to respond, then check if
@@ -540,7 +553,7 @@ class VoiceModule(ModalityModule):
                     event_type=EventType.TRANSCRIPTION,
                     app_name=app_name,
                     window_title=window_title,
-                    payload={
+                    payload=redact_payload({
                         "transcript": text,
                         "raw_transcript": raw_text,
                         "confidence": 0.95,
@@ -550,14 +563,14 @@ class VoiceModule(ModalityModule):
                         "paste_text_hash": paste_hash,
                         "paste_timestamp": time.time(),
                         "fix_last": True,
-                    },
+                    }),
                 ))
 
                 time.sleep(0.15)
                 pag.hotkey("ctrl", "a")
                 time.sleep(0.05)
                 paste_text(text)
-                logger.info("Fix-last replaced: %s", text[:100])
+                logger.info("Fix-last replaced %d chars", len(text))
         except Exception:
             self._error = "Fix-last failed"
             logger.exception("Fix-last failed")

@@ -267,5 +267,5 @@ class WhisperAPITranscriber(Transcriber):
             response_format="text",
         )
         text = response.strip()
-        logger.info("Transcription: %s", text[:80])
+        logger.info("Transcription: %d chars", len(text))
         return text

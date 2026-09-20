@@ -20,6 +20,8 @@ import sqlite3
 import time
 from pathlib import Path
 
+from contextpulse_core.redact import redact_sensitive
+
 from contextpulse_voice.config import LEARNED_VOCAB_FILE, VOICE_DATA_DIR
 
 logger = logging.getLogger(__name__)
@@ -160,10 +162,19 @@ def _write_learned(corrections: list[dict]) -> None:
     added = 0
     for item in corrections:
         key = item["original"]
+        # Same refusal as touch's VocabularyBridge: a vocabulary entry is a
+        # word pair and a word can be a whole token. Dropped rather than
+        # stored-redacted -- an entry keyed on "[redacted:...]" matches nothing.
+        if redact_sensitive(key) != key or redact_sensitive(item["corrected"]) != item["corrected"]:
+            logger.warning(
+                "Refusing to learn a pattern whose text matches a secret pattern "
+                "(values withheld)",
+            )
+            continue
         if key not in existing:
             existing[key] = item["corrected"]
             added += 1
-            logger.info("Learned: %r -> %r (count=%d)", key, item["corrected"], item["count"])
+            logger.info("Learned a correction (count=%d)", item["count"])
 
     if added:
         LEARNED_VOCAB_FILE.write_text(
