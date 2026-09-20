@@ -61,10 +61,17 @@ def _raw_store(tmp_path):
     return db_path
 
 
-def _extract_by_counting(probe_fn, alphabet, max_len):
+def _extract_by_counting(probe_fn, alphabet, max_len, seed=""):
     """The attack: extend a prefix one character at a time, keeping whatever
-    still returns a non-zero count. Exactly what the review's harness did."""
-    recovered = ""
+    still returns a non-zero count. Exactly what the review's harness did.
+
+    `seed` models an attacker who already knows how the token starts -- which
+    is the realistic case, since every secret family has a fixed prefix. Without
+    it the greedy walk latches onto whichever character matches the BENIGN
+    content first and the attack never reaches the secret, so the test would
+    pass against vulnerable code.
+    """
+    recovered = seed
     for _ in range(max_len):
         for ch in alphabet:
             if probe_fn(recovered + ch) > 0:
@@ -132,6 +139,132 @@ class TestClipboardSearchIsNotAnOracle:
             assert db.search_clipboard(SECRET, minutes_ago=60) == []
         finally:
             db.close()
+
+
+def _raw_activity_store(tmp_path):
+    """A store holding one raw pre-fix OCR row in the `activity` table.
+
+    `activity` is the largest text store in the product and the one the first
+    round missed entirely: ActivityDB.search matched raw ocr_text through
+    activity_fts while the MCP tool redacted only the rendered snippet.
+    update_ocr is used deliberately -- it is the daemon's own writer and it
+    stores what it is given, which is what a pre-redaction row looks like.
+    """
+    from contextpulse_sight.activity import ActivityDB
+
+    db_path = tmp_path / "activity.db"
+    db = ActivityDB(db_path=db_path)
+    row_id = db.record(
+        timestamp=time.time(),
+        window_title=f"{CONTROL_WORD} editor",
+        app_name="Code.exe",
+    )
+    db.update_ocr(row_id, f"{CONTROL_WORD} {SECRET}", 0.9)
+    db.close()
+    return db_path
+
+
+class TestHistorySearchIsNotAPrefixOracle:
+    """Review B-1, reproduced. activity_fts uses the default tokenizer with no
+    stemmer, so a prefix query is a clean binary signal and the reviewer
+    recovered 13 characters of a planted key from result counts alone."""
+
+    def test_counting_recovers_nothing_beyond_the_marker(self, tmp_path):
+        from contextpulse_sight.activity import ActivityDB
+
+        db_path = _raw_activity_store(tmp_path)
+        db = ActivityDB(db_path=db_path)
+        try:
+            # Positive control: the row IS indexed and IS findable by its
+            # non-secret content, so the zero counts below mean redaction and
+            # not an empty table.
+            assert len(db.search(CONTROL_WORD, minutes_ago=60)) == 1
+
+            def probe(prefix):
+                return len(db.search(prefix + "*", minutes_ago=60))
+
+            # Seeded with what an attacker already knows -- every secret family
+            # has a fixed prefix -- so the walk starts INSIDE the planted token
+            # instead of latching onto "Code.exe".
+            seeded = _extract_by_counting(
+                probe, ALPHABET, max_len=len(SECRET) + 5, seed="zqoracl"
+            )
+            blind = _extract_by_counting(probe, ALPHABET, max_len=len(SECRET) + 5)
+        finally:
+            db.close()
+
+        assert seeded == "zqoracl", (
+            f"the count oracle extended a known prefix into the secret: {seeded!r}"
+        )
+        assert "zqoracleneedle" not in blind, (
+            f"the count oracle recovered part of the secret body: {blind!r}"
+        )
+        assert SECRET.lower() not in blind
+
+    @pytest.mark.parametrize(
+        "probe", ["zqoracleneedle*", "zqoracleneedle0123456789abcdefghij", "sk*"]
+    )
+    def test_a_direct_probe_for_the_secret_returns_nothing(self, tmp_path, probe):
+        from contextpulse_sight.activity import ActivityDB
+
+        db_path = _raw_activity_store(tmp_path)
+        db = ActivityDB(db_path=db_path)
+        try:
+            assert db.search(probe, minutes_ago=60) == []
+        finally:
+            db.close()
+
+    def test_the_like_fallback_is_filtered_too(self, tmp_path):
+        """A query FTS5 refuses falls through to `ocr_text LIKE ?` on the RAW
+        column, which is the same oracle by another route."""
+        from contextpulse_sight.activity import ActivityDB
+
+        db_path = _raw_activity_store(tmp_path)
+        db = ActivityDB(db_path=db_path)
+        try:
+            assert db.search(SECRET, minutes_ago=60) == []
+        finally:
+            db.close()
+
+    def test_returned_rows_carry_redacted_text(self, tmp_path):
+        from contextpulse_sight.activity import ActivityDB
+
+        db_path = _raw_activity_store(tmp_path)
+        db = ActivityDB(db_path=db_path)
+        try:
+            rows = db.search(CONTROL_WORD, minutes_ago=60)
+        finally:
+            db.close()
+        assert len(rows) == 1
+        assert CONTROL_WORD in rows[0]["ocr_text"], "returned nothing to redact"
+        assert SECRET not in rows[0]["ocr_text"], (
+            "search returned the raw column; a caller rendering this "
+            "reintroduces the leak the MCP layer was closing"
+        )
+
+    def test_the_mcp_header_count_is_computed_over_redacted_text(self, tmp_path):
+        from contextpulse_sight import mcp_server
+        from contextpulse_sight.activity import ActivityDB
+
+        db_path = _raw_activity_store(tmp_path)
+        db = ActivityDB(db_path=db_path)
+        original = mcp_server._activity_db
+        mcp_server._activity_db = db
+        try:
+            with patch(
+                "contextpulse_sight.mcp_server.is_title_blocked", return_value=False
+            ):
+                hit = mcp_server.search_history(CONTROL_WORD, minutes_ago=60)
+                miss = mcp_server.search_history("zqoracleneedle*", minutes_ago=60)
+        finally:
+            mcp_server._activity_db = original
+            db.close()
+
+        assert "(1 results)" in hit, f"control did not match: {hit!r}"
+        assert SECRET not in hit
+        assert "No results" in miss, (
+            "the header count still reports a match computed over raw ocr_text"
+        )
 
 
 class TestEventSearchIsNotATokenOracle:
