@@ -19,6 +19,7 @@ pytest-timeout and pytest-threadleak only), and a race test that depends on
 an absent plugin to be meaningful is a test that silently proves nothing.
 """
 
+import os
 import sys
 import threading
 import time
@@ -209,3 +210,90 @@ class TestClipboardRaceIsSerialised:
         t2.start()
         t2.join(timeout=5)
         assert got == [True]
+
+
+def _capture_fd2(tmp_path, fn):
+    """Run fn() with fd 2 redirected to a file; return the file's lines.
+
+    Redirects the raw file descriptor, not sys.stderr, because the whole
+    point of the breadcrumb is that it bypasses Python's text layer and
+    writes to the OS handle the watchdog redirects to daemon_stderr.log.
+    A capsys-style capture would prove nothing about that.
+    """
+    target = tmp_path / "fd2.log"
+    saved = os.dup(2)
+    fd = os.open(str(target), os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
+    try:
+        os.dup2(fd, 2)
+        fn()
+    finally:
+        os.dup2(saved, 2)
+        os.close(fd)
+        os.close(saved)
+    return target.read_text(encoding="utf-8", errors="replace").splitlines()
+
+
+class TestPhaseBreadcrumbs:
+    """The 09-19 crash left a five-second hole between "Pasted 100 characters"
+    and 0xC0000374, covering the hotkey, a 0.5s sleep and the trailing
+    pyperclip.copy(""). These name the phase instead.
+    """
+
+    def test_paste_writes_ordered_phases_to_fd_2(self, monkeypatch, fast_paster, tmp_path):
+        paster = fast_paster
+        monkeypatch.setattr(paster, "_BREADCRUMBS", True, raising=False)
+        monkeypatch.setattr(paster.pyperclip, "copy", lambda _t="": None)
+
+        lines = _capture_fd2(tmp_path, lambda: paster.paste_text("hello"))
+
+        phases = [ln.split()[-1] for ln in lines if ln.startswith("CLIPBOARD_PHASE")]
+        assert phases == [
+            "paste_copy_clear_enter",
+            "paste_copy_clear_exit",
+            "paste_copy_text_enter",
+            "paste_copy_text_exit",
+            "paste_hotkey_enter",
+            "paste_hotkey_exit",
+            "paste_final_clear_enter",
+            "paste_final_clear_exit",
+        ]
+
+    def test_breadcrumbs_can_be_silenced(self, monkeypatch, fast_paster, tmp_path):
+        paster = fast_paster
+        monkeypatch.setattr(paster, "_BREADCRUMBS", False, raising=False)
+        monkeypatch.setattr(paster.pyperclip, "copy", lambda _t="": None)
+
+        lines = _capture_fd2(tmp_path, lambda: paster.paste_text("hello"))
+
+        assert [ln for ln in lines if ln.startswith("CLIPBOARD_PHASE")] == []
+
+    def test_a_contended_read_names_itself(self, monkeypatch, tmp_path):
+        """The one read-side breadcrumb that is always on.
+
+        Bounded by paste frequency rather than by the 1s poll, and it is the
+        line that shows the poller and the paster met at all.
+        """
+        from contextpulse_core.clipboard_lock import clipboard_lock
+        from contextpulse_core.platform import windows as win
+
+        monkeypatch.setattr(win, "CLIPBOARD_LOCK_TIMEOUT", 0.05)
+        provider = win.WindowsPlatformProvider()
+
+        held = threading.Event()
+        release = threading.Event()
+
+        def holder():
+            with clipboard_lock:
+                held.set()
+                release.wait(timeout=5)
+
+        t = threading.Thread(target=holder)
+        t.start()
+        try:
+            assert held.wait(timeout=5)
+            lines = _capture_fd2(tmp_path, lambda: provider.get_clipboard_text())
+        finally:
+            release.set()
+            t.join(timeout=5)
+
+        assert any(ln.endswith("read_skipped_lock_busy") for ln in lines), lines
