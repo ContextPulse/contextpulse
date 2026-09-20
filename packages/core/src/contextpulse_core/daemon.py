@@ -215,6 +215,56 @@ def _copy_mcp_token() -> None:
         logger.exception("Could not copy the MCP config to the clipboard")
 
 
+def start_secret_migration() -> threading.Thread:
+    """Run the sweep on a background thread and return it.
+
+    NOT synchronous. The sweep is a full-table scan over `events`, and on a
+    real multi-month store that is long enough to look like a startup hang --
+    it timed out the test suite the first time it was wired into __init__,
+    which is how this was found rather than reasoned about.
+
+    Backgrounding is safe HERE specifically because the search paths redact
+    independently (search_clipboard matches redacted text; EventBus.search
+    drops rows that only matched redacted content), so the count oracle is
+    closed with or without this. The sweep is a data cleanup and defence in
+    depth, not the control. If that ever stops being true, this has to become
+    a blocking gate again.
+    """
+    thread = threading.Thread(
+        target=run_secret_migration, name="cp-secret-migration", daemon=True,
+    )
+    thread.start()
+    return thread
+
+
+def run_secret_migration() -> None:
+    """Sweep pre-redaction rows out of activity.db and the two derived stores.
+
+    Separate from purge.ensure_migrated so the daemon does not have to know how
+    to resolve probe.db and knowledge.db, and so the MCP server can call the
+    identical entry point -- they are different processes and either can be the
+    one that starts first.
+    """
+    from contextpulse_core.purge import ensure_migrated
+
+    probe_db = None
+    knowledge_db = None
+    try:
+        from contextpulse_core.probe import default_probe_db
+
+        probe_db = Path(default_probe_db())
+    except Exception:
+        logger.debug("probe.db path unresolvable; skipping it in the sweep", exc_info=True)
+    try:
+        from contextpulse_knowledge.bridge import default_knowledge_db
+
+        knowledge_db = Path(default_knowledge_db())
+    except Exception:
+        logger.debug("knowledge.db path unresolvable; skipping it", exc_info=True)
+
+    ensure_migrated(Path(ACTIVITY_DB_PATH), probe_db=probe_db, knowledge_db=knowledge_db)
+
+
 class ContextPulseDaemon:
     """Unified daemon that runs all ContextPulse modules in one process."""
 
@@ -769,6 +819,17 @@ class ContextPulseDaemon:
             self._mutex = _acquire_single_instance_or_exit()
 
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+        # One-time redaction of rows written before capture-side redaction
+        # shipped. In run(), not __init__: a constructor must not do I/O, and
+        # constructing a daemon in a test must not touch the real store.
+        # Threaded, because it is a full-table scan -- run synchronously it
+        # blocks startup for as long as the sweep takes, which on a real
+        # multi-month events table is long enough to be a hang. That is safe
+        # here specifically because the search paths redact independently, so
+        # the oracle is already closed with or without this; the sweep is a
+        # data cleanup and defence in depth, not the control.
+        start_secret_migration()
 
         # First-run welcome
         if is_first_run():

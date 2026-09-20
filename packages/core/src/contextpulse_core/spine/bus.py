@@ -21,9 +21,70 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
+from contextpulse_core.redact import redact_sensitive
+
 from .events import ContextEvent
 
 logger = logging.getLogger(__name__)
+
+# FTS5 operators and punctuation that are query syntax rather than content.
+_FTS_OPERATORS = frozenset({"and", "or", "not", "near"})
+
+
+def _searchable_text(row: dict[str, Any]) -> str:
+    """Everything in an event row that a search can match on."""
+    parts = [str(row.get("window_title") or ""), str(row.get("app_name") or "")]
+    payload = row.get("payload")
+    if isinstance(payload, str):
+        parts.append(payload)
+    elif payload:
+        parts.append(str(payload))
+    return " ".join(parts)
+
+
+def _drop_rows_that_only_matched_redacted_text(
+    query: str, rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Remove rows whose match depended on text redaction removes.
+
+    WHY A SEARCH NEEDS THIS AT ALL. Redacting a tool's OUTPUT does not close a
+    query oracle. The adversarial review proved the clipboard case end to end:
+    a client issues "sk-", "sk-a", "sk-ab" ... and reads the RESULT COUNT to
+    recover a pre-fix secret one character at a time, while every response it
+    sees is correctly redacted. events_fts has the same shape at token
+    granularity -- one query per candidate token instead of per character.
+
+    So a count or a match must never be computed over raw stored text. Rows
+    written before capture-side redaction shipped are still raw on disk, which
+    is exactly the population an attacker would probe.
+
+    THE TEST IS DELIBERATELY NARROW. A row is dropped only when a query term
+    appears in its RAW text and NOT in its redacted text -- that is, the match
+    depended on something redaction removes. A row that matched for any other
+    reason is kept untouched, so porter stemming still works: a query for "run"
+    matching a stored "running" is not dropped, because "run" is absent from
+    both the raw and the redacted rendering and the rule never fires.
+
+    Checking the opposite way round -- requiring every query term to appear in
+    the redacted text -- would have silently disabled stemmed and prefix
+    matching, which is most of what this search is for.
+    """
+    terms = [
+        t.strip('"*()') .lower()
+        for t in query.split()
+        if t.strip('"*()') and t.strip('"*()').lower() not in _FTS_OPERATORS
+    ]
+    if not terms:
+        return rows
+
+    kept: list[dict[str, Any]] = []
+    for row in rows:
+        raw = _searchable_text(row).lower()
+        red = redact_sensitive(_searchable_text(row)).lower()
+        if any(term in raw and term not in red for term in terms):
+            continue
+        kept.append(row)
+    return kept
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS events (
@@ -254,6 +315,11 @@ class EventBus:
 
         return [ContextEvent.from_row(dict(r)) for r in rows]
 
+    # ── search-result filtering ──────────────────────────────────────
+    #
+    # Defined as a module-level helper below the class; see its docstring for
+    # why a search over events needs one at all.
+
     def search(
         self,
         query: str,
@@ -325,7 +391,7 @@ class EventBus:
                     )
                 rows = cursor.fetchall()
 
-        return [dict(r) for r in rows]
+        return _drop_rows_that_only_matched_redacted_text(query, [dict(r) for r in rows])
 
     def get_by_time(
         self,

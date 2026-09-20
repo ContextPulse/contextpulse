@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
+from contextpulse_core.redact import redact_payload
 from contextpulse_core.spine import (
     ContextEvent,
     EventType,
@@ -159,19 +160,37 @@ class TouchModule(ModalityModule):
         self._burst_tracker.on_key_press(key_char, is_backspace, is_selection)
 
     def _on_burst(self, burst_data: dict) -> None:
-        """Emit TYPING_BURST event from BurstTracker."""
+        """Emit TYPING_BURST event from BurstTracker.
+
+        Redacted before the event is constructed, not after: from here the
+        payload goes to the EventBus, into events.payload, into events_fts,
+        and on to the probe consolidator and the knowledge bridge. There is no
+        later choke point all four pass through.
+
+        BurstTracker does not currently put text in burst_data -- it emits
+        counts. The spine nonetheless DECLARES burst_text as an indexed text
+        key, and the watch-mode character buffer that would fill it sits in the
+        same object, so the next person to surface it inherits a redacted path
+        instead of silently reopening this.
+        """
         self._emit(ContextEvent(
             modality=Modality.KEYS,
             event_type=EventType.TYPING_BURST,
-            payload=burst_data,
+            payload=redact_payload(burst_data),
         ))
 
     def _on_correction(self, correction: dict) -> None:
-        """Emit CORRECTION_DETECTED event from CorrectionDetector."""
+        """Emit CORRECTION_DETECTED event from CorrectionDetector.
+
+        original_text/corrected_text are the literal before-and-after of what
+        the user typed. correction_text is the same two values concatenated and
+        IS FTS-indexed, so an unredacted pair was searchable as well as stored.
+        redact_payload covers all three from one declared key list.
+        """
         self._emit(ContextEvent(
             modality=Modality.KEYS,
             event_type=EventType.CORRECTION_DETECTED,
-            payload={
+            payload=redact_payload({
                 "original_text": correction.get("original_word", ""),
                 "corrected_text": correction.get("corrected_word", ""),
                 "correction_text": f"{correction.get('original_word', '')} -> {correction.get('corrected_word', '')}",
@@ -179,7 +198,7 @@ class TouchModule(ModalityModule):
                 "confidence": correction.get("confidence", 0.0),
                 "seconds_after_paste": correction.get("seconds_after_paste", 0.0),
                 "paste_event_id": correction.get("paste_event_id", ""),
-            },
+            }),
         ))
 
     # ── Mouse event handlers ─────────────────────────────────────────
