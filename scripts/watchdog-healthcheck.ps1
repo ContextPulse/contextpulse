@@ -97,33 +97,115 @@ $ActivityStaleSeconds = 1800
 # log families rotate the same way rather than inventing a third mechanism.
 $LogMaxBytes = 5MB
 $LogBackups  = 3
+# This task fires every 2 minutes and a slow run can still be alive when its
+# successor starts. Without a cross-process gate both runs see >5MB, both
+# rotate, and the second Move-Item overwrites the generation the first just
+# created -- one generation of history gone, silently. A machine-local named
+# mutex is the cheapest thing that actually serialises two PROCESSES; the
+# threading lock used elsewhere in this project cannot.
+#
+# Local\ (per-session), not Global\: creating a Global\ object needs
+# SeCreateGlobalPrivilege, which this task is not guaranteed to hold, and the
+# runs being serialised are two instances of the SAME scheduled task in the
+# same session. A Global\ name that throws would be worse than no mutex.
+$RotateMutexName = "Local\ContextPulseHealthcheckLogRotate"
+
+# Collected by Rotate-HealthcheckLog and drained by Write-Log, because the
+# rotation runs BEFORE the line that would report it -- writing from inside
+# the rotation would append to the file it is in the middle of moving.
+$script:RotateNotices = New-Object System.Collections.ArrayList
+
+function Move-LogGeneration {
+    # Returns $true if the move happened or was unnecessary, $false if it
+    # genuinely failed. A vanished source means a concurrent run already
+    # moved it: expected, not an error.
+    param([string]$Source, [string]$Destination)
+    if (-not (Test-Path $Source)) { return $true }
+    try {
+        Move-Item $Source $Destination -Force -ErrorAction Stop
+        return $true
+    } catch [System.Management.Automation.ItemNotFoundException] {
+        return $true
+    } catch {
+        # Never silent: a failed move means the log simply stops rotating,
+        # which is indistinguishable from "under the threshold" unless it
+        # says so. Most likely cause is the previous run's Add-Content still
+        # holding the handle.
+        [void]$script:RotateNotices.Add(
+            "Log rotation could not move '$Source' -> '$Destination': $($_.Exception.Message)"
+        )
+        return $false
+    }
+}
 
 function Rotate-HealthcheckLog {
     if (-not (Test-Path $LogFile)) { return }
     try {
         if ((Get-Item $LogFile -ErrorAction Stop).Length -lt $LogMaxBytes) { return }
     } catch {
+        # The file vanished between the two checks -- a concurrent run beat us.
         return
     }
-    $oldest = "$LogFile.$LogBackups"
-    if (Test-Path $oldest) {
-        Remove-Item $oldest -Force -ErrorAction SilentlyContinue
-    }
-    for ($g = $LogBackups - 1; $g -ge 1; $g--) {
-        $source = "$LogFile.$g"
-        if (Test-Path $source) {
-            Move-Item $source "$LogFile.$($g + 1)" -Force -ErrorAction SilentlyContinue
+
+    $mutex = New-Object System.Threading.Mutex($false, $RotateMutexName)
+    $held = $false
+    try {
+        try {
+            $held = $mutex.WaitOne(2000)
+        } catch [System.Threading.AbandonedMutexException] {
+            # A previous run died holding it; we now own it.
+            $held = $true
         }
+        if (-not $held) {
+            [void]$script:RotateNotices.Add(
+                "Log rotation skipped: another run held the rotate mutex for >2s"
+            )
+            return
+        }
+
+        # Re-check under the mutex: a concurrent run may have rotated while we
+        # waited, and rotating again would discard a generation for nothing.
+        if (-not (Test-Path $LogFile)) { return }
+        try {
+            if ((Get-Item $LogFile -ErrorAction Stop).Length -lt $LogMaxBytes) { return }
+        } catch {
+            return
+        }
+
+        $oldest = "$LogFile.$LogBackups"
+        if (Test-Path $oldest) {
+            try {
+                Remove-Item $oldest -Force -ErrorAction Stop
+            } catch {
+                [void]$script:RotateNotices.Add(
+                    "Log rotation could not delete '$oldest': $($_.Exception.Message)"
+                )
+            }
+        }
+        for ($g = $LogBackups - 1; $g -ge 1; $g--) {
+            [void](Move-LogGeneration -Source "$LogFile.$g" -Destination "$LogFile.$($g + 1)")
+        }
+        [void](Move-LogGeneration -Source $LogFile -Destination "$LogFile.1")
+    } finally {
+        if ($held) { $mutex.ReleaseMutex() }
+        $mutex.Dispose()
     }
-    Move-Item $LogFile "$LogFile.1" -Force -ErrorAction SilentlyContinue
 }
 
 function Write-Log {
     param([string]$Message, [string]$Level = "INFO")
+    Rotate-HealthcheckLog
+    $pending = @($script:RotateNotices)
+    $script:RotateNotices.Clear()
+    foreach ($notice in $pending) {
+        $nts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        $nline = "[$nts] [WARN] $notice"
+        Write-Host $nline
+        Add-Content -Path $LogFile -Value $nline -ErrorAction SilentlyContinue
+    }
     $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $line = "[$ts] [$Level] $Message"
     Write-Host $line
-    Rotate-HealthcheckLog
     Add-Content -Path $LogFile -Value $line -ErrorAction SilentlyContinue
 }
 
