@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "contextpulse-voice"
-version = "0.1.0"
+version = "0.1.1"
 description = "Voice capture and transcription for AI agents — ContextPulse platform"
 authors = [
     { name = "David Jerard", email = "david@jerardventures.com" },

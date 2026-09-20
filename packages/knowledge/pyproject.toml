@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "contextpulse-knowledge"
-version = "0.1.0"
+version = "0.1.1"
 description = "Local bi-temporal fused knowledge-graph spine for ContextPulse (Phase 1)"
 authors = [
     { name = "David Jerard", email = "david@jerardventures.com" },
