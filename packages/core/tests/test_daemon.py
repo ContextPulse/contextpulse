@@ -800,6 +800,10 @@ class TestCaptureThreadAlwaysStarts:
     where a later save can change the answer.
     """
 
+    @pytest.fixture(autouse=True)
+    def _headless_safe(self, pynput_importable):
+        """Every test in this class imports contextpulse_sight.app."""
+
     def _daemon_and_app(self, tmp_path, monkeypatch):
         daemon, _ = _make_daemon(tmp_path)
         app = _sight_app_with_clipboard(tmp_path, monkeypatch, enabled=False)
