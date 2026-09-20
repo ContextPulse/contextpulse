@@ -523,3 +523,69 @@ class TestDegenerateOutputGuard:
         assert "disabled" in messages.lower()
         assert "compression_ratio_threshold=5.0" in messages
         assert "per-segment" in messages.lower()
+
+
+class TestWhisperThreadBudget:
+    """The Whisper model must get its OWN thread budget, not the idle-pool cap.
+
+    Regression test for the 2026-09-20 "long dictations get stuck for a
+    while" report. LocalTranscriber passed get_cap() -- the constant chosen
+    to bound four libraries' IDLE worker pools after the 2026-04-29
+    163-thread incident -- straight into ctranslate2's intra-op pool, which
+    is the one thing in the daemon on a user-visible latency path.
+
+    Measured cost of that on a real 75.0s clip (small/int8, median of 3):
+    8.74s at cpu_threads=2 vs 6.32s at 6. The tax was paid on every
+    dictation and scaled with clip length, which is why short dictations
+    felt fine and long ones felt stuck.
+
+    These tests assert the CALL SITE, not the helper: a correct
+    get_whisper_cap() that nothing passes to WhisperModel would leave the
+    defect exactly where it was.
+    """
+
+    @patch("contextpulse_voice.transcriber.sys")
+    @patch("contextpulse_voice.model_manager.get_model_path", return_value="fake")
+    @patch("faster_whisper.WhisperModel")
+    def test_model_is_built_with_the_whisper_cap(self, mock_model, _path, mock_sys):
+        from contextpulse_core._thread_caps import get_cap, get_whisper_cap
+
+        mock_sys.platform = "linux"
+        LocalTranscriber(model_size="small")
+
+        assert mock_model.called, "WhisperModel was never constructed"
+        kwargs = mock_model.call_args.kwargs
+        assert kwargs["cpu_threads"] == get_whisper_cap()
+        # The actual defect: it used to be get_cap(). Pin that it is not,
+        # so a future refactor cannot quietly reinstate the throttle.
+        assert kwargs["cpu_threads"] != get_cap()
+        assert kwargs["num_workers"] == 1
+
+    @patch("contextpulse_voice.transcriber.sys")
+    @patch("contextpulse_voice.model_manager.get_model_path", return_value="fake")
+    @patch("faster_whisper.WhisperModel")
+    def test_whisper_thread_env_override_reaches_the_model(
+        self, mock_model, _path, mock_sys
+    ):
+        import os
+
+        mock_sys.platform = "linux"
+        with patch.dict(os.environ, {"CONTEXTPULSE_WHISPER_THREADS": "3"}):
+            LocalTranscriber(model_size="small")
+        assert mock_model.call_args.kwargs["cpu_threads"] == 3
+
+    @patch("contextpulse_voice.transcriber.sys")
+    @patch("contextpulse_voice.model_manager.get_model_path", return_value="fake")
+    @patch("faster_whisper.WhisperModel")
+    def test_stale_cpu_threads_var_does_not_steer_whisper(
+        self, mock_model, _path, mock_sys
+    ):
+        # CONTEXTPULSE_CPU_THREADS has a documented history of lingering as a
+        # stale persistent Windows user var. It must not reach the hot path.
+        import os
+
+        mock_sys.platform = "linux"
+        with patch.dict(os.environ, {"CONTEXTPULSE_CPU_THREADS": "1"}):
+            os.environ.pop("CONTEXTPULSE_WHISPER_THREADS", None)
+            LocalTranscriber(model_size="small")
+        assert mock_model.call_args.kwargs["cpu_threads"] == 6

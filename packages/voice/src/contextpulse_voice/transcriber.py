@@ -115,23 +115,32 @@ class LocalTranscriber(Transcriber):
             logger.info("Using mlx-whisper with model %s", self._mlx_model)
         else:
             self._backend = "ctranslate2"
-            from contextpulse_core._thread_caps import get_cap
+            from contextpulse_core._thread_caps import get_whisper_cap
             from faster_whisper import WhisperModel
 
             from contextpulse_voice.model_manager import get_model_path
 
             model_path = get_model_path(model_size)
-            cpu_threads = get_cap()
+            cpu_threads = get_whisper_cap()
             logger.info(
                 "Loading Whisper '%s' model (path: %s, cpu_threads=%d)...",
                 model_size, model_path, cpu_threads,
             )
-            # cpu_threads caps the OpenMP intra-op pool; num_workers=1 keeps
-            # the inter-op (batch parallelism) pool at a single worker since
-            # ContextPulse only ever transcribes one clip at a time. Without
-            # these, ctranslate2 allocates ~cpu_count() workers per pool which
-            # was the dominant contributor to a 163-thread daemon baseline
-            # (incident: 2026-04-29).
+            # cpu_threads sizes ctranslate2's intra-op pool; num_workers=1
+            # keeps the inter-op (batch parallelism) pool at a single worker
+            # since ContextPulse only ever transcribes one clip at a time.
+            # Without these, ctranslate2 allocates ~cpu_count() workers per
+            # pool which was the dominant contributor to a 163-thread daemon
+            # baseline (incident: 2026-04-29).
+            #
+            # This reads get_whisper_cap() (default 6), NOT get_cap()
+            # (default 2). Transcription is the only user-visible latency
+            # path in the daemon and it was sharing the number chosen to
+            # bound four libraries' IDLE pools: measured 2026-09-20 on a real
+            # 75s clip, that cost 8.74s vs 6.32s median-of-3, a 28% tax paid
+            # on every dictation to save 8 threads. The idle pools are
+            # unchanged at 2 -- get_whisper_cap() is never written into
+            # OMP_NUM_THREADS et al.
             self.model = WhisperModel(
                 model_path,
                 device=device,
