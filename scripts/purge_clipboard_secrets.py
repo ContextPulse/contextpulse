@@ -39,18 +39,22 @@ from pathlib import Path
 # Resolve the package source the same way the tests do, so the script runs from
 # a checkout without an editable install.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-for _pkg in ("screen", "core", "knowledge"):
+for _pkg in ("screen", "core", "knowledge", "memory"):
     _src = _REPO_ROOT / "packages" / _pkg / "src"
     if _src.is_dir() and str(_src) not in sys.path:
         sys.path.insert(0, str(_src))
 
 from contextpulse_core.purge import (  # noqa: E402
     KNOWLEDGE_OBSERVATIONS,
+    MEMORY_COLD,
+    MEMORY_WARM,
     PROBE_FACTS,
     Tally,
+    apply_activity_updates,
     apply_updates,
     open_db,
     purge_derived_store,
+    scan_activity,
     scan_clipboard,
     scan_events,
     table_exists,
@@ -58,9 +62,9 @@ from contextpulse_core.purge import (  # noqa: E402
 )
 
 __all__ = [
-    "Tally", "apply_updates", "backup_db", "main", "open_db", "report",
-    "resolve_db_path", "scan_clipboard", "scan_events", "table_exists",
-    "verify_fts_matches_content",
+    "Tally", "apply_activity_updates", "apply_updates", "backup_db", "main",
+    "open_db", "report", "resolve_db_path", "scan_activity", "scan_clipboard",
+    "scan_events", "table_exists", "verify_fts_matches_content",
 ]
 
 
@@ -130,10 +134,16 @@ def _force_utf8_console() -> None:
             reconfigure(encoding="utf-8", errors="replace")
 
 
-def _derived_paths(args) -> tuple[Path | None, Path | None]:
-    """Resolve probe.db and knowledge.db, honouring explicit overrides."""
-    if args.probe_db is not None or args.knowledge_db is not None:
-        return args.probe_db, args.knowledge_db
+def _derived_paths(args) -> tuple[Path | None, Path | None, Path | None, Path | None]:
+    """Resolve probe.db, knowledge.db and the two memory databases.
+
+    An explicit override of ANY of them turns off discovery for all four, so a
+    run pointed at a fixture directory cannot silently reach into the real
+    stores.
+    """
+    overrides = (args.probe_db, args.knowledge_db, args.memory_db, args.memory_cold_db)
+    if any(o is not None for o in overrides):
+        return overrides
     try:
         from contextpulse_core.probe import default_probe_db
 
@@ -146,7 +156,14 @@ def _derived_paths(args) -> tuple[Path | None, Path | None]:
         knowledge = Path(default_knowledge_db())
     except Exception:  # pragma: no cover - knowledge package absent
         knowledge = None
-    return probe, knowledge
+    try:
+        from contextpulse_memory.storage import default_memory_dir
+
+        memory_dir = Path(default_memory_dir())
+        memory, memory_cold = memory_dir / "memory.db", memory_dir / "memory_cold.db"
+    except Exception:  # pragma: no cover - memory package absent
+        memory, memory_cold = None, None
+    return probe, knowledge, memory, memory_cold
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -159,6 +176,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="probe.db (default: the consolidator's path).")
     parser.add_argument("--knowledge-db", type=Path, default=None,
                         help="knowledge.db (default: the bridge's path).")
+    parser.add_argument("--memory-db", type=Path, default=None,
+                        help="memory.db, the warm tier (default: the store's path).")
+    parser.add_argument("--memory-cold-db", type=Path, default=None,
+                        help="memory_cold.db, the archive (default: the store's path).")
     parser.add_argument("--apply", action="store_true",
                         help="Actually rewrite the rows. Without this, nothing is written.")
     parser.add_argument("--include-titles", action="store_true",
@@ -179,7 +200,11 @@ def main(argv: list[str] | None = None) -> int:
     db_path = args.db if args.db is not None else resolve_db_path()
     conn = open_db(db_path, read_only=not args.apply)
     try:
-        for required in ("clipboard", "events", "events_fts"):
+        # `activity` is in this list because the first version of this script
+        # swept clipboard and events only and then printed "verified: 0
+        # remaining matches" -- a claim that was not true of the largest text
+        # store in the database (review B-2).
+        for required in ("clipboard", "events", "events_fts", "activity"):
             if not table_exists(conn, required):
                 raise SystemExit(
                     f"REFUSING: {db_path} has no '{required}' table -- this does not "
@@ -188,6 +213,7 @@ def main(argv: list[str] | None = None) -> int:
 
         clip_tally, clip_updates = scan_clipboard(conn)
         evt_tally, title_tally, evt_updates = scan_events(conn, args.include_titles)
+        act_tally, act_title_tally, act_updates = scan_activity(conn, args.include_titles)
 
         mode = "APPLY" if args.apply else "DRY RUN (nothing written)"
         print(f"purge_clipboard_secrets — {mode}")
@@ -195,7 +221,9 @@ def main(argv: list[str] | None = None) -> int:
         report("clipboard table", clip_tally)
         report("events table (payload text)", evt_tally)
         report("events table (window_title / app_name)", title_tally)
-        if title_tally.rows_affected and not args.include_titles:
+        report("activity table (ocr_text)", act_tally)
+        report("activity table (window_title / app_name)", act_title_tally)
+        if (title_tally.rows_affected or act_title_tally.rows_affected) and not args.include_titles:
             print(
                 "  NOTE: reported but NOT rewritten. Pass --include-titles to "
                 "scrub these too; on real data they are mostly the CREDENTIAL "
@@ -204,10 +232,12 @@ def main(argv: list[str] | None = None) -> int:
 
         derived_total = 0
         if not args.skip_derived:
-            probe_db, knowledge_db = _derived_paths(args)
+            probe_db, knowledge_db, memory_db, memory_cold_db = _derived_paths(args)
             for path, spec, label in (
                 (probe_db, PROBE_FACTS, "probe.db (facts)"),
                 (knowledge_db, KNOWLEDGE_OBSERVATIONS, "knowledge.db (observations)"),
+                (memory_db, MEMORY_WARM, "memory.db (memories)"),
+                (memory_cold_db, MEMORY_COLD, "memory_cold.db (cold_summaries)"),
             ):
                 if path is None:
                     continue
@@ -215,15 +245,16 @@ def main(argv: list[str] | None = None) -> int:
                 report(f"{label} — {path}", tally)
                 derived_total += tally.rows_affected
 
-        if not clip_updates and not evt_updates and not derived_total:
+        if not clip_updates and not evt_updates and not act_updates and not derived_total:
             print("\nNothing to purge.")
             return 0
 
         if not args.apply:
             print(
                 f"\n{len(clip_updates)} clipboard row(s), {len(evt_updates)} event "
-                f"row(s) and {derived_total} derived-store row(s) would be redacted "
-                "in place, and events_fts rebuilt."
+                f"row(s), {len(act_updates)} activity row(s) and {derived_total} "
+                "derived-store row(s) would be redacted in place, and events_fts "
+                "and activity_fts rebuilt."
             )
             print("Re-run with --apply to write the changes.")
             return 0
@@ -231,9 +262,11 @@ def main(argv: list[str] | None = None) -> int:
         backup = backup_db(conn, db_path)
         print(f"\nbackup written: {backup}")
         apply_updates(conn, clip_updates, evt_updates)
+        apply_activity_updates(conn, act_updates)
         print(
             f"applied: {len(clip_updates)} clipboard row(s), "
-            f"{len(evt_updates)} event row(s), events_fts rebuilt."
+            f"{len(evt_updates)} event row(s), {len(act_updates)} activity row(s); "
+            "events_fts and activity_fts rebuilt."
         )
 
         # Verify rather than assert: re-scan the rewritten rows and require
@@ -241,13 +274,17 @@ def main(argv: list[str] | None = None) -> int:
         # "the secrets are gone".
         clip_after, _ = scan_clipboard(conn)
         evt_after, title_after, _ = scan_events(conn, args.include_titles)
-        remaining = clip_after.total_matches + evt_after.total_matches
+        act_after, act_title_after, _ = scan_activity(conn, args.include_titles)
+        remaining = (
+            clip_after.total_matches + evt_after.total_matches + act_after.total_matches
+        )
         if args.include_titles:
-            remaining += title_after.total_matches
+            remaining += title_after.total_matches + act_title_after.total_matches
         if remaining:
             print(
-                f"\nFAILED VERIFICATION: {clip_after.total_matches} clipboard and "
-                f"{evt_after.total_matches} event payload matches still present "
+                f"\nFAILED VERIFICATION: {clip_after.total_matches} clipboard, "
+                f"{evt_after.total_matches} event payload and "
+                f"{act_after.total_matches} activity ocr_text matches still present "
                 "after purge. The backup has been kept.",
                 file=sys.stderr,
             )

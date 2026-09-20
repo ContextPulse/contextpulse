@@ -14,10 +14,26 @@ from collections import defaultdict
 from pathlib import Path
 
 from contextpulse_core.redact import redact_sensitive
+from contextpulse_core.search_filter import keep_rows_matching_redacted_text
 
 from contextpulse_sight.config import ACTIVITY_DB_PATH, ACTIVITY_MAX_AGE
 
 logger = logging.getLogger("contextpulse.sight.activity")
+
+# activity_fts is declared with no `tokenize=` argument, so it gets FTS5's
+# default. The shadow index the oracle filter builds over the REDACTED text
+# must name the same one, or it answers a different question from the one that
+# produced the rows.
+_ACTIVITY_FTS_TOKENIZER = "unicode61"
+
+# The columns activity_fts indexes, which are also the ones a returned row
+# must not carry raw.
+_ACTIVITY_TEXT_COLUMNS = ("window_title", "app_name", "ocr_text")
+
+
+def _searchable_activity_text(row: dict) -> str:
+    """What activity_fts matches on, rebuilt from a result row."""
+    return " ".join(str(row.get(c) or "") for c in _ACTIVITY_TEXT_COLUMNS)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS activity (
@@ -199,8 +215,28 @@ class ActivityDB:
         }
 
     def search(self, query: str, minutes_ago: int = 60) -> list[dict]:
-        """Full-text search across window titles and OCR text."""
+        """Full-text search across window titles and OCR text, MATCHING REDACTED TEXT.
+
+        `activity` is the largest text store in the product and this method was
+        the one search surface the first redaction pass missed: it matched raw
+        `ocr_text` through activity_fts while the MCP tool redacted only the
+        rendered snippet. That is an extraction oracle, and the second review
+        ran it -- activity_fts uses the default tokenizer with no stemmer, so a
+        prefix query is a clean binary signal, and 13 characters of a planted
+        key came back from result counts alone while every snippet shown was
+        correctly `[REDACTED:...]` (review B-1).
+
+        Output redaction cannot close a query oracle. The candidates the index
+        returns are re-matched against their REDACTED rendering through the same
+        tokenizer, so the count a caller sees is the count it would have got
+        from a store that never held the secret. The LIKE fallback is filtered
+        the same way, under substring semantics to mirror `LIKE '%q%'`.
+
+        The rows returned carry the REDACTED text, so a caller cannot
+        reintroduce the leak by rendering what it got back.
+        """
         cutoff = time.time() - (minutes_ago * 60)
+        used_fts = True
         with self._lock:
             try:
                 rows = self._conn.execute(
@@ -214,6 +250,7 @@ class ActivityDB:
                 ).fetchall()
             except sqlite3.OperationalError:
                 # Fallback to LIKE if FTS match syntax fails
+                used_fts = False
                 like_query = f"%{query}%"
                 rows = self._conn.execute(
                     "SELECT id, timestamp, window_title, app_name, "
@@ -225,7 +262,18 @@ class ActivityDB:
                     (like_query, like_query, like_query, cutoff),
                 ).fetchall()
 
-        return [dict(row) for row in rows]
+        kept = keep_rows_matching_redacted_text(
+            query,
+            [dict(row) for row in rows],
+            _searchable_activity_text,
+            tokenize=_ACTIVITY_FTS_TOKENIZER if used_fts else None,
+        )
+        for row in kept:
+            for column in _ACTIVITY_TEXT_COLUMNS:
+                value = row.get(column)
+                if isinstance(value, str) and value:
+                    row[column] = redact_sensitive(value)
+        return kept
 
     def get_context_at(self, minutes_ago: float) -> dict | None:
         """Get the frame + metadata from approximately N minutes ago."""
@@ -293,6 +341,19 @@ class ActivityDB:
     # history (the store is one row per distinct copy) and bounded so a caller
     # cannot ask for a full-table scan by passing a huge minutes_ago.
     _SEARCH_SCAN_LIMIT = 2000
+
+    def clipboard_rows_in_window(self, minutes_ago: int = 60) -> int:
+        """How many clipboard rows the window holds, ignoring the scan cap.
+
+        Lets a caller tell "no matches" from "no matches in the part I looked
+        at". A COUNT over a time range says nothing about any row's CONTENT, so
+        this is not a way back into the oracle search_clipboard closed.
+        """
+        cutoff = time.time() - (minutes_ago * 60)
+        with self._lock:
+            return self._conn.execute(
+                "SELECT COUNT(*) FROM clipboard WHERE timestamp >= ?", (cutoff,)
+            ).fetchone()[0]
 
     def search_clipboard(self, query: str, minutes_ago: int = 60) -> list[dict]:
         """Search clipboard history by text content, MATCHING REDACTED TEXT.

@@ -160,6 +160,72 @@ class TestMcpToolsDoNotServeSecrets:
         assert secret not in listed, f"{family}: raw pre-fix entry leaked through memory_list"
 
 
+class TestKeyAndTagsAreRedactedToo:
+    """Review S-2: only `value` was redacted, and all three are FTS-indexed.
+
+    memories_fts indexes key, value AND tags (storage.py `_WARM_FTS`), so a
+    caller doing memory_store(key="sk-ant-...", value="the prod key") put the
+    secret in a stored column and in a search index while the one field that
+    was scrubbed held nothing sensitive at all.
+    """
+
+    @pytest.mark.parametrize("family,secret", SECRETS, ids=IDS)
+    def test_a_secret_shaped_key_is_not_stored_raw(self, store, family, secret):
+        store.store(key=f"{CONTROL_WORD}/{secret}", value="ordinary note", ttl_hours=1)
+
+        rows = store.warm.list_all(limit=10)
+        assert rows, f"{family}: nothing was stored -- assertion would be vacuous"
+        assert secret not in json.dumps(rows, default=str), (
+            f"{family}: the key was written to `memories` verbatim"
+        )
+
+    @pytest.mark.parametrize("family,secret", SECRETS, ids=IDS)
+    def test_a_secret_shaped_tag_is_not_stored_raw(self, store, family, secret):
+        store.store(
+            key=f"{CONTROL_WORD}/tagged", value="ordinary note",
+            tags=[CONTROL_WORD, secret], ttl_hours=1,
+        )
+
+        row = store.warm.get(f"{CONTROL_WORD}/tagged")
+        assert row is not None, f"{family}: nothing was stored -- vacuous"
+        assert CONTROL_WORD in json.dumps(row, default=str), "the benign tag was lost"
+        assert secret not in json.dumps(row, default=str), (
+            f"{family}: the tag was written to `memories` verbatim"
+        )
+
+    @pytest.mark.parametrize("family,secret", SECRETS, ids=IDS)
+    def test_neither_reaches_the_database_file(self, store, tmp_path, family, secret):
+        store.store(
+            key=f"{CONTROL_WORD}/{secret}", value="ordinary note",
+            tags=[secret], ttl_hours=1,
+        )
+        store.warm.close()
+
+        blob = (tmp_path / "mem" / "memory.db").read_bytes()
+        wal = tmp_path / "mem" / "memory.db-wal"
+        if wal.exists():
+            blob += wal.read_bytes()
+        assert CONTROL_WORD.encode() in blob, "nothing was written -- vacuous"
+        assert secret.encode() not in blob, (
+            f"{family}: reached memory.db through the key or the tag list"
+        )
+
+    def test_the_key_stored_is_the_redacted_one(self, store):
+        """Consequence worth pinning: the lookup key changes, so a caller that
+        stored a secret-shaped key cannot recall it under the raw spelling."""
+        secret = "ghp_zqmemneedle0123456789abcdefghijklmnop"
+        store.store(key=secret, value="ordinary note", ttl_hours=1)
+
+        assert store.recall(secret) is None
+        assert store.recall(redact_sensitive(secret)) is not None
+
+    def test_an_ordinary_key_and_tags_are_untouched(self, store):
+        store.store(key="notes/deploy", value="ordinary", tags=["ops", "deploy"], ttl_hours=1)
+        row = store.warm.get("notes/deploy")
+        assert row["key"] == "notes/deploy"
+        assert sorted(row["tags"]) == ["deploy", "ops"]
+
+
 class TestValueSizeCap:
     """Refused loudly, never truncated: a memory cut in half is worse than one
     that was rejected, because the caller believes it stored something."""

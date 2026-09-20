@@ -239,6 +239,187 @@ class TestBenignStringsAreNotRedacted:
         assert redact_sensitive(text) == text
 
 
+class TestSecondReviewFalsePositives:
+    """Two patterns rewrote ordinary English; both were reproduced by review S-6.
+
+    "Basic responsibilities of the role" became "[REDACTED:BASIC_AUTH] of the
+    role" because any 16+-letter word satisfied the base64 character class, and
+    "task-oriented-dialogue-system-evaluation" became "ta[REDACTED:API_KEY]"
+    because the glued sk- rule asked only for 32 characters of
+    [A-Za-z0-9_-] -- which a hyphenated phrase supplies.
+
+    Over-redaction is not cosmetic here: the startup sweep REWRITES the stored
+    row, so a false positive is permanent.
+    """
+
+    @pytest.mark.parametrize(
+        "benign",
+        [
+            # Reproduced verbatim from the review.
+            "Basic responsibilities of the role",
+            "the task-oriented-dialogue-system-evaluation suite",
+            # Same shape, so a fix that special-cases the two reported strings
+            # rather than the pattern fails here.
+            "Basic Responsibilities Of The Role",
+            "basic understanding of distributed systems",
+            "Basic authentication documentation index",
+            "risk-weighted-capital-adequacy-assessment",
+            "desk-reservation-system-integration-guide",
+            "disk-encryption-configuration-instructions",
+        ],
+    )
+    def test_ordinary_text_survives(self, benign):
+        assert redact_sensitive(benign) == benign, f"over-redacted: {benign!r}"
+
+    def test_http_basic_still_matches(self):
+        """The negative cases must not have been bought by disabling the rule."""
+        cleaned, counts = redact_with_counts(
+            "Authorization: Basic enFiYXNpY25lZWRsZTAxMjM0NTY3"
+        )
+        assert "enFiYXNpY25lZWRsZTAxMjM0NTY3" not in cleaned
+        assert counts.get("BASIC_AUTH") == 1
+
+    def test_http_basic_without_a_digit_still_matches(self):
+        """Discriminator is base64 SHAPE, not the presence of a digit.
+
+        "dXNlcjpwYXNzd29yZA==" is base64("user:password") and carries no digit
+        at all; what marks it is the internal lowercase->uppercase flip and the
+        "=" padding.
+        """
+        assert "dXNlcjpwYXNzd29yZA" not in redact_sensitive(
+            "Authorization: Basic dXNlcjpwYXNzd29yZA=="
+        )
+
+    def test_glued_sk_key_still_matches(self):
+        secret = "sk-A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6"
+        assert secret[3:] not in redact_sensitive(f"deploynotesx{secret} trailing")
+
+
+class TestCardNumbersAreLuhnChecked:
+    """A 16-digit run is not a card number. A 16-digit run that passes Luhn is.
+
+    The CC pattern was pure shape -- four groups of four digits -- so any long
+    identifier or concatenated date was rewritten as [REDACTED:CC]. Every card
+    network issues numbers with a Luhn check digit and a registered IIN prefix,
+    which is what Presidio's CreditCardRecognizer validates and what the
+    prior-art pass measured at 10/10 against six real test PANs and four benign
+    digit runs.
+
+    The trade, named so it is not a surprise: a card whose digits were MISREAD
+    by OCR now fails Luhn and is no longer redacted. Presidio makes the same
+    trade; the alternative is scrubbing every invoice number on screen.
+
+    Every PAN below is a published network TEST number, not a real card.
+    """
+
+    VALID_PANS = [
+        ("visa", "4111111111111111"),
+        ("visa_spaced", "4111 1111 1111 1111"),
+        ("visa_hyphenated", "4111-1111-1111-1111"),
+        ("mastercard", "5555555555554444"),
+        ("mastercard_2series", "2223003122003222"),
+        ("amex", "378282246310005"),
+        ("amex_spaced", "3782 822463 10005"),
+        ("discover", "6011111111111117"),
+    ]
+
+    @pytest.mark.parametrize(
+        "family,pan", VALID_PANS, ids=[p[0] for p in VALID_PANS]
+    )
+    def test_a_real_test_card_is_still_redacted(self, family, pan):
+        cleaned, counts = redact_with_counts(f"card {pan} on file")
+        assert pan not in cleaned, f"{family}: a valid PAN stopped being redacted"
+        assert counts.get("CC") == 1
+
+    @pytest.mark.parametrize(
+        "benign",
+        [
+            # Reported by the coordinator: a concatenated date-plus-counter.
+            "build 2026091912345678",
+            # One digit changed from the Visa test PAN, so the IIN is still
+            # valid and only the checksum fails -- this is the case a
+            # prefix-only check would miss.
+            "order4111111111111112",
+            # Valid Luhn is not enough either -- no network issues a 9xxx IIN.
+            # (Constructed from the Visa test PAN by changing the leading digit
+            # and rebalancing the check digit, so the checksum really does pass;
+            # the test below asserts that rather than assuming it.)
+            "ref 9111111111111110 filed",
+            # Ordinary 16-digit identifiers.
+            "session 1234567890123456 expired",
+        ],
+    )
+    def test_a_digit_run_that_is_not_a_card_survives(self, benign):
+        assert redact_sensitive(benign) == benign, f"over-redacted: {benign!r}"
+
+    def test_the_checksum_and_the_prefix_are_both_required(self):
+        """Neither gate alone explains the negatives above, so both are pinned.
+
+        "4111111111111112" has a valid Visa IIN and a broken checksum;
+        "9111111111111110" has a valid checksum and no issuer prefix. If either
+        check were dropped, one of these would start being redacted again.
+        """
+        from contextpulse_core.redact import _has_card_iin, _luhn_checksum
+
+        # The mechanism, asserted rather than assumed: if "9111111111111110"
+        # did not actually pass Luhn, this class would prove nothing about the
+        # IIN check and the docstring above would be false.
+        assert _has_card_iin("4111111111111112") is True
+        assert _luhn_checksum("4111111111111112") != 0
+        assert _luhn_checksum("9111111111111110") == 0
+        assert _has_card_iin("9111111111111110") is False
+
+        for not_a_card in ("4111111111111112", "9111111111111110"):
+            assert not_a_card in redact_sensitive(f"id {not_a_card} here")
+
+
+class TestUnterminatedPrivateKeyHeader:
+    """Review S-7: a BEGIN armour with no END matched nothing at all.
+
+    OCR of a scrolled terminal, a clipboard cut at the 10,000-character limit
+    and a screenshot of the top half of a key all produce a header plus body
+    and no footer. The paired pattern requires the footer, so the visible key
+    material was stored verbatim.
+    """
+
+    # Synthetic: valid base64 characters, not a real key.
+    UNTERMINATED = (
+        "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+        "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtz\n"
+        "c3Fwcml2YXRlbmVlZGxlMDEyMzQ1Njc4OWFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3\n"
+    )
+
+    def test_header_without_end_armour_is_redacted(self):
+        cleaned, counts = redact_with_counts("pasted:\n" + self.UNTERMINATED)
+        assert "PRIVATE_KEY" in counts, "the truncated key matched nothing"
+        assert "BEGIN OPENSSH PRIVATE KEY" not in cleaned
+        assert "b3BlbnNzaC1rZXktdjEAAAAABG5vbmU" not in cleaned, (
+            "the header was marked but the key material was left on disk"
+        )
+        assert "pasted:" in cleaned, "context before the key was destroyed"
+
+    def test_bare_header_with_no_body_is_redacted(self):
+        assert "PRIVATE KEY" not in redact_sensitive("-----BEGIN PRIVATE KEY-----")
+
+    def test_prose_after_a_truncated_key_survives(self):
+        cleaned = redact_sensitive(
+            self.UNTERMINATED + "then I closed the terminal window."
+        )
+        assert "then I closed the terminal window." in cleaned, (
+            "the unterminated rule swallowed everything to end-of-text"
+        )
+
+    def test_a_complete_block_still_counts_once(self):
+        """The new rule runs after the paired one, so a normal key is not
+        matched twice and its count stays honest."""
+        cleaned, counts = redact_with_counts(
+            "-----BEGIN RSA PRIVATE KEY-----\nzqpairedneedle0123456789abcdef\n"
+            "-----END RSA PRIVATE KEY-----"
+        )
+        assert counts["PRIVATE_KEY"] == 1
+        assert "zqpairedneedle0123456789abcdef" not in cleaned
+
+
 class TestBareAwsSecretIsContextual:
     """A bare AWS secret is 40 base64 characters with no prefix and no label.
 
