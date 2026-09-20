@@ -200,19 +200,40 @@ def _refuse_if_session_0() -> None:
     sys.exit(1)
 
 
-def _copy_mcp_token() -> None:
+def _copy_mcp_token(notify=None) -> None:
     """Put the Claude Code MCP snippet, token included, on the clipboard.
 
     Runs on a spawned thread from the tray callback -- never inline, because
-    blocking a pystray menu callback blocks the whole message pump.
+    blocking a pystray menu callback blocks the whole message pump. And the
+    copy itself goes through clipboard_lock.copy_text: pyperclip.copy calls
+    EmptyClipboard, and doing that while the sight poller holds a GlobalLock'd
+    pointer is the 0xC0000374 heap corruption the lock exists to prevent.
+
+    `notify` is the daemon's tray notifier, so a clipboard that was busy
+    reaches the user the same way every other tray failure does instead of
+    only a log line.
     """
     from contextpulse_core import mcp_auth
+    from contextpulse_core.clipboard_lock import copy_text
+
     try:
-        import pyperclip
-        pyperclip.copy(mcp_auth.config_snippet("claude-code"))
-        logger.info("Copied MCP client config to the clipboard")
+        snippet = mcp_auth.config_snippet("claude-code")
     except Exception:
-        logger.exception("Could not copy the MCP config to the clipboard")
+        logger.exception("Could not build the MCP client config")
+        if notify:
+            notify("ContextPulse", "Could not read the MCP token — see the log.")
+        return
+
+    if copy_text(snippet, what="the MCP client config"):
+        logger.info("Copied MCP client config to the clipboard")
+        return
+
+    if notify:
+        notify(
+            "ContextPulse",
+            "Clipboard busy — MCP config not copied. Try again, or run "
+            "contextpulse-mcp --print-config claude-code",
+        )
 
 
 def start_secret_migration() -> threading.Thread:
@@ -762,7 +783,9 @@ class ContextPulseDaemon:
             ),
             pystray.MenuItem(
                 "Copy MCP Token",
-                lambda: threading.Thread(target=_copy_mcp_token, daemon=True).start(),
+                lambda: threading.Thread(
+                    target=_copy_mcp_token, args=(self._notify_tray,), daemon=True,
+                ).start(),
             ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit", self._quit),

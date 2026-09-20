@@ -99,16 +99,27 @@ def show_welcome_dialog() -> None:
     ).pack(pady=(0, 8))
 
     def copy_mcp_config():
-        """Put the Claude Code snippet on the clipboard, token included."""
-        try:
-            import pyperclip
+        """Put the Claude Code snippet on the clipboard, token included.
 
+        Through clipboard_lock.copy_text, never pyperclip directly: this
+        dialog can be open while the sight poller is reading the clipboard,
+        and pyperclip.copy's EmptyClipboard frees handles the poller may be
+        holding (0xC0000374, no traceback).
+        """
+        try:
             from contextpulse_core import mcp_auth
-            pyperclip.copy(mcp_auth.config_snippet("claude-code"))
-            status_label.config(text="Copied — paste into ~/.claude.json")
+            from contextpulse_core.clipboard_lock import copy_text
+
+            snippet = mcp_auth.config_snippet("claude-code")
         except Exception:
-            logger.exception("Could not copy the MCP config snippet")
-            status_label.config(text="Could not copy — see the log")
+            logger.exception("Could not build the MCP config snippet")
+            status_label.config(text="Could not read the token — see the log")
+            return
+
+        if copy_text(snippet, what="the MCP client config"):
+            status_label.config(text="Copied — paste into ~/.claude.json")
+        else:
+            status_label.config(text="Clipboard busy — not copied. Try again.")
 
     status_label = gui_theme.make_label(
         frame, "", font=("Segoe UI", 8), fg=gui_theme.TEXT_MUTED,

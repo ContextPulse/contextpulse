@@ -37,11 +37,19 @@ mitigated instead by bounding the read (see ``get_clipboard_text``) and by
 keeping the locked window as short as the API allows.
 """
 
+import logging
 import os
 import threading
 import time
 
-__all__ = ["CLIPBOARD_LOCK_TIMEOUT", "clipboard_lock", "write_breadcrumb"]
+__all__ = [
+    "CLIPBOARD_LOCK_TIMEOUT",
+    "clipboard_lock",
+    "copy_text",
+    "write_breadcrumb",
+]
+
+logger = logging.getLogger(__name__)
 
 # Every in-process Win32 clipboard operation -- read OR write -- must hold
 # this for the whole open/use/close cycle, not merely for the API call.
@@ -86,3 +94,43 @@ def write_breadcrumb(name: str) -> None:
 def breadcrumbs_enabled(var: str, default: str = "1") -> bool:
     """Read a breadcrumb on/off switch from the environment."""
     return os.environ.get(var, default) != "0"
+
+
+def copy_text(text: str, what: str = "text") -> bool:
+    """Put `text` on the clipboard under the lock. False if it could not.
+
+    The one entry point for every clipboard WRITE that is not the voice
+    paster. pyperclip.copy() calls EmptyClipboard, which frees every handle on
+    the clipboard while the sight poller may be holding a GlobalLock'd pointer
+    into one of them -- the read-after-free that exits the daemon 0xC0000374
+    with no traceback. The lock is only sufficient while every in-process
+    caller takes it, so "one helper, no bare calls" is the property, not the
+    style preference; test_no_bare_pyperclip_copy_outside_the_helper pins it.
+
+    Returns rather than raises, and the caller surfaces the failure in
+    whatever way it already surfaces its own errors. A copy that cannot get
+    the lock is skipped, never forced: losing a copy-to-clipboard costs the
+    user a click, and racing the poller costs them the daemon.
+
+    The paster is the deliberate exception -- it holds the lock across an
+    entire copy/paste/restore region, including the Ctrl+V, so it cannot
+    delegate to a helper that releases between calls.
+    """
+    if not clipboard_lock.acquire(timeout=CLIPBOARD_LOCK_TIMEOUT):
+        logger.error(
+            "Clipboard busy for %.1fs -- skipped copying %s rather than racing "
+            "another clipboard user",
+            CLIPBOARD_LOCK_TIMEOUT,
+            what,
+        )
+        return False
+    try:
+        import pyperclip
+
+        pyperclip.copy(text)
+        return True
+    except Exception:
+        logger.exception("Could not copy %s to the clipboard", what)
+        return False
+    finally:
+        clipboard_lock.release()

@@ -15,7 +15,7 @@ import logging
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from contextpulse_core import gui_theme, mcp_auth
+from contextpulse_core import clipboard_lock, gui_theme, mcp_auth
 from contextpulse_core.config import load_config, save_config
 from contextpulse_core.license import (
     get_license_email,
@@ -375,19 +375,29 @@ def _build_and_run() -> None:
         show_btn["w"].config(text="Hide" if token_state["shown"] else "Show")
 
     def copy_snippet() -> None:
+        """Copy the Claude Code snippet under the clipboard lock.
+
+        Not pyperclip directly: this dialog is open while the sight poller is
+        reading the clipboard every second, and pyperclip.copy's
+        EmptyClipboard frees handles the poller may be holding -- the
+        0xC0000374 heap corruption that takes the daemon down with no
+        traceback.
+        """
         if not token_state["value"]:
             return
-        try:
-            import pyperclip
-            pyperclip.copy(mcp_auth.config_snippet("claude-code", token=token_state["value"]))
+        snippet = mcp_auth.config_snippet("claude-code", token=token_state["value"])
+        if clipboard_lock.copy_text(snippet, what="the MCP client config"):
             messagebox.showinfo(
                 "ContextPulse",
                 "Claude Code config copied. Paste it into ~/.claude.json, then\n"
                 "reconnect contextpulse in the /mcp panel.",
             )
-        except Exception:
-            logger.exception("Could not copy the MCP config snippet")
-            messagebox.showerror("ContextPulse", "Could not copy to the clipboard — see the log.")
+        else:
+            messagebox.showerror(
+                "ContextPulse",
+                "Clipboard busy — nothing was copied.\n\n"
+                "Try again, or run:  contextpulse-mcp --print-config claude-code",
+            )
 
     def regenerate() -> None:
         if not messagebox.askyesno(
