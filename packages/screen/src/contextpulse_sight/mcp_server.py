@@ -45,6 +45,7 @@ from contextpulse_sight.privacy import (
     is_blocked,
     is_title_blocked,
 )
+from contextpulse_sight.redact import redact_sensitive
 
 logging.basicConfig(
     level=logging.INFO,
@@ -67,6 +68,24 @@ def _get_event_bus() -> EventBus:
     if _event_bus is None:
         _event_bus = EventBus(_activity_db.db_path)
     return _event_bus
+
+
+def _redact(value: Any) -> str:
+    """Scrub secrets from any stored text on its way out of an MCP tool.
+
+    Second layer, not the primary one -- ClipboardMonitor and OCRWorker redact
+    before writing. This exists because rows written before that fix are still
+    on disk, and because a store is not the only thing that can put text in
+    front of a model: everything read back out of activity.db goes through
+    here so a future reader of a new column cannot forget.
+
+    Redact BEFORE truncating a preview, never after: every pattern has a
+    minimum length, so a token a [:200] slice cuts in half matches nothing and
+    its leading half would be echoed verbatim.
+    """
+    if not value:
+        return ""
+    return redact_sensitive(str(value))
 
 
 def _track_call(func):
@@ -150,10 +169,15 @@ def get_monitor_summary() -> str:
             app = fg_app or app
             title = fg_title or title
 
-        # Privacy check AFTER override so blocked foreground windows are caught
+        # Privacy check AFTER override so blocked foreground windows are
+        # caught, and BEFORE redaction -- redacting first could rewrite the
+        # very substring a blocklist pattern matches on.
         if is_title_blocked(title):
             title = "[BLOCKED]"
             app = "[BLOCKED]"
+        else:
+            app = _redact(app)
+            title = _redact(title)
 
         # Calculate staleness
         if ts:
@@ -321,8 +345,8 @@ def get_screenshot(mode: str = "active", monitor_index: int | None = None) -> An
         for idx, img in monitors:
             state = state_map.get(idx, {})
             diff = state.get("diff_score", 100.0)  # unknown = include
-            title = state.get("window_title", "")
-            app = state.get("app_name", "")
+            title = _redact(state.get("window_title", ""))
+            app = _redact(state.get("app_name", ""))
 
             if diff < 1.0 and state.get("timestamp", 0):
                 # Static monitor — return text summary only
@@ -573,7 +597,7 @@ def get_activity_summary(hours: float = 8.0) -> str:
         lines.append("Apps (by frequency):")
         for app, count in list(summary["apps"].items())[:15]:
             pct = count / summary["total_captures"] * 100
-            lines.append(f"  {app}: {count} captures ({pct:.0f}%)")
+            lines.append(f"  {_redact(app)}: {count} captures ({pct:.0f}%)")
 
     if summary["titles"]:
         lines.append("\nRecent window titles:")
@@ -581,7 +605,7 @@ def get_activity_summary(hours: float = 8.0) -> str:
             if is_title_blocked(title):
                 lines.append("  - [BLOCKED — matches privacy blocklist]")
             else:
-                lines.append(f"  - {title[:80]}")
+                lines.append(f"  - {_redact(title)[:80]}")
 
     return "\n".join(lines)
 
@@ -614,9 +638,9 @@ def search_history(query: str, minutes_ago: int = 60) -> str:
         lines.append(f"({skipped} result(s) hidden — matched privacy blocklist)\n")
     for r in filtered:
         ts_str = datetime.fromtimestamp(r["timestamp"]).strftime("%H:%M:%S")
-        lines.append(f"[{ts_str}] {r['app_name']} — {r['window_title'][:80]}")
+        lines.append(f"[{ts_str}] {_redact(r['app_name'])} — {_redact(r['window_title'])[:80]}")
         if r.get("ocr_text"):
-            snippet = r["ocr_text"][:200].replace("\n", " ")
+            snippet = _redact(r["ocr_text"])[:200].replace("\n", " ")
             lines.append(f"  OCR: {snippet}...")
         lines.append(f"  Monitor: {r['monitor_index']}, Frame: {r.get('frame_path', 'N/A')}")
         lines.append("")
@@ -649,8 +673,8 @@ def get_context_at(minutes_ago: float = 5.0) -> list:
 
     meta = (
         f"[Context at {ts_str}]\n"
-        f"App: {record['app_name']}\n"
-        f"Window: {record['window_title']}\n"
+        f"App: {_redact(record['app_name'])}\n"
+        f"Window: {_redact(record['window_title'])}\n"
         f"Monitor: {record['monitor_index']}"
     )
 
@@ -667,7 +691,7 @@ def get_context_at(minutes_ago: float = 5.0) -> list:
             )
 
     if record.get("ocr_text"):
-        results.append(f"\nOCR Text:\n{record['ocr_text'][:500]}")
+        results.append(f"\nOCR Text:\n{_redact(record['ocr_text'])[:500]}")
 
     return results
 
@@ -692,7 +716,11 @@ def get_clipboard_history(count: int = 10) -> str:
     lines = [f"=== Clipboard History ({len(entries)} entries) ===\n"]
     for entry in entries:
         ts_str = datetime.fromtimestamp(entry["timestamp"]).strftime("%H:%M:%S")
-        text = entry["text"]
+        # Redact before the preview slice, so the char count and the 200-char
+        # cut both describe what is actually returned. Rows written before
+        # clipboard redaction shipped are still raw on disk; this is what
+        # stops them reaching a model.
+        text = _redact(entry["text"])
         # Show first 200 chars with line count
         line_count = text.count("\n") + 1
         preview = text[:200].replace("\n", " \\n ")
@@ -727,7 +755,7 @@ def search_clipboard(query: str, minutes_ago: int = 60) -> str:
     lines = [f"=== Clipboard Search: '{query}' ({len(results)} results) ===\n"]
     for entry in results:
         ts_str = datetime.fromtimestamp(entry["timestamp"]).strftime("%H:%M:%S")
-        text = entry["text"]
+        text = _redact(entry["text"])
         preview = text[:300].replace("\n", " \\n ")
         if len(text) > 300:
             preview += "..."
@@ -813,21 +841,24 @@ def search_all_events(query: str, minutes_ago: int = 60, modality: str | None = 
         ts_str = datetime.fromtimestamp(r["timestamp"]).strftime("%H:%M:%S")
         mod = r.get("modality", "?")
         evt = r.get("event_type", "?")
-        app = r.get("app_name", "")
-        title = r.get("window_title", "")[:60]
+        app = _redact(r.get("app_name", ""))
+        title = _redact(r.get("window_title", ""))[:60]
 
         lines.append(f"[{ts_str}] [{mod}/{evt}] {app} — {title}")
 
-        # Extract searchable text from payload
+        # Extract searchable text from payload. Redact before the 150-char
+        # snippet: this is the tool that reaches clipboard events (modality
+        # "clipboard" reads payload.text) as well as OCR and voice text.
         try:
             import json as _json
             payload = _json.loads(r["payload"]) if isinstance(r["payload"], str) else r.get("payload", {})
             text = payload.get("ocr_text") or payload.get("transcript") or payload.get("text") or ""
             if text:
+                text = _redact(text)
                 snippet = text[:150].replace("\n", " ")
                 lines.append(f"  {snippet}{'...' if len(text) > 150 else ''}")
         except Exception:
-            pass
+            logger.debug("search_all_events: unreadable payload", exc_info=True)
         lines.append("")
 
     return "\n".join(lines)
@@ -883,8 +914,8 @@ def get_event_timeline(minutes_ago: float = 5.0, modality: str | None = None) ->
         ts_str = datetime.fromtimestamp(e.timestamp).strftime("%H:%M:%S")
         mod = e.modality.value if hasattr(e.modality, 'value') else str(e.modality)
         evt = e.event_type.value if hasattr(e.event_type, 'value') else str(e.event_type)
-        app = e.app_name or ""
-        title = e.window_title[:50] if e.window_title else ""
+        app = _redact(e.app_name)
+        title = _redact(e.window_title)[:50] if e.window_title else ""
 
         line = f"[{ts_str}] {mod:>9}/{evt:<20} {app}"
         if title:

@@ -29,10 +29,10 @@ would be decoration.
 
 import json
 import sqlite3
+import time
 from unittest.mock import patch
 
 import pytest
-
 from contextpulse_sight.redact import redact_sensitive
 
 # The word every clipboard sample carries, outside every redactable span.
@@ -301,6 +301,105 @@ class TestSecretsNeverReachStorageOrMCP:
         assert secret.encode() not in art["db_bytes"], (
             f"{family}: secret found in the raw database file"
         )
+
+
+class TestPreFixRowsAreRedactedAtTheMCPBoundary:
+    """Rows written before the fix are still raw on disk.
+
+    The integration test above cannot cover this: it drives the fixed monitor,
+    so the store is already clean and its MCP assertions would pass even with
+    no boundary redaction at all. These tests write RAW rows straight to the
+    tables -- the way the daemon did until this branch -- and assert the tools
+    scrub them on the way out.
+    """
+
+    def _raw_store(self, tmp_path, secret_text):
+        from contextpulse_core.spine import EventBus
+        from contextpulse_sight.activity import ActivityDB
+        from contextpulse_sight.sight_module import SightModule
+
+        db_path = tmp_path / "activity.db"
+        db = ActivityDB(db_path=db_path)
+        bus = EventBus(db_path)
+        module = SightModule()
+        module.register(bus.emit)
+        module.start()
+
+        now = time.time()
+        # Straight past ClipboardMonitor -- exactly what pre-fix rows look like.
+        db.record_clipboard(timestamp=now, text=secret_text)
+        module.emit_clipboard(timestamp=now, text=secret_text, hash_val="deadbeef")
+        module.emit_ocr(
+            timestamp=now,
+            frame_path="/tmp/f.jpg",
+            ocr_text=secret_text,
+            confidence=0.9,
+            app_name="Terminal",
+            window_title=f"{CONTROL_WORD} shell",
+        )
+        db.record(
+            timestamp=now,
+            window_title=f"{CONTROL_WORD} {secret_text}",
+            app_name="Terminal",
+            monitor_index=0,
+            frame_path="/tmp/f.jpg",
+        )
+        return db, bus, module
+
+    @pytest.mark.parametrize("family,clip_text,secret,_p", SECRET_CASES, ids=CASE_IDS)
+    def test_tools_scrub_raw_rows(self, tmp_path, family, clip_text, secret, _p):
+        from contextpulse_sight import mcp_server
+
+        # The stored row is the clipboard text verbatim -- the keyword-value
+        # families (password:, api_key=, aws_secret_access_key=) are only
+        # redactable with their keyword present, so planting the bare value
+        # would test a string that was never a secret.
+        db, bus, module = self._raw_store(tmp_path, clip_text)
+
+        original_db = mcp_server._activity_db
+        original_bus = mcp_server._event_bus
+        mcp_server._activity_db = db
+        mcp_server._event_bus = bus
+        try:
+            with (
+                patch("contextpulse_sight.mcp_server.has_pro_access", return_value=True),
+                patch("contextpulse_sight.mcp_server.is_title_blocked", return_value=False),
+            ):
+                responses = {
+                    "get_clipboard_history": mcp_server.get_clipboard_history(count=50),
+                    "search_clipboard": mcp_server.search_clipboard(
+                        CONTROL_WORD, minutes_ago=60
+                    ),
+                    "search_all_events": mcp_server.search_all_events(
+                        CONTROL_WORD, minutes_ago=60
+                    ),
+                    "get_event_timeline": mcp_server.get_event_timeline(minutes_ago=60),
+                    "search_history": mcp_server.search_history(
+                        CONTROL_WORD, minutes_ago=60
+                    ),
+                    "get_context_at": mcp_server.get_context_at(minutes_ago=0.1),
+                    "get_activity_summary": mcp_server.get_activity_summary(hours=1.0),
+                }
+        finally:
+            mcp_server._activity_db = original_db
+            mcp_server._event_bus = original_bus
+            module.stop()
+            bus.close()
+            db.close()
+
+        # Positive control: the tools returned real content, so "secret not in
+        # response" is a statement about redaction rather than about an empty
+        # string. get_event_timeline prints no payload text, so it carries the
+        # control only via the window title.
+        for tool in ("get_clipboard_history", "search_clipboard", "search_all_events"):
+            assert CONTROL_WORD in str(responses[tool]), (
+                f"{family}: {tool} returned nothing to redact -- assertion is vacuous"
+            )
+
+        for tool, response in responses.items():
+            assert secret not in str(response), (
+                f"{family}: raw pre-fix row leaked through MCP tool {tool}"
+            )
 
 
 class TestRedactionPrecedesTruncation:
