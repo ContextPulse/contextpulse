@@ -542,6 +542,38 @@ class TestStorageModeLogic:
         assert "thinkorswim.exe" in ALWAYS_BOTH_APPS
 
 
+class TestSearchHistoryHonoursTheSavedBlocklist:
+    """T7: stored rows are filtered by the blocklist a user actually saved.
+
+    Every other is_title_blocked test in this file patches the function out,
+    so none of them can see whether a saved pattern reaches it. This one sets
+    the pattern through save_config -- the Settings dialog's own call -- and
+    patches nothing on the privacy path.
+    """
+
+    def test_a_saved_pattern_hides_matching_rows(self, tmp_path, isolated_config):
+        from contextpulse_core.config import save_config
+        from contextpulse_sight import mcp_server
+
+        original_db = mcp_server._activity_db
+        test_db = ActivityDB(db_path=tmp_path / "test.db")
+        now = time.time()
+        test_db.record(now, "1Password - vault", "1password.exe")
+        test_db.record(now, "vault design notes", "Code.exe")
+
+        try:
+            mcp_server._activity_db = test_db
+            save_config({"blocklist_patterns": ["1Password"]})
+            result = mcp_server.search_history("vault", minutes_ago=60)
+
+            assert "1Password" not in result
+            assert "vault design notes" in result
+            assert "1 result(s) hidden" in result
+        finally:
+            mcp_server._activity_db = original_db
+            test_db.close()
+
+
 class TestBufferReadRetrieval:
     """Test that get_screenshot reads from buffer before re-capturing."""
 
