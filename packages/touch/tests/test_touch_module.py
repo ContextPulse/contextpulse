@@ -40,11 +40,14 @@ class TestTouchModuleLifecycle:
         module.stop()
         assert not module.is_alive()
 
-    def test_get_config_schema(self, module):
-        schema = module.get_config_schema()
-        assert "touch_burst_timeout" in schema
-        assert "touch_correction_window" in schema
-        assert "touch_mouse_debounce" in schema
+    def test_get_config_schema_is_gone(self, module):
+        """Replaces test_get_config_schema -- see spec section 4.
+
+        The four keys it declared now live once, in
+        contextpulse_core.config._DEFAULTS, and tests/test_config_readers.py
+        is what checks each of them has a reader.
+        """
+        assert not hasattr(module, "get_config_schema")
 
     def test_emit_increments_counter(self, module):
         received = []

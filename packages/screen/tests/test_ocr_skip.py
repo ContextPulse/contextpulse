@@ -64,32 +64,38 @@ class TestShouldRunOcr:
 
 
 class TestOcrDiffThresholdConfig:
-    """Config plumbing: OCR_DIFF_THRESHOLD is loaded from env with a default."""
+    """Config plumbing: ocr_diff_threshold comes from the one declaration.
 
-    def test_default_value_is_5_percent(self, monkeypatch):
-        # Ensure no override leaks in from the test runner's env.
-        monkeypatch.delenv("CONTEXTPULSE_OCR_DIFF_THRESHOLD", raising=False)
-        # Reload config module to pick up the env state.
-        import importlib
+    Was: reload contextpulse_sight.config and read its module constant, which
+    only ever saw the env var. The key now lives in contextpulse_core.config
+    and the capture loop reads it per cycle
+    (test_app_config_controls.py::TestOcrDiffThreshold).
+    """
 
-        from contextpulse_sight import config as config_mod
-        importlib.reload(config_mod)
-        assert config_mod.OCR_DIFF_THRESHOLD == 5.0
+    def test_default_value_is_5_percent(self, isolated_config):
+        from contextpulse_core.config import load_config
 
-    def test_override_via_env(self, monkeypatch):
+        assert load_config()["ocr_diff_threshold"] == 5.0
+
+    def test_override_via_env(self, isolated_config, monkeypatch):
+        from contextpulse_core.config import load_config
+
         monkeypatch.setenv("CONTEXTPULSE_OCR_DIFF_THRESHOLD", "12.5")
-        import importlib
+        assert load_config()["ocr_diff_threshold"] == 12.5
 
-        from contextpulse_sight import config as config_mod
-        importlib.reload(config_mod)
-        assert config_mod.OCR_DIFF_THRESHOLD == 12.5
+    def test_override_via_saved_config(self, isolated_config):
+        from contextpulse_core.config import load_config, save_config
 
-    def test_negative_clamped_to_zero(self, monkeypatch):
+        save_config({"ocr_diff_threshold": 12.5})
+        assert load_config()["ocr_diff_threshold"] == 12.5
+
+    def test_negative_clamped_to_zero(self, isolated_config, monkeypatch):
         # Sanity guard: a misconfigured negative threshold should clamp to 0,
         # which means "always OCR" — safe fallback to prior behavior.
-        monkeypatch.setenv("CONTEXTPULSE_OCR_DIFF_THRESHOLD", "-1")
-        import importlib
+        from contextpulse_core.config import load_config, save_config
 
-        from contextpulse_sight import config as config_mod
-        importlib.reload(config_mod)
-        assert config_mod.OCR_DIFF_THRESHOLD == 0.0
+        monkeypatch.setenv("CONTEXTPULSE_OCR_DIFF_THRESHOLD", "-1")
+        assert load_config()["ocr_diff_threshold"] == 0.0
+        monkeypatch.delenv("CONTEXTPULSE_OCR_DIFF_THRESHOLD")
+        save_config({"ocr_diff_threshold": -1})
+        assert load_config()["ocr_diff_threshold"] == 0.0

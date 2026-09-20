@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Local-first ambient context for AI agents.</strong><br>
-  Screen capture, voice dictation, clipboard, keyboard/mouse activity. All local, all private.
+  Screen capture, voice dictation, clipboard, keyboard/mouse activity. Captured locally, with captured text redacted before it is stored.
 </p>
 
 <p align="center">
@@ -20,9 +20,17 @@
 
 > **Developer Preview (v0.1-alpha).** ContextPulse is under active development. APIs and configuration may change between releases. [Report issues](https://github.com/ContextPulse/contextpulse/issues).
 
-ContextPulse is a desktop daemon that captures your screen, voice, and keyboard/mouse activity in real time, then delivers it to AI agents through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). One process, one tray icon, 35 MCP tools, zero cloud dependency.
+ContextPulse is a desktop daemon that captures your screen, voice, and keyboard/mouse activity in real time, then delivers it to AI agents through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). One tray-icon daemon does the capture, a companion MCP process serves it to your agent. 37 MCP tools, zero cloud dependency.
 
-Everything stays local. No cloud. No telemetry. Your data never leaves your machine.
+Capture, storage and search all run on your machine, and there is no telemetry. ContextPulse sends nothing off the machine until you switch on one of three network features, each off by default:
+
+- Semantic memory search downloads its embedding model from huggingface.co the first time you use it. One file, once, then it runs offline.
+- Voice LLM cleanup sends the text of a dictation to Anthropic's API to fix grammar and strip filler words. It needs an API key in `voice_anthropic_api_key` (or `ANTHROPIC_API_KEY`) and `voice_always_use_llm` turned on. The same key lets the vocabulary learner send recent transcript pairs to Anthropic to find words that speech recognition keeps mishearing.
+- The fact consolidator, `scripts/probe_consolidator.py`, pipes recent captured events to the Claude CLI to distill them into facts. That prompt carries app names, window titles and the captured text itself. It runs only when you run the script or schedule it.
+
+Captured text is redacted before it is stored and again before any MCP tool returns it. Rows written before 0.1.1 are redacted in place by a one-time sweep on the first daemon or MCP-server start after upgrade; `scripts/purge_clipboard_secrets.py` is there if you want to run it by hand. See [SECURITY.md](SECURITY.md) for what the filter covers and what it does not.
+
+**A note on MCP clients.** Once your agent reads a tool result, what happens to it next is that client's decision, not ours. A local model keeps it on the machine. A cloud-backed client sends it to its provider like any other prompt. That applies to every context tool you give an agent, and ContextPulse cannot see or control the hop.
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -62,11 +70,12 @@ Claude calls get_screenshot → get_screen_text:
 
   Active window: VS Code, src/auth/middleware.ts
   OCR text: "export async function validateToken(req: Request)..."
-  Clipboard: "Bearer eyJhbGciOiJIUzI1NiIs..."
+  Clipboard: "[REDACTED:BEARER]"
 
 > Claude: "You're editing the auth middleware in VS Code.
->          I can see the validateToken function, and you have
->          a Bearer token in your clipboard. Want me to help
+>          I can see the validateToken function. You copied a
+>          bearer token, but ContextPulse masked it on the way
+>          to disk, so all I get is the marker. Want me to help
 >          debug the token validation?"
 ```
 
@@ -99,9 +108,9 @@ Claude calls get_activity_summary(hours=4) → search_history("auth"):
 
 AI coding assistants are powerful but blind. They can't see your screen, hear your voice notes, or know what you were just doing. ContextPulse bridges this gap:
 
-- **Local-first, zero cloud dependency.** Your screen, voice, and input data never leave your machine. No accounts, no subscriptions, no third-party servers. Privacy by architecture, not by policy.
-- **MCP-native from day one.** ContextPulse exposes all context as MCP tools. Any MCP client (Claude Desktop, Cursor, Windsurf, VS Code) gets full context without custom integrations.
-- **True multi-modal in a single daemon.** Screen capture, voice dictation, keyboard/mouse input, and semantic memory run in one lightweight process (<1% CPU). No stitching multiple tools together.
+- **Local-first.** Capture, storage and search run on your machine. Core features need no account. Pro is an optional paid tier unlocked by a license key that verifies offline. ContextPulse contacts no third-party server until you switch on one of the opt-in network features listed above, two of which send captured text to Anthropic and are off by default.
+- **MCP-native from day one.** ContextPulse exposes all context as MCP tools over streamable HTTP, so any standards-compliant MCP client can read it without a custom integration. Ready-made config snippets for Claude Code, Cursor and Continue are in [docs/mcp-configs](docs/mcp-configs/README.md).
+- **True multi-modal in a single daemon.** Screen capture, voice dictation and keyboard/mouse input all run in one background process. No stitching multiple tools together.
 - **Open source (AGPL-3.0).** Fully auditable, self-hostable, and extensible. No vendor lock-in, no SaaS dependency, no risk of acquisition-driven shutdowns.
 
 ### What Makes ContextPulse Different
@@ -112,9 +121,9 @@ AI coding assistants are powerful but blind. They can't see your screen, hear yo
 | **Voice dictation** | Yes, local Whisper | Rare as integrated feature |
 | **Keyboard + mouse tracking** | Yes | Rare |
 | **Semantic memory** | Yes, three-tier with hybrid search | Rare |
-| **All modalities in one daemon** | Yes, single lightweight process | No, usually separate tools |
-| **MCP-native** | Yes, 35 tools | Emerging |
-| **100% local, zero cloud** | Yes, privacy by architecture | Uncommon |
+| **All capture in one daemon** | Yes, single background process | No, usually separate tools |
+| **MCP-native** | Yes, 37 tools | Emerging |
+| **Local capture and storage** | Yes, with three opt-in network features, all off by default | Uncommon |
 | **Open source** | AGPL-3.0 | Varies |
 
 ### Platform Support
@@ -152,6 +161,8 @@ contextpulse --setup claude-code   # configures MCP + installs skills
 # or: contextpulse --setup all     # both
 ```
 
+`contextpulse --setup` writes the authenticated `contextpulse` entry into Claude Code, Cursor and Gemini CLI, creating the access token if this is the first run. Re-run it after regenerating the token.
+
 Start ContextPulse:
 
 ```bash
@@ -171,11 +182,16 @@ Add to `~/.claude.json`:
   "mcpServers": {
     "contextpulse": {
       "type": "http",
-      "url": "http://127.0.0.1:8420/mcp"
+      "url": "http://127.0.0.1:8420/mcp",
+      "headers": { "Authorization": "Bearer YOUR_TOKEN_HERE" }
     }
   }
 }
 ```
+
+The endpoint requires an access token. ContextPulse generates one per install on first use and stores it with user-only permissions at `%APPDATA%\ContextPulse\mcp_token` (macOS: `~/Library/Application Support/ContextPulse/mcp_token`; Linux: `$XDG_CONFIG_HOME/ContextPulse/mcp_token`). Print yours with `contextpulse-mcp --print-config claude-code`, or find it in the tray under **Settings -> MCP Access**. See [docs/mcp-configs](docs/mcp-configs/README.md) for Cursor, Gemini CLI, Claude Desktop and troubleshooting.
+
+The token defends against other local callers: other accounts on the machine, sandboxed applications with loopback access, and other MCP clients and agents. It does not defend against a process already running as you, which can read the token file and the databases directly.
 </details>
 
 ## MCP Tools
@@ -226,6 +242,15 @@ Add to `~/.claude.json`:
 | `get_project_context` | Full PROJECT_CONTEXT.md for a project |
 | `route_to_journal` | Route an insight to the project journal |
 
+### Recall (2 free tools)
+
+| Tool | What it does |
+|------|-------------|
+| `facts_about` | Consolidated facts about a project, person, file, tool, or topic |
+| `context_at` | What was happening around a given moment in time |
+
+These two read the nightly-distilled fact store, so they return nothing until the consolidator has run at least once.
+
 ### Memory (5 free + 2 Pro tools)
 
 Basic memory is **free forever**. No license required.
@@ -251,7 +276,7 @@ Memory uses a 3-tier hot/warm/cold architecture: in-memory LRU cache → SQLite 
 | `search_all_events` | Cross-modal full-text search across screen, voice, clipboard, keys |
 | `get_event_timeline` | Temporal view of all events across all modalities |
 
-**Free forever:** 31 tools (Sight × 11, Voice × 7, Touch × 3, Project × 5, Memory × 5)
+**Free forever:** 33 tools (Sight × 11, Voice × 7, Touch × 3, Project × 5, Memory × 5, Recall × 2)
 **Pro:** adds 4 search tools: semantic memory search plus cross-modal event queries
 **Trial:** 30-day Pro trial on first use, no credit card required
 
@@ -270,7 +295,7 @@ ContextPulse is a monorepo with modular packages:
 | `contextpulse-project` | Project detection and journal routing |
 | `contextpulse-memory` | Persistent key-value memory with semantic search (optional) |
 
-All modules emit events to a shared **EventBus** (the "spine"), which writes to a local SQLite database with FTS5 full-text search. MCP servers are read-only processes that query this database.
+All modules emit events to a shared **EventBus** (the "spine"), which writes to a local SQLite database with FTS5 full-text search. The MCP servers never write to `activity.db`; that pipeline is capture-only. The memory server is the exception, and writes by design to its own `memory.db` through `memory_store` and `memory_forget`.
 
 ## Development
 

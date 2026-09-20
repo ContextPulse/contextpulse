@@ -37,6 +37,7 @@ if sys.platform == "darwin":
 else:
     import pystray
 
+from contextpulse_core.config import ACTIVITY_DB_PATH as _cfg_activity_db
 from contextpulse_core.config import OUTPUT_DIR as _cfg_output_dir
 from contextpulse_core.first_run import is_first_run, show_welcome_dialog
 from contextpulse_core.license_dialog import show_nag_dialog
@@ -55,7 +56,14 @@ logger = logging.getLogger("contextpulse.daemon")
 OUTPUT_DIR = _cfg_output_dir
 LOG_FILE = OUTPUT_DIR / "contextpulse.log"
 CRASH_LOG = OUTPUT_DIR / "contextpulse_crash.log"
-ACTIVITY_DB_PATH = OUTPUT_DIR / os.environ.get("CONTEXTPULSE_ACTIVITY_DB", "activity.db")
+# Imported, not recomputed. This line used to be its own
+# `OUTPUT_DIR / os.environ.get("CONTEXTPULSE_ACTIVITY_DB", "activity.db")`,
+# a third expression of the same path beside contextpulse_core.config and
+# contextpulse_sight.config -- three copies that agreed only while all three
+# read the same env var with the same default. The daemon writes the DB that
+# contextpulse_sight.activity and the MCP server read, so a disagreement here
+# is a split-brain database, not a cosmetic duplicate.
+ACTIVITY_DB_PATH = _cfg_activity_db
 
 # Default warn threshold for the thread-budget diagnostic. Override via
 # CONTEXTPULSE_THREAD_BUDGET_WARN. The 2026-04-29 incident saw a 163-thread
@@ -200,6 +208,112 @@ def _refuse_if_session_0() -> None:
     sys.exit(1)
 
 
+def _copy_mcp_token(notify=None) -> None:
+    """Put the Claude Code MCP snippet, token included, on the clipboard.
+
+    Runs on a spawned thread from the tray callback -- never inline, because
+    blocking a pystray menu callback blocks the whole message pump. And the
+    copy itself goes through clipboard_lock.copy_text: pyperclip.copy calls
+    EmptyClipboard, and doing that while the sight poller holds a GlobalLock'd
+    pointer is the 0xC0000374 heap corruption the lock exists to prevent.
+
+    `notify` is the daemon's tray notifier, so a clipboard that was busy
+    reaches the user the same way every other tray failure does instead of
+    only a log line.
+    """
+    from contextpulse_core import mcp_auth
+    from contextpulse_core.clipboard_lock import copy_text
+
+    try:
+        snippet = mcp_auth.config_snippet("claude-code")
+    except Exception:
+        logger.exception("Could not build the MCP client config")
+        if notify:
+            notify("ContextPulse", "Could not read the MCP token — see the log.")
+        return
+
+    if copy_text(snippet, what="the MCP client config"):
+        logger.info("Copied MCP client config to the clipboard")
+        return
+
+    if notify:
+        notify(
+            "ContextPulse",
+            "Clipboard busy — MCP config not copied. Try again, or run "
+            "contextpulse-mcp --print-config claude-code",
+        )
+
+
+def start_secret_migration() -> threading.Thread:
+    """Run the sweep on a background thread and return it.
+
+    NOT synchronous. The sweep is a full-table scan over `events`, and on a
+    real multi-month store that is long enough to look like a startup hang --
+    it timed out the test suite the first time it was wired into __init__,
+    which is how this was found rather than reasoned about.
+
+    Backgrounding is safe HERE specifically because the search paths redact
+    independently (search_clipboard matches redacted text; EventBus.search
+    drops rows that only matched redacted content), so the count oracle is
+    closed with or without this. The sweep is a data cleanup and defence in
+    depth, not the control. If that ever stops being true, this has to become
+    a blocking gate again.
+    """
+    thread = threading.Thread(
+        target=run_secret_migration, name="cp-secret-migration", daemon=True,
+    )
+    thread.start()
+    return thread
+
+
+def run_secret_migration() -> None:
+    """Sweep pre-redaction rows out of activity.db and the four derived stores.
+
+    Separate from purge.ensure_migrated so the daemon does not have to know how
+    to resolve probe.db, knowledge.db and the two memory databases, and so the
+    MCP server can call the identical entry point -- they are different
+    processes and either can be the one that starts first.
+
+    Each path is resolved independently and a failure to resolve one skips only
+    that store: ensure_migrated keeps a marker per store, so a store that is
+    skipped here is simply swept on a later start.
+    """
+    from contextpulse_core.purge import ensure_migrated
+
+    probe_db = None
+    knowledge_db = None
+    memory_db = None
+    memory_cold_db = None
+    try:
+        from contextpulse_core.probe import default_probe_db
+
+        probe_db = Path(default_probe_db())
+    except Exception:
+        logger.debug("probe.db path unresolvable; skipping it in the sweep", exc_info=True)
+    try:
+        from contextpulse_knowledge.bridge import default_knowledge_db
+
+        knowledge_db = Path(default_knowledge_db())
+    except Exception:
+        logger.debug("knowledge.db path unresolvable; skipping it", exc_info=True)
+    try:
+        from contextpulse_memory.storage import default_memory_dir
+
+        memory_dir = Path(default_memory_dir())
+        memory_db = memory_dir / "memory.db"
+        memory_cold_db = memory_dir / "memory_cold.db"
+    except Exception:
+        logger.debug("memory database paths unresolvable; skipping them", exc_info=True)
+
+    ensure_migrated(
+        Path(ACTIVITY_DB_PATH),
+        probe_db=probe_db,
+        knowledge_db=knowledge_db,
+        memory_db=memory_db,
+        memory_cold_db=memory_cold_db,
+    )
+
+
 class ContextPulseDaemon:
     """Unified daemon that runs all ContextPulse modules in one process."""
 
@@ -333,7 +447,12 @@ class ContextPulseDaemon:
         if self._sight_app:
             self._sight_app._event_detector.start()
             self._sight_app._ocr_worker.start()
-            self._sight_app._clipboard_monitor.start()
+            # Via the app's own helper, not _clipboard_monitor.start(): the
+            # monitor is None when clipboard_enabled is false, and this
+            # daemon -- not ContextPulseSightApp.run() -- is the process that
+            # actually runs, so dereferencing it here would AttributeError on
+            # startup and take Sight, Voice and Touch down with it.
+            self._sight_app._start_clipboard_monitor()
             self._sight_app._sight_module.start()
 
             from contextpulse_sight.privacy import SessionMonitor
@@ -343,17 +462,31 @@ class ContextPulseDaemon:
             )
             self._sight_app._session_monitor.start()
 
-            from contextpulse_sight.config import AUTO_INTERVAL
-            if AUTO_INTERVAL > 0:
-                self._sight_app._capture_thread = threading.Thread(
-                    target=self._sight_app._auto_capture_loop, daemon=True
-                )
-                self._sight_app._capture_thread.start()
+            # Both threads start unconditionally. They used to be gated on
+            # `contextpulse_sight.config.AUTO_INTERVAL > 0` -- a module
+            # constant frozen at import -- which meant auto_interval: 0 was a
+            # one-way door: nothing in the process could ever start capturing
+            # again without a daemon restart, and the Settings slider that
+            # claims to set it could not undo it.
+            #
+            # It also took the WATCHDOG down with it, which has nothing to do
+            # with the capture interval: _watchdog_loop is what re-reads
+            # clipboard_enabled every 15s and restarts a dead capture thread.
+            # With auto_interval: 0 the "Capture clipboard" checkbox was
+            # silently inert too.
+            #
+            # `auto_interval <= 0` now means "skip this iteration" INSIDE
+            # _auto_capture_loop (contextpulse_sight.app), so both 0 -> N and
+            # N -> 0 take effect live.
+            self._sight_app._capture_thread = threading.Thread(
+                target=self._sight_app._auto_capture_loop, daemon=True
+            )
+            self._sight_app._capture_thread.start()
 
-                self._sight_app._watchdog_thread = threading.Thread(
-                    target=self._sight_app._watchdog_loop, daemon=True
-                )
-                self._sight_app._watchdog_thread.start()
+            self._sight_app._watchdog_thread = threading.Thread(
+                target=self._sight_app._watchdog_loop, daemon=True
+            )
+            self._sight_app._watchdog_thread.start()
 
             # Sight hotkeys (Ctrl+Shift+S/A/Z/P)
             from pynput import keyboard
@@ -446,7 +579,7 @@ class ContextPulseDaemon:
             self._sight_app.stop_event.set()
             self._sight_app._event_detector.stop()
             self._sight_app._ocr_worker.stop()
-            self._sight_app._clipboard_monitor.stop()
+            self._sight_app._stop_clipboard_monitor()
             self._sight_app._sight_module.stop()
             if hasattr(self._sight_app, "hotkey_listener") and self._sight_app.hotkey_listener:
                 self._sight_app.hotkey_listener.stop()
@@ -690,6 +823,12 @@ class ContextPulseDaemon:
                 "Enter License Key",
                 lambda: threading.Thread(target=show_nag_dialog, daemon=True).start(),
             ),
+            pystray.MenuItem(
+                "Copy MCP Token",
+                lambda: threading.Thread(
+                    target=_copy_mcp_token, args=(self._notify_tray,), daemon=True,
+                ).start(),
+            ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit", self._quit),
         )
@@ -745,6 +884,17 @@ class ContextPulseDaemon:
             self._mutex = _acquire_single_instance_or_exit()
 
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+        # One-time redaction of rows written before capture-side redaction
+        # shipped. In run(), not __init__: a constructor must not do I/O, and
+        # constructing a daemon in a test must not touch the real store.
+        # Threaded, because it is a full-table scan -- run synchronously it
+        # blocks startup for as long as the sweep takes, which on a real
+        # multi-month events table is long enough to be a hang. That is safe
+        # here specifically because the search paths redact independently, so
+        # the oracle is already closed with or without this; the sweep is a
+        # data cleanup and defence in depth, not the control.
+        start_secret_migration()
 
         # First-run welcome
         if is_first_run():
@@ -910,22 +1060,36 @@ def main() -> None:
 
     # Handle --setup flag for MCP config + companion skills
     if "--setup" in sys.argv:
-        from contextpulse_sight.setup import print_config, setup_all
+        from contextpulse_sight.setup import KNOWN_CLIENTS, print_config, setup_all, setup_client
         idx = sys.argv.index("--setup")
-        if idx + 1 < len(sys.argv) and sys.argv[idx + 1] == "print":
+        target = sys.argv[idx + 1].lower() if idx + 1 < len(sys.argv) else ""
+        if target == "print":
             print_config()
+            return
+
+        if target in KNOWN_CLIENTS:
+            # `--setup claude-code` configures claude-code and NOTHING else.
+            # It used to fall through to setup_all(), which also configured
+            # Cursor -- whose path was cwd-relative, so running this from a
+            # checkout wrote the live token into the working tree of a public
+            # repo. Naming a client now means that client only.
+            setup_client(target)
+        elif target and not target.startswith("-"):
+            print(f"Unknown client: {target}")
+            print(f"Supported: {', '.join(KNOWN_CLIENTS)}, print")
+            return
         else:
-            # Configure MCP servers
             setup_all()
-            # Install companion skills
-            print("\n--- Companion Skills ---")
-            from contextpulse_core.skill_setup import install_skills
-            force = "--force" in sys.argv
-            install_skills("claude-code", force=force)
-            install_skills("gemini", force=force)
-            # Show ecosystem status
-            from contextpulse_core.skill_setup import print_ecosystem_status
-            print_ecosystem_status()
+
+        # Install companion skills (both the all-clients and single-client paths)
+        print("\n--- Companion Skills ---")
+        from contextpulse_core.skill_setup import install_skills
+        force = "--force" in sys.argv
+        install_skills("claude-code", force=force)
+        install_skills("gemini", force=force)
+        # Show ecosystem status
+        from contextpulse_core.skill_setup import print_ecosystem_status
+        print_ecosystem_status()
         return
 
     # Handle --status flag

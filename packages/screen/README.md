@@ -38,6 +38,11 @@ Add to your `.mcp.json`:
 
 ## Hotkeys
 
+Defaults. All four are settable in the Settings dialog (`hotkey_capture`,
+`hotkey_all_monitors`, `hotkey_region`, `hotkey_pause`) as
+`modifier+...+letter`, e.g. `ctrl+alt+k`. A changed hotkey takes effect on
+the next daemon restart.
+
 | Hotkey | Action |
 |--------|--------|
 | Ctrl+Shift+S | Quick capture (active monitor) |
@@ -56,16 +61,33 @@ Add to your `.mcp.json`:
 
 ## Configuration
 
-All settings via environment variables (or `.env` file):
+Settings live in `config.json` (`%APPDATA%/ContextPulse/config.json` on
+Windows) and are edited through the tray **Settings** dialog. Every one of
+them can also be set with an environment variable, which **overrides** the
+saved value.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CONTEXTPULSE_OUTPUT_DIR` | `~/screenshots` | Where captures are saved |
+| `CONTEXTPULSE_OUTPUT_DIR` | `~/screenshots` | Where captures are saved (env only — a path is bound at startup) |
 | `CONTEXTPULSE_AUTO_INTERVAL` | `5` | Auto-capture interval (seconds, 0=disabled) |
-| `CONTEXTPULSE_BUFFER_MAX_AGE` | `180` | Buffer retention (seconds) |
-| `CONTEXTPULSE_CHANGE_THRESHOLD` | `1.5` | Min % pixel diff to store frame |
-| `CONTEXTPULSE_BLOCKLIST` | *(empty)* | Comma-separated window title blocklist |
+| `CONTEXTPULSE_AUTO_INTERVAL_IDLE` | `30` | Stretched interval once you have been idle |
+| `CONTEXTPULSE_AUTO_IDLE_THRESHOLD` | `60` | Seconds of no events before switching to the idle interval |
+| `CONTEXTPULSE_BUFFER_MAX_AGE` | `1800` | Buffer retention (seconds) |
+| `CONTEXTPULSE_CHANGE_THRESHOLD` | `0.5` | Min % pixel diff to store frame |
+| `CONTEXTPULSE_OCR_DIFF_THRESHOLD` | `5.0` | Min % pixel diff to OCR a stored frame (0 = always OCR) |
+| `CONTEXTPULSE_JPEG_QUALITY` | `90` | JPEG quality for stored frames (1-100) |
+| `CONTEXTPULSE_STORAGE_MODE` | `smart` | `smart` / `visual` / `both` / `text` |
+| `CONTEXTPULSE_ACTIVITY_MAX_AGE` | `86400` | Activity-DB retention (seconds) |
+| `CONTEXTPULSE_ALWAYS_BOTH` | `thinkorswim.exe` | Comma-separated apps that keep image **and** text |
+| `CONTEXTPULSE_BLOCKLIST` | *(14 built-in patterns)* | Comma-separated window title blocklist |
 | `CONTEXTPULSE_BLOCKLIST_FILE` | *(empty)* | Path to blocklist file (one pattern per line) |
+
+`CONTEXTPULSE_BLOCKLIST` **replaces** the list, so setting it also discards
+the 14 built-in patterns; `CONTEXTPULSE_BLOCKLIST_FILE` **appends** to it.
+
+Values are re-read while the daemon runs, so a change in the Settings dialog
+takes effect on the next capture — except the four hotkeys and the capture
+paths, which are bound at startup and need a restart. The dialog says so.
 
 ## Privacy
 

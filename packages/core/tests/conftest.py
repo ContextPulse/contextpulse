@@ -78,6 +78,18 @@ sys.path.insert(0, str(_CORE_SRC))
 from contextpulse_core.platform import factory as _platform_factory
 from contextpulse_core.platform.base import PlatformProvider
 
+# ---------------------------------------------------------------------------
+# Shared config-isolation fixture.
+#
+# It lives in contextpulse_core.testing rather than here because a conftest's
+# fixtures are visible only at or below its own directory -- measured
+# 2026-09-19: a fixture defined here and requested from packages/screen/tests
+# fails at setup with "fixture ... not found". The screen, voice and touch
+# suites add this same import line to their own conftest when they start
+# exercising the real config path.
+# ---------------------------------------------------------------------------
+from contextpulse_core.testing import isolated_config  # noqa: E402,F401
+
 _mock_platform = MagicMock(spec=PlatformProvider)
 _mock_platform.get_foreground_window_title.return_value = ""
 _mock_platform.get_foreground_process_name.return_value = ""

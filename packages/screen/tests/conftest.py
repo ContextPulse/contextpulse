@@ -50,6 +50,12 @@ if not hasattr(ctypes, "windll"):
 from contextpulse_core.platform import factory as _platform_factory
 from contextpulse_core.platform.base import PlatformProvider
 
+# Importing the fixture here registers it for every test in this package.
+# A conftest fixture is only visible at or below its own directory, so the
+# core package's copy cannot be inherited from here -- see
+# contextpulse_core.testing for the measurement behind that.
+from contextpulse_core.testing import isolated_config  # noqa: E402, F401
+
 if _platform_factory._instance is None:
     _mock_platform = MagicMock(spec=PlatformProvider)
     _mock_platform.get_foreground_window_title.return_value = ""
@@ -76,6 +82,25 @@ def restore_mocked_modules():
             sys.modules.pop(mod_name, None)
         else:
             sys.modules[mod_name] = original
+
+
+@pytest.fixture(autouse=True)
+def _isolate_core_config(request):
+    """Every screen test reads a temp config.json, never the live one.
+
+    Sight readers now go through contextpulse_core.config rather than module
+    constants frozen at import, which means an un-isolated test would read
+    %APPDATA%/ContextPulse/config.json -- the file the daemon on this machine
+    is actually using. A test that reads live production state is not a test:
+    it would pass or fail depending on what the user last saved in the
+    Settings dialog (David's holds buffer_max_age: 300 against a default of
+    1800), and a test that WRITES would be editing his running daemon's
+    config. Autouse rather than opt-in because the failure is silent.
+
+    Requested through ``request`` rather than as a parameter so the fixture
+    name imported above is not shadowed.
+    """
+    return request.getfixturevalue("isolated_config")
 
 
 @pytest.fixture

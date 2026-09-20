@@ -13,6 +13,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from contextpulse_core.redact import redact_sensitive
+
 from contextpulse_voice.config import (
     LEARNED_VOCAB_FILE,
     USER_PROFILE_FILE,
@@ -214,8 +216,17 @@ def analyze_with_llm(entries: list[dict]) -> dict[str, str] | None:
         logger.info("Not enough correction data for LLM analysis (%d entries)", len(sample))
         return None
 
+    # Redacted BEFORE the slice, never after: every pattern has a minimum
+    # length, so a token that a [:200] cut halves matches nothing and its
+    # leading half would be transmitted verbatim.
+    #
+    # Unlike clean_with_llm, redact-then-send is correct here -- the model's
+    # output is an analysis, not text that gets pasted back to the user, so a
+    # redacted input costs nothing but a mishearing pattern nobody wanted to
+    # learn from anyway.
     examples = "\n".join(
-        f"RAW: {e['raw'][:200]}\nCLEANED: {e['cleaned'][:200]}\n"
+        f"RAW: {redact_sensitive(e['raw'])[:200]}\n"
+        f"CLEANED: {redact_sensitive(e['cleaned'])[:200]}\n"
         for e in sample[-50:]
     )
 

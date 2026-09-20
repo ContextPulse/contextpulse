@@ -29,6 +29,7 @@ import argparse
 import logging
 import signal
 import sys
+from pathlib import Path
 
 # isort: off
 # Import _thread_caps FIRST so OMP/MKL/OPENBLAS/NUMEXPR env vars are set
@@ -37,6 +38,9 @@ import sys
 # Without this, the daemon spawns ~163 baseline threads (incident: 2026-04-29).
 from contextpulse_core import _thread_caps  # noqa: F401  side-effect; must be first
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
+
+from contextpulse_core import mcp_auth
 # isort: on
 
 logging.basicConfig(
@@ -146,6 +150,60 @@ def _register_all():
         logger.warning("Registration errors: %s", "; ".join(errors))
 
 
+def build_transport_security(port: int) -> TransportSecuritySettings:
+    """Host/Origin allow-list for the streamable-http endpoint.
+
+    FastMCP auto-enables this when host is one of three exact strings, but the
+    default is silent, untested by us, and disappears the moment anyone binds
+    a different host. Passing it explicitly makes the protection a property of
+    ContextPulse rather than a side effect of the library, and pins the port
+    instead of wildcarding it.
+
+    Effects: a Host header that is not one of these -> 421; an Origin header
+    that is present and not localhost -> 403; a POST that is not
+    application/json -> 400. All three are enforced by the library on every
+    request (mcp/server/transport_security.py).
+    """
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=[f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"],
+        allowed_origins=["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"],
+    )
+
+
+def build_http_app(fastmcp_app: FastMCP, no_auth: bool = False, token_file: Path | None = None):
+    """Return the ASGI app to serve: the streamable-http app, bearer-gated.
+
+    FastMCP's own streamable-http entry point gives no seam to insert a
+    wrapper into. It is only uvicorn around streamable_http_app() (verified
+    against mcp 1.26.0, server/fastmcp/server.py:777-790), so unrolling it
+    costs nothing and lets the auth wrapper sit outermost.
+
+    Fails closed: auth is on unless explicitly disabled, and disabling it logs
+    a WARNING banner once at startup.
+    """
+    reason = None
+    if no_auth:
+        reason = "--no-auth"
+    elif mcp_auth.auth_disabled():
+        reason = f"{mcp_auth.AUTH_ENV_VAR}=off"
+
+    app = fastmcp_app.streamable_http_app()
+
+    if reason:
+        logger.warning(mcp_auth.disabled_banner(reason))
+        return app
+
+    token = mcp_auth.load_or_create_token(token_file)
+    logger.info(
+        "MCP auth enabled -- clients must send 'Authorization: Bearer <token>'. "
+        "Token file: %s (re-read on change, so Regenerate takes effect without "
+        "a restart)",
+        token_file or mcp_auth.TOKEN_FILE,
+    )
+    return mcp_auth.BearerAuthASGI(app, token, token_file=token_file)
+
+
 def main():
     global mcp_app
 
@@ -153,7 +211,26 @@ def main():
     parser.add_argument("--port", type=int, default=MCP_PORT, help="Port to listen on")
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind to")
     parser.add_argument("--stdio", action="store_true", help="Use stdio transport (for testing)")
+    parser.add_argument(
+        "--no-auth",
+        action="store_true",
+        help="Serve without the bearer token (every local process can call every tool)",
+    )
+    parser.add_argument(
+        "--print-config",
+        nargs="?",
+        const="claude-code",
+        choices=["claude-code", "cursor", "gemini", "claude-desktop"],
+        metavar="CLIENT",
+        help="Print this install's MCP client config (with the access token) and exit",
+    )
     args = parser.parse_args()
+
+    if args.print_config:
+        # Creates the token if it does not exist yet -- this is the
+        # copy-paste path a new user takes before the server ever runs.
+        print(mcp_auth.config_snippet(args.print_config, host=args.host, port=args.port))
+        return
 
     # Graceful shutdown on SIGTERM/SIGINT
     def _shutdown(signum, frame):
@@ -169,16 +246,43 @@ def main():
         host=args.host,
         port=args.port,
         stateless_http=True,  # No per-session state needed — all state is in SQLite
+        transport_security=build_transport_security(args.port),
     )
 
     _register_all()
 
+    # Sweep pre-redaction rows before serving. THIS is the live transport
+    # (mcp-surface.md); contextpulse_sight.mcp_server.main() is a standalone
+    # stdio server that the shipped configuration does not start, and the only
+    # other sweep trigger on this side -- _get_event_bus() -- is reached solely
+    # by two Pro-gated tools. So on a machine where the daemon is not running,
+    # nothing swept at all (review S-5).
+    #
+    # Backgrounded, and that is safe rather than a compromise: the sweep is
+    # defence in depth, not the control. Every search surface now matches over
+    # REDACTED text and every tool redacts what it renders, so a store that has
+    # not been swept yet -- or whose sweep failed outright -- cannot serve a
+    # secret through this server. ensure_migrated is idempotent and keeps a
+    # marker per store, so calling it from both processes costs nothing.
+    try:
+        from contextpulse_core.daemon import start_secret_migration
+
+        start_secret_migration()
+    except Exception:
+        logger.warning("secret migration skipped at MCP startup", exc_info=True)
+
     if args.stdio:
+        # stdio stays unauthenticated by design: the client spawns this
+        # process itself, as the same user, over a private pipe. A token
+        # would defend against nothing that could not already read the file.
         logger.info("Starting in stdio mode (testing)")
         mcp_app.run(transport="stdio")
     else:
+        import uvicorn
+
         logger.info("Starting unified MCP on http://%s:%d/mcp", args.host, args.port)
-        mcp_app.run(transport="streamable-http")
+        app = build_http_app(mcp_app, no_auth=args.no_auth)
+        uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 
 
 if __name__ == "__main__":

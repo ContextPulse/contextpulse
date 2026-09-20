@@ -324,6 +324,34 @@ class RecordingOverlay:
         self._visible = True
         self._hide_after_id = self._root.after(1500, self.hide)
 
+    def show_paste_failed(self) -> None:
+        """The dictation was transcribed but could not be pasted.
+
+        Same overlay, same pattern as every other state — only the message
+        and the dwell time differ. Without it a dropped paste is invisible:
+        the user speaks, waits, and sees nothing appear, while the only
+        record is a line in a log file nobody watches
+        (cp-daemon-heap-corruption-after-paste).
+        """
+        if self._root is None:
+            return
+        try:
+            self._root.after(0, self._show_paste_failed_ui)
+        except Exception:
+            pass
+
+    def _show_paste_failed_ui(self) -> None:
+        self._animating = False
+        self._cancel_pending_hide()
+        self._icon_label.configure(image=self._ready_frame)
+        # Says "saved" because it is true: the transcription event is emitted
+        # before the paste, so the text is in the DB and reachable over MCP.
+        self._text_label.configure(text="Paste blocked - saved", fg="#ef4444")
+        self._root.deiconify()
+        self._visible = True
+        # Longer than "Ready" (1.5s): this one the user has to actually read.
+        self._hide_after_id = self._root.after(4000, self.hide)
+
     def hide(self) -> None:
         if self._root is None:
             return

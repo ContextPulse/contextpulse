@@ -11,6 +11,7 @@ import sqlite3
 import time
 
 from contextpulse_core.config import ACTIVITY_DB_PATH
+from contextpulse_core.redact import redact_sensitive
 from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger(__name__)
@@ -18,6 +19,23 @@ logger = logging.getLogger(__name__)
 mcp_app = FastMCP("ContextPulse Touch")
 
 _DB_PATH = ACTIVITY_DB_PATH
+
+
+def _redact(value: object) -> str:
+    """Scrub secrets from any stored text on its way out of an MCP tool.
+
+    Second layer, not the primary one -- TouchModule redacts before the event
+    reaches the EventBus. This exists because rows written before that fix are
+    still on disk, and because a reader of a payload key nobody has added yet
+    should not have to remember.
+
+    Redact BEFORE truncating, never after: every pattern has a minimum length,
+    so a token a slice cuts in half matches nothing and its leading half would
+    be echoed verbatim.
+    """
+    if not value:
+        return ""
+    return redact_sensitive(str(value))
 
 
 def _get_db() -> sqlite3.Connection | None:
@@ -33,7 +51,13 @@ def get_recent_touch_events(seconds: int = 300, event_types: str = "all") -> str
     """Get recent keyboard and mouse activity events.
 
     Returns typing bursts (word counts, WPM), clicks, scrolls, and drags.
-    Privacy-safe: shows activity patterns, not keystrokes.
+
+    Typing bursts are counts only -- no keystroke text. The "corrections"
+    filter is different and the docstring used to say otherwise: it returns
+    the literal before-and-after text of what the user typed and corrected,
+    which is not an activity pattern. That text is redacted for secret
+    patterns both when it is stored and again here, but it is still the user's
+    own words, so treat this filter as content rather than telemetry.
 
     Args:
         seconds: How many seconds back to look (default 300 = 5 min).
@@ -74,7 +98,7 @@ def get_recent_touch_events(seconds: int = 300, event_types: str = "all") -> str
             payload = json.loads(row["payload"])
             ts = time.strftime("%H:%M:%S", time.localtime(row["timestamp"]))
             et = row["event_type"]
-            app = row["app_name"] or ""
+            app = _redact(row["app_name"])
 
             if et == "typing_burst":
                 chars = payload.get("char_count", 0)
@@ -91,8 +115,8 @@ def get_recent_touch_events(seconds: int = 300, event_types: str = "all") -> str
             elif et == "drag":
                 lines.append(f"[{ts}] DRAG in {app}")
             elif et == "correction_detected":
-                orig = payload.get("original_text", "?")
-                corr = payload.get("corrected_text", "?")
+                orig = _redact(payload.get("original_text")) or "?"
+                corr = _redact(payload.get("corrected_text")) or "?"
                 conf = payload.get("confidence", 0)
                 lines.append(f"[{ts}] CORRECTION: {orig!r} -> {corr!r} (conf={conf:.0%})")
             else:
@@ -212,8 +236,8 @@ def get_correction_history(limit: int = 20) -> str:
         for row in rows:
             p = json.loads(row["payload"])
             ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(row["timestamp"]))
-            orig = p.get("original_text", "?")
-            corr = p.get("corrected_text", "?")
+            orig = _redact(p.get("original_text")) or "?"
+            corr = _redact(p.get("corrected_text")) or "?"
             conf = p.get("confidence", 0)
             ctype = p.get("correction_type", "?")
             secs = p.get("seconds_after_paste", 0)

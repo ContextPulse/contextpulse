@@ -37,6 +37,8 @@ import threading
 import time
 from typing import Any, Optional
 
+from contextpulse_core.redact import redact_sensitive
+
 from .cp_core import IngestConfig, Observation, ProjectDef, slugify
 from .store_sqlite import KnowledgeStore
 
@@ -127,8 +129,21 @@ def default_vocab_path() -> str:
 
 
 def _join_text(payload: dict) -> str:
-    """5-key text join == ContextEvent.text_content() (falsy values skipped)."""
-    parts = [str(payload[k]) for k in _TEXT_KEYS if payload.get(k)]
+    """5-key text join == ContextEvent.text_content() (falsy values skipped).
+
+    REDACTED AT INGEST. This is the single point where event text becomes an
+    Observation, so redacting here covers every consumer of knowledge.db --
+    search_knowledge's snippets, the FTS index built over `content`, the
+    content_hash, and every fact later derived from the observation.
+
+    It must happen here and not only at the MCP boundary, because knowledge.db
+    is a SECOND COPY of the captured text on disk: a purge of activity.db
+    reports "0 remaining matches" while the same secret sits in knowledge.db
+    untouched. The parity assertion with ContextEvent.text_content() in
+    test_bridge is about which KEYS are joined, and is unaffected by scrubbing
+    their values.
+    """
+    parts = [redact_sensitive(str(payload[k])) for k in _TEXT_KEYS if payload.get(k)]
     return " ".join(parts)
 
 

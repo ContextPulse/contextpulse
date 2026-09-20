@@ -45,6 +45,7 @@ from contextpulse_sight.privacy import (
     is_blocked,
     is_title_blocked,
 )
+from contextpulse_sight.redact import redact_sensitive
 
 logging.basicConfig(
     level=logging.INFO,
@@ -61,12 +62,65 @@ _activity_db = ActivityDB()
 _event_bus: EventBus | None = None
 
 
+_migration_done = False
+
+
+def _ensure_secret_migration() -> None:
+    """Sweep pre-redaction rows before this process serves anything.
+
+    The daemon runs the same sweep at startup, but the MCP server can be a
+    SEPARATE PROCESS and can be the one that starts first -- and it is the one
+    with the search tools, which is where the count oracle lives. The marker
+    lives in a table inside activity.db, so both processes checking is safe and
+    only one does the work.
+
+    Guarded by a process-local flag as well, purely to avoid re-opening the
+    database on every tool call; correctness comes from the marker, not this.
+
+    Backgrounded for the same reason as the daemon's: it is a full-table scan,
+    and a tool call must not block on one. The search paths redact
+    independently, so a sweep still in flight costs nothing.
+    """
+    global _migration_done
+    if _migration_done:
+        return
+    _migration_done = True
+    try:
+        from contextpulse_core.daemon import start_secret_migration
+
+        start_secret_migration()
+    except Exception:
+        # Never let a cleanup stop the server from answering. The search paths
+        # redact independently, so a failed sweep degrades to the previous
+        # behaviour rather than opening a hole.
+        logger.warning("secret migration skipped at MCP startup", exc_info=True)
+
+
 def _get_event_bus() -> EventBus:
     """Lazy-init EventBus (reads the same activity.db as the daemon)."""
     global _event_bus
     if _event_bus is None:
+        _ensure_secret_migration()
         _event_bus = EventBus(_activity_db.db_path)
     return _event_bus
+
+
+def _redact(value: Any) -> str:
+    """Scrub secrets from any stored text on its way out of an MCP tool.
+
+    Second layer, not the primary one -- ClipboardMonitor and OCRWorker redact
+    before writing. This exists because rows written before that fix are still
+    on disk, and because a store is not the only thing that can put text in
+    front of a model: everything read back out of activity.db goes through
+    here so a future reader of a new column cannot forget.
+
+    Redact BEFORE truncating a preview, never after: every pattern has a
+    minimum length, so a token a [:200] slice cuts in half matches nothing and
+    its leading half would be echoed verbatim.
+    """
+    if not value:
+        return ""
+    return redact_sensitive(str(value))
 
 
 def _track_call(func):
@@ -150,10 +204,15 @@ def get_monitor_summary() -> str:
             app = fg_app or app
             title = fg_title or title
 
-        # Privacy check AFTER override so blocked foreground windows are caught
+        # Privacy check AFTER override so blocked foreground windows are
+        # caught, and BEFORE redaction -- redacting first could rewrite the
+        # very substring a blocklist pattern matches on.
         if is_title_blocked(title):
             title = "[BLOCKED]"
             app = "[BLOCKED]"
+        else:
+            app = _redact(app)
+            title = _redact(title)
 
         # Calculate staleness
         if ts:
@@ -321,8 +380,8 @@ def get_screenshot(mode: str = "active", monitor_index: int | None = None) -> An
         for idx, img in monitors:
             state = state_map.get(idx, {})
             diff = state.get("diff_score", 100.0)  # unknown = include
-            title = state.get("window_title", "")
-            app = state.get("app_name", "")
+            title = _redact(state.get("window_title", ""))
+            app = _redact(state.get("app_name", ""))
 
             if diff < 1.0 and state.get("timestamp", 0):
                 # Static monitor — return text summary only
@@ -457,10 +516,20 @@ def get_screen_text() -> str:
     result = classify_and_extract(img)
 
     if result["type"] == "text" and result["text"]:
+        # This is a LIVE capture, so it never passed through the OCR worker
+        # where redact_ocr_text is honoured -- a user with redaction enabled
+        # got it at write time and not through this tool, which returns
+        # whatever is on screen right now, password manager included
+        # (review S6). Gated on the same setting so the two paths agree.
+        from contextpulse_core.config import get as cfg_get
+
+        text = result["text"]
+        if cfg_get("redact_ocr_text", True):
+            text = _redact(text)
         return (
             f"[OCR: {result['lines']} lines, {result['chars']} chars, "
             f"confidence={result['confidence']:.2f}, time={result['ocr_time']:.1f}s]\n\n"
-            f"{result['text']}"
+            f"{text}"
         )
     else:
         return (
@@ -573,7 +642,7 @@ def get_activity_summary(hours: float = 8.0) -> str:
         lines.append("Apps (by frequency):")
         for app, count in list(summary["apps"].items())[:15]:
             pct = count / summary["total_captures"] * 100
-            lines.append(f"  {app}: {count} captures ({pct:.0f}%)")
+            lines.append(f"  {_redact(app)}: {count} captures ({pct:.0f}%)")
 
     if summary["titles"]:
         lines.append("\nRecent window titles:")
@@ -581,7 +650,7 @@ def get_activity_summary(hours: float = 8.0) -> str:
             if is_title_blocked(title):
                 lines.append("  - [BLOCKED — matches privacy blocklist]")
             else:
-                lines.append(f"  - {title[:80]}")
+                lines.append(f"  - {_redact(title)[:80]}")
 
     return "\n".join(lines)
 
@@ -614,9 +683,9 @@ def search_history(query: str, minutes_ago: int = 60) -> str:
         lines.append(f"({skipped} result(s) hidden — matched privacy blocklist)\n")
     for r in filtered:
         ts_str = datetime.fromtimestamp(r["timestamp"]).strftime("%H:%M:%S")
-        lines.append(f"[{ts_str}] {r['app_name']} — {r['window_title'][:80]}")
+        lines.append(f"[{ts_str}] {_redact(r['app_name'])} — {_redact(r['window_title'])[:80]}")
         if r.get("ocr_text"):
-            snippet = r["ocr_text"][:200].replace("\n", " ")
+            snippet = _redact(r["ocr_text"])[:200].replace("\n", " ")
             lines.append(f"  OCR: {snippet}...")
         lines.append(f"  Monitor: {r['monitor_index']}, Frame: {r.get('frame_path', 'N/A')}")
         lines.append("")
@@ -649,8 +718,8 @@ def get_context_at(minutes_ago: float = 5.0) -> list:
 
     meta = (
         f"[Context at {ts_str}]\n"
-        f"App: {record['app_name']}\n"
-        f"Window: {record['window_title']}\n"
+        f"App: {_redact(record['app_name'])}\n"
+        f"Window: {_redact(record['window_title'])}\n"
         f"Monitor: {record['monitor_index']}"
     )
 
@@ -667,7 +736,7 @@ def get_context_at(minutes_ago: float = 5.0) -> list:
             )
 
     if record.get("ocr_text"):
-        results.append(f"\nOCR Text:\n{record['ocr_text'][:500]}")
+        results.append(f"\nOCR Text:\n{_redact(record['ocr_text'])[:500]}")
 
     return results
 
@@ -692,7 +761,11 @@ def get_clipboard_history(count: int = 10) -> str:
     lines = [f"=== Clipboard History ({len(entries)} entries) ===\n"]
     for entry in entries:
         ts_str = datetime.fromtimestamp(entry["timestamp"]).strftime("%H:%M:%S")
-        text = entry["text"]
+        # Redact before the preview slice, so the char count and the 200-char
+        # cut both describe what is actually returned. Rows written before
+        # clipboard redaction shipped are still raw on disk; this is what
+        # stops them reaching a model.
+        text = _redact(entry["text"])
         # Show first 200 chars with line count
         line_count = text.count("\n") + 1
         preview = text[:200].replace("\n", " \\n ")
@@ -713,6 +786,15 @@ def search_clipboard(query: str, minutes_ago: int = 60) -> str:
     Searches through captured clipboard contents. Useful for finding a
     specific error message, URL, or code snippet that was copied earlier.
 
+    SCAN LIMIT: only the 2000 most recent entries inside the window are
+    examined. Matching is done in Python against the REDACTED text -- that is
+    what stops the result count leaking a stored secret one character at a time
+    -- and a bounded scan is what keeps that affordable, so a large
+    minutes_ago cannot become a full-table scan. When the window holds more
+    than 2000 entries the response says `truncated: true`, and "no results"
+    then means "none in the part that was examined", not "none at all".
+    Narrow minutes_ago to search further back reliably.
+
     Args:
         query: Text to search for in clipboard history.
         minutes_ago: How far back to search (default 60 minutes).
@@ -721,13 +803,30 @@ def search_clipboard(query: str, minutes_ago: int = 60) -> str:
     if not query or not query.strip():
         return "Search query cannot be empty."
     results = _activity_db.search_clipboard(query, minutes_ago)
-    if not results:
-        return f"No clipboard entries matching '{query}' in the last {minutes_ago} minutes."
 
-    lines = [f"=== Clipboard Search: '{query}' ({len(results)} results) ===\n"]
+    # Counted separately from the search itself: a row COUNT over a time range
+    # says nothing about any row's content, so reporting it does not reopen the
+    # oracle the redacted matching closed.
+    scan_limit = _activity_db._SEARCH_SCAN_LIMIT
+    in_window = _activity_db.clipboard_rows_in_window(minutes_ago)
+    truncated = in_window > scan_limit
+    notice = (
+        f"truncated: true — only the {scan_limit} most recent of {in_window} "
+        f"entries in this window were scanned\n"
+        if truncated else ""
+    )
+
+    if not results:
+        return (
+            notice
+            + f"No clipboard entries matching '{query}' in the last {minutes_ago} minutes."
+            + (" (in the entries that were scanned)" if truncated else "")
+        )
+
+    lines = [notice + f"=== Clipboard Search: '{query}' ({len(results)} results) ===\n"]
     for entry in results:
         ts_str = datetime.fromtimestamp(entry["timestamp"]).strftime("%H:%M:%S")
-        text = entry["text"]
+        text = _redact(entry["text"])
         preview = text[:300].replace("\n", " \\n ")
         if len(text) > 300:
             preview += "..."
@@ -813,21 +912,24 @@ def search_all_events(query: str, minutes_ago: int = 60, modality: str | None = 
         ts_str = datetime.fromtimestamp(r["timestamp"]).strftime("%H:%M:%S")
         mod = r.get("modality", "?")
         evt = r.get("event_type", "?")
-        app = r.get("app_name", "")
-        title = r.get("window_title", "")[:60]
+        app = _redact(r.get("app_name", ""))
+        title = _redact(r.get("window_title", ""))[:60]
 
         lines.append(f"[{ts_str}] [{mod}/{evt}] {app} — {title}")
 
-        # Extract searchable text from payload
+        # Extract searchable text from payload. Redact before the 150-char
+        # snippet: this is the tool that reaches clipboard events (modality
+        # "clipboard" reads payload.text) as well as OCR and voice text.
         try:
             import json as _json
             payload = _json.loads(r["payload"]) if isinstance(r["payload"], str) else r.get("payload", {})
             text = payload.get("ocr_text") or payload.get("transcript") or payload.get("text") or ""
             if text:
+                text = _redact(text)
                 snippet = text[:150].replace("\n", " ")
                 lines.append(f"  {snippet}{'...' if len(text) > 150 else ''}")
         except Exception:
-            pass
+            logger.debug("search_all_events: unreadable payload", exc_info=True)
         lines.append("")
 
     return "\n".join(lines)
@@ -883,8 +985,8 @@ def get_event_timeline(minutes_ago: float = 5.0, modality: str | None = None) ->
         ts_str = datetime.fromtimestamp(e.timestamp).strftime("%H:%M:%S")
         mod = e.modality.value if hasattr(e.modality, 'value') else str(e.modality)
         evt = e.event_type.value if hasattr(e.event_type, 'value') else str(e.event_type)
-        app = e.app_name or ""
-        title = e.window_title[:50] if e.window_title else ""
+        app = _redact(e.app_name)
+        title = _redact(e.window_title)[:50] if e.window_title else ""
 
         line = f"[{ts_str}] {mod:>9}/{evt:<20} {app}"
         if title:
@@ -909,6 +1011,9 @@ def get_event_timeline(minutes_ago: float = 5.0, modality: str | None = None) ->
 
 
 def main():
+    # Before the transport opens, not lazily on first search: a standalone
+    # sight MCP server may be the only process that ever touches this store.
+    _ensure_secret_migration()
     mcp_app.run(transport="stdio")
 
 

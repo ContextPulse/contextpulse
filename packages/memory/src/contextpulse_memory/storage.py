@@ -19,11 +19,64 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
+from contextpulse_core.redact import redact_sensitive
+from contextpulse_core.search_filter import keep_rows_matching_redacted_text
+
 logger = logging.getLogger(__name__)
+
+# Both memory FTS tables are declared tokenize='porter unicode61'. The shadow
+# index the oracle filter builds over the REDACTED text must name the same one,
+# or it answers a different question from the one that produced the rows.
+_MEMORY_FTS_TOKENIZER = "porter unicode61"
+
+
+def _warm_indexed_text(row: dict[str, Any]) -> str:
+    """What memories_fts indexes: key, value and the tag list."""
+    tags = row.get("tags")
+    if isinstance(tags, (list, tuple)):
+        tags = " ".join(str(t) for t in tags)
+    return " ".join([
+        str(row.get("key") or ""), str(row.get("value") or ""), str(tags or ""),
+    ])
+
+
+def _warm_like_text(row: dict[str, Any]) -> str:
+    """What the LIKE fallback matches on: key and value only."""
+    return " ".join([str(row.get("key") or ""), str(row.get("value") or "")])
+
+
+def _cold_indexed_text(row: dict[str, Any]) -> str:
+    """What cold_fts indexes, which is also what its LIKE fallback matches."""
+    return str(row.get("text_content") or "")
+
+
+DEFAULT_MEMORY_DIR = Path.home() / ".contextpulse" / "memory"
+
+
+def default_memory_dir() -> Path:
+    """Where memory.db and memory_cold.db live.
+
+    One definition, because the startup secret sweep has to find the same files
+    the MCP server serves from. A second copy of this logic would sweep the
+    default directory while the server read CONTEXTPULSE_MEMORY_DIR, and report
+    a clean zero for a store it never opened.
+    """
+    import os
+
+    return Path(os.environ.get("CONTEXTPULSE_MEMORY_DIR", str(DEFAULT_MEMORY_DIR)))
 
 
 class MemoryQuotaExceeded(Exception):
     """Raised when the warm-tier entry count reaches max_warm_entries."""
+
+
+class MemoryValueTooLarge(Exception):
+    """Raised when a single memory value exceeds MemoryStore.MAX_VALUE_BYTES.
+
+    Deliberately a raised exception rather than a silent truncation: a memory
+    that was quietly cut in half is worse than one that was refused, because
+    the caller believes it stored something it did not.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +319,20 @@ class WarmTier:
         return [self._row_to_dict(r) for r in rows]
 
     def search(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
+        """FTS search over the warm tier, MATCHING REDACTED TEXT.
+
+        This matched the raw stored `value` through memories_fts while the MCP
+        tool returned `{"count": len(results), ...}` with the results scrubbed
+        -- output redacted, count computed over raw text, which is an
+        extraction oracle (review S-1). Entries written before this package
+        began redacting are still raw on disk and are exactly the population an
+        attacker would probe.
+
+        Candidates are re-matched against their redacted rendering through the
+        same porter tokenizer, so the count describes what a caller could have
+        learned from reading the redacted rows.
+        """
+        used_fts = True
         with self._lock:
             try:
                 cursor = self._conn.execute(
@@ -279,13 +346,19 @@ class WarmTier:
                 rows = cursor.fetchall()
             except sqlite3.OperationalError:
                 # FTS syntax error — fall back to LIKE
+                used_fts = False
                 like = f"%{query}%"
                 cursor = self._conn.execute(
                     "SELECT * FROM memories WHERE key LIKE ? OR value LIKE ? LIMIT ?",
                     (like, like, limit),
                 )
                 rows = cursor.fetchall()
-        return [self._row_to_dict(r) for r in rows]
+        return keep_rows_matching_redacted_text(
+            query,
+            [self._row_to_dict(r) for r in rows],
+            _warm_indexed_text if used_fts else _warm_like_text,
+            tokenize=_MEMORY_FTS_TOKENIZER if used_fts else None,
+        )
 
     def semantic_search(
         self, query_embedding: list[float], limit: int = 20
@@ -489,6 +562,13 @@ class ColdTier:
         return written
 
     def search(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
+        """FTS search over the archive, MATCHING REDACTED TEXT.
+
+        Same oracle as WarmTier.search and the same fix (review S-1). The cold
+        tier is the older half of the store, so it is the MORE likely of the two
+        to be holding pre-redaction text.
+        """
+        used_fts = True
         with self._lock:
             try:
                 cursor = self._conn.execute(
@@ -500,12 +580,18 @@ class ColdTier:
                     (query, limit),
                 )
             except sqlite3.OperationalError:
+                used_fts = False
                 cursor = self._conn.execute(
                     "SELECT * FROM cold_summaries WHERE text_content LIKE ? ORDER BY window_start DESC LIMIT ?",
                     (f"%{query}%", limit),
                 )
             rows = cursor.fetchall()
-        return [dict(r) for r in rows]
+        return keep_rows_matching_redacted_text(
+            query,
+            [dict(r) for r in rows],
+            _cold_indexed_text,
+            tokenize=_MEMORY_FTS_TOKENIZER if used_fts else None,
+        )
 
     def optimize(self) -> None:
         """Run PRAGMA optimize to refresh FTS5 index statistics."""
@@ -545,6 +631,14 @@ class MemoryStore:
         self.warm = WarmTier(self._data_dir / "memory.db")
         self.cold = ColdTier(self._data_dir / "memory_cold.db")
 
+    # A single memory is a note, not a file. 64 KB is ~16,000 words -- far more
+    # than any legitimate note and far less than the "paste a whole file into
+    # the agent's memory" case the MCP surface audit flagged as unbounded on
+    # both write and read. Chosen as a round power-of-two ceiling, not measured
+    # from a distribution: there was no cap at all, so any finite one is the
+    # improvement and this one has room to be raised if a real note hits it.
+    MAX_VALUE_BYTES = 64 * 1024
+
     def store(
         self,
         key: str,
@@ -555,6 +649,43 @@ class MemoryStore:
         source_event_id: str | None = None,
         modality: str | None = None,
     ) -> None:
+        # Measured in BYTES, not characters: the store is what fills up, and a
+        # 3-byte emoji costs three times what its len() suggests.
+        size = len(value.encode("utf-8"))
+        if size > self.MAX_VALUE_BYTES:
+            raise MemoryValueTooLarge(
+                f"Memory value is {size} bytes; the limit is {self.MAX_VALUE_BYTES} "
+                f"({self.MAX_VALUE_BYTES // 1024} KB). Store a summary or a file "
+                "path instead of the file's contents."
+            )
+
+        # Unconditional, and BEFORE the value reaches any tier. Everything
+        # downstream -- the hot dict, the warm FTS index, the embedding vector,
+        # the cold-tier archive -- derives from this one local, so none of them
+        # can hold what this removes. The MCP surface audit found memory_recall
+        # returns whatever was stored verbatim with no redaction and no cap: an
+        # agent that stores a pasted credential as a "memory" hands it back in
+        # full to any MCP client.
+        value = redact_sensitive(value)
+
+        # And the SAME for key and tags, which memories_fts also indexes
+        # (_WARM_FTS: key, value, tags). Only `value` was scrubbed, so
+        # memory_store(key="sk-ant-...", value="the prod key") put the secret in
+        # a stored column and in a search index while the one field that WAS
+        # cleaned held nothing sensitive (review S-2).
+        #
+        # Redacted here, before the quota check and before any tier sees them,
+        # so the hot dict, the warm row and the FTS index all agree on one
+        # spelling. CONSEQUENCE: the lookup key changes, so a caller that
+        # stored a secret-shaped key cannot recall it under the raw spelling.
+        # That is the correct trade -- the alternative is keeping the secret --
+        # and recall is deliberately NOT given the matching redaction, because
+        # two different secrets redact to the same marker and a lookup that
+        # collapsed them would hand back someone else's memory.
+        tags = tags or []
+        key = redact_sensitive(key)
+        tags = [redact_sensitive(t) for t in tags]
+
         # Quota check: if at capacity and this is a new key, block the write.
         # Upserts (existing key) are always allowed — they don't grow the store.
         if self._max_warm_entries and self.warm.get(key) is None:
@@ -565,7 +696,6 @@ class MemoryStore:
                     "Delete unused memories or increase max_entries."
                 )
 
-        tags = tags or []
         expires_at = time.time() + (ttl_hours * 3600) if ttl_hours else None
         hot_ttl = min(ttl_hours * 3600, self.DEFAULT_HOT_TTL) if ttl_hours else self.DEFAULT_HOT_TTL
         self.hot.put(key, value, tags, ttl=hot_ttl)

@@ -12,7 +12,6 @@ The self-improving loop:
 7. Write corrections to vocabulary via VocabularyBridge
 """
 
-import hashlib
 import json
 import logging
 import sqlite3
@@ -21,6 +20,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from contextpulse_core.redact import redact_sensitive, redacted_text_digest
 from contextpulse_voice.config import LEARNED_VOCAB_FILE
 
 from contextpulse_touch.burst_tracker import BurstTracker
@@ -45,8 +45,25 @@ class VocabularyBridge:
 
         Returns True if the correction was added (not a duplicate).
         Uses atomic write (temp file + rename) for safety.
+
+        A correction pair is WORD-LEVEL, and a word can be a whole secret: a
+        pasted token that the user then retypes arrives here as
+        (original_word, corrected_word) and is written verbatim to a JSON file
+        that get_vocabulary() hands straight back to any MCP client. So a
+        stored word list CAN hold a whole token, and this is the point it gets
+        in. Such a pair is DROPPED rather than stored-redacted -- a vocabulary
+        entry keyed on "[redacted:gh_token]" would never match anything, so
+        storing it buys nothing and costs a puzzling entry in a user-visible
+        file.
         """
         if not original or not corrected or original.strip() == corrected.strip():
+            return False
+
+        if redact_sensitive(original) != original or redact_sensitive(corrected) != corrected:
+            logger.warning(
+                "Refusing to learn a correction whose text matches a secret pattern "
+                "(values withheld)",
+            )
             return False
 
         with self._write_lock:
@@ -82,7 +99,12 @@ class VocabularyBridge:
                     encoding="utf-8",
                 )
 
-                logger.info("Learned correction: %r -> %r", original, corrected)
+                # Lengths, not values: this log lands in a rotating file on
+                # disk and the pair is by construction something the user
+                # typed.
+                logger.info(
+                    "Learned correction (%d -> %d chars)", len(original), len(corrected),
+                )
                 return True
             except Exception:
                 logger.exception("Failed to write correction")
@@ -155,14 +177,22 @@ class CorrectionDetector:
             return
 
         self.pastes_detected += 1
-        text_hash = hashlib.sha256(clipboard_text.encode()).hexdigest()[:16]
+        # Over the REDACTED rendering, matching what VoiceModule stores as
+        # paste_text_hash. Both sides use the one helper so they cannot drift:
+        # if only one of them redacted first, the correlation would silently
+        # stop working for exactly the dictations that contained a secret
+        # (review S-3). The raw clipboard text stays in memory for the watch
+        # window, which is where the correction diff needs it.
+        text_hash = redacted_text_digest(clipboard_text)
 
         # Check if this paste matches a recent Voice transcription
         voice_match = self._find_voice_event(text_hash)
         if not voice_match:
             return
 
-        logger.info("Voice paste detected: %r (hash=%s)", clipboard_text[:50], text_hash)
+        # The hash identifies the paste for correlation; the text itself is
+        # the user's clipboard and does not belong in a log file.
+        logger.info("Voice paste detected (%d chars, hash=%s)", len(clipboard_text), text_hash)
 
         with self._lock:
             # Cancel any existing watch window

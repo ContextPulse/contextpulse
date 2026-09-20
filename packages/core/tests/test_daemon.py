@@ -4,9 +4,12 @@ conftest.py mocks tkinter, pystray, and windll before any imports happen,
 so this file can safely import contextpulse_core.daemon.
 """
 
+import ast
 import inspect
 import sys
+import textwrap
 import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -631,3 +634,255 @@ class TestSessionGuardOrdering:
              pytest.raises(SystemExit):
             daemon.run()
         mock_start.assert_not_called()
+
+
+
+# ---------------------------------------------------------------------------
+# Clipboard monitor is optional (clipboard_enabled=False)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def pynput_importable(monkeypatch):
+    """Make `from pynput import keyboard` succeed on a headless machine.
+
+    contextpulse_sight.app does that import at module level, and pynput
+    resolves its backend AT IMPORT TIME -- on Linux that means opening an X
+    connection, so on a headless CI runner the import raises
+    `ImportError: this platform is not supported: failed to acquire X
+    connection` and every test below dies before it reaches the daemon.
+
+    packages/screen/tests/conftest.py already solves this for the screen
+    suite by putting a MagicMock in sys.modules; that conftest is not loaded
+    for packages/core, which is why the cross-platform CI job (core + memory
+    + project only) failed on Linux and macOS while the Windows job passed.
+    Same shim, scoped to the tests that need it, and installed only when the
+    real import genuinely cannot happen -- so on a desktop the real pynput is
+    still what the app imports.
+
+    Deliberately NOT a skip: the unified daemon runs on Linux too, and these
+    tests exercise the real daemon -> real sight-app call path. A MagicMock
+    app would pass no matter what the daemon did.
+    """
+    try:
+        import pynput.keyboard  # noqa: F401
+    except ImportError:
+        stub = MagicMock()
+        monkeypatch.setitem(sys.modules, "pynput", stub)
+        monkeypatch.setitem(sys.modules, "pynput.keyboard", stub.keyboard)
+    yield
+
+
+def _sight_app_with_clipboard(tmp_path, monkeypatch, enabled):
+    """A REAL ContextPulseSightApp, with only its heavy parts mocked.
+
+    A MagicMock sight app cannot test this: the daemon would call a mocked
+    _start_clipboard_monitor that never touches the monitor, so the test
+    would pass no matter what the daemon did. The clipboard lifecycle
+    methods have to be the real ones.
+    """
+    import contextpulse_sight.activity as act
+    import contextpulse_sight.app as app_mod
+    import contextpulse_sight.buffer as buf_mod
+    import contextpulse_sight.config as cfg
+
+    buf_dir = tmp_path / "buffer"
+    buf_dir.mkdir(exist_ok=True)
+    monkeypatch.setattr(cfg, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(buf_mod, "BUFFER_DIR", buf_dir)
+    monkeypatch.setattr(act, "ACTIVITY_DB_PATH", tmp_path / "activity.db")
+    monkeypatch.setattr(
+        app_mod,
+        "cfg_get",
+        lambda key, default=None: enabled if key == "clipboard_enabled" else default,
+    )
+
+    app = app_mod.ContextPulseSightApp()
+    # Everything _start_modules touches other than the clipboard helpers --
+    # real ones would spawn capture threads and load OCR models.
+    app._event_detector = MagicMock()
+    app._ocr_worker = MagicMock()
+    app._sight_module = MagicMock()
+    # The daemon now starts both of these unconditionally (it used to gate
+    # them on contextpulse_sight.config.AUTO_INTERVAL, a frozen constant).
+    # Stub the loop BODIES rather than the threads: the thread objects stay
+    # real, so a test can still assert they were created and started, but
+    # nothing takes a screenshot or polls a clipboard for 15s.
+    app._auto_capture_loop = MagicMock(name="_auto_capture_loop")
+    app._watchdog_loop = MagicMock(name="_watchdog_loop")
+    return app
+
+
+class TestClipboardMonitorMayBeAbsent:
+    """The unified daemon is the process that actually runs on this machine.
+
+    ContextPulseSightApp._clipboard_monitor is None when clipboard_enabled is
+    false. _start_modules and _stop_modules reach into the sight app's
+    internals directly, so gating the monitor inside the app was not enough --
+    the daemon dereferenced it unguarded and raised AttributeError on startup,
+    taking Sight, Voice and Touch down with it. Verified failing against the
+    unguarded call sites before the fix.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _headless_safe(self, pynput_importable):
+        """Every test in this class imports contextpulse_sight.app."""
+
+    def _daemon_with(self, tmp_path, monkeypatch, enabled):
+        daemon, _ = _make_daemon(tmp_path)
+        app = _sight_app_with_clipboard(tmp_path, monkeypatch, enabled)
+        daemon._sight_app = app
+        daemon._voice_module = None
+        daemon._touch_module = None
+        daemon._knowledge_ingestor = None
+        return daemon, app
+
+    def _start(self, daemon):
+        # No AUTO_INTERVAL patch: the daemon no longer reads that constant,
+        # and _sight_app_with_clipboard stubs the two loop bodies instead.
+        with patch("contextpulse_sight.privacy.SessionMonitor"), \
+             patch("pynput.keyboard.Listener"):
+            daemon._start_modules()
+
+    def test_start_modules_completes_when_clipboard_disabled(self, tmp_path, monkeypatch):
+        daemon, app = self._daemon_with(tmp_path, monkeypatch, enabled=False)
+        assert app._clipboard_monitor is None
+
+        self._start(daemon)  # must not raise AttributeError
+
+        assert app._clipboard_monitor is None, "a disabled monitor was started anyway"
+        app._ocr_worker.start.assert_called_once()
+
+    def test_stop_modules_completes_when_clipboard_disabled(self, tmp_path, monkeypatch):
+        daemon, app = self._daemon_with(tmp_path, monkeypatch, enabled=False)
+        daemon._stop_modules()  # must not raise AttributeError
+        app._ocr_worker.stop.assert_called_once()
+
+    def test_start_modules_still_starts_an_enabled_monitor(self, tmp_path, monkeypatch):
+        daemon, app = self._daemon_with(tmp_path, monkeypatch, enabled=True)
+        assert app._clipboard_monitor is not None
+
+        self._start(daemon)
+        try:
+            assert app._clipboard_monitor.is_alive(), (
+                "the monitor thread is not running -- the disabled case would "
+                "pass here too if the daemon simply stopped starting it"
+            )
+        finally:
+            app._clipboard_monitor.stop()
+
+    def test_stop_modules_stops_an_enabled_monitor(self, tmp_path, monkeypatch):
+        daemon, app = self._daemon_with(tmp_path, monkeypatch, enabled=True)
+        monitor = app._clipboard_monitor
+        self._start(daemon)
+        daemon._stop_modules()
+        assert monitor._stop.is_set(), "the running monitor was not told to stop"
+
+
+# ---------------------------------------------------------------------------
+# The capture and watchdog threads start regardless of auto_interval
+# ---------------------------------------------------------------------------
+
+class TestCaptureThreadAlwaysStarts:
+    """auto_interval: 0 must not be a one-way door.
+
+    _start_modules used to wrap both thread starts in
+    `if contextpulse_sight.config.AUTO_INTERVAL > 0`. That constant is frozen
+    at import, so setting the interval to 0 meant no capture thread existed
+    for the life of the process -- the Settings slider could turn capture off
+    and then could not turn it back on, and nothing said so.
+
+    Worse, the same branch also skipped the WATCHDOG thread, which is what
+    re-reads clipboard_enabled every 15s and restarts a dead capture thread.
+    A user who set auto_interval: 0 lost the "Capture clipboard" checkbox's
+    live behaviour as a side effect of a setting about screenshots.
+
+    Handling 0 belongs inside _auto_capture_loop (it skips the iteration),
+    where a later save can change the answer.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _headless_safe(self, pynput_importable):
+        """Every test in this class imports contextpulse_sight.app."""
+
+    def _daemon_and_app(self, tmp_path, monkeypatch):
+        daemon, _ = _make_daemon(tmp_path)
+        app = _sight_app_with_clipboard(tmp_path, monkeypatch, enabled=False)
+        daemon._sight_app = app
+        daemon._voice_module = None
+        daemon._touch_module = None
+        daemon._knowledge_ingestor = None
+        with patch("contextpulse_sight.privacy.SessionMonitor"), \
+             patch("pynput.keyboard.Listener"):
+            daemon._start_modules()
+        return daemon, app
+
+    def test_both_threads_start_when_auto_interval_is_zero(self, tmp_path, monkeypatch):
+        import contextpulse_core.config as cfg_mod
+        monkeypatch.setitem(cfg_mod._DEFAULTS, "auto_interval", 0)
+        cfg_mod.clear_config_cache()
+
+        _, app = self._daemon_and_app(tmp_path, monkeypatch)
+
+        assert app._capture_thread is not None, "no capture thread with auto_interval 0"
+        assert app._watchdog_thread is not None, "no watchdog thread with auto_interval 0"
+        # The loop BODY is what decides whether to capture, and it is reached.
+        app._auto_capture_loop.assert_called_once()
+        app._watchdog_loop.assert_called_once()
+
+    def test_both_threads_start_at_the_default_interval(self, tmp_path, monkeypatch):
+        """Positive control: the zero case above would also pass if the daemon
+        had simply stopped starting threads altogether."""
+        _, app = self._daemon_and_app(tmp_path, monkeypatch)
+        app._auto_capture_loop.assert_called_once()
+        app._watchdog_loop.assert_called_once()
+
+    def test_daemon_does_not_read_the_frozen_sight_constant(self):
+        """The gate is gone from the CODE, not merely inert at runtime.
+
+        Parsed, not grepped: the first version of this test searched the raw
+        source and failed on the comment that explains the removal -- the
+        same false positive tests/test_config_readers.py avoids by walking
+        the AST, where comments do not exist.
+        """
+        import contextpulse_core.daemon as daemon_mod
+        tree = ast.parse(textwrap.dedent(
+            inspect.getsource(daemon_mod.ContextPulseDaemon._start_modules)
+        ))
+        names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+        names |= {a.name for n in ast.walk(tree)
+                  if isinstance(n, ast.ImportFrom) for a in n.names}
+        assert "AUTO_INTERVAL" not in names, (
+            "_start_modules still reads contextpulse_sight.config.AUTO_INTERVAL, "
+            "a constant frozen at import"
+        )
+
+
+class TestActivityDbPathIsImportedNotRecomputed:
+    """daemon.py held a third copy of the activity-DB path expression.
+
+    It read CONTEXTPULSE_ACTIVITY_DB itself and joined it to OUTPUT_DIR, which
+    agreed with contextpulse_core.config only for as long as both spelled the
+    same env var with the same default. The daemon WRITES the database that
+    contextpulse_sight.activity and the MCP server read, so a disagreement is
+    a split-brain store rather than a tidy-up.
+    """
+
+    def test_daemon_path_is_the_config_path(self):
+        import contextpulse_core.config as cfg_mod
+        import contextpulse_core.daemon as daemon_mod
+        assert daemon_mod.ACTIVITY_DB_PATH == cfg_mod.ACTIVITY_DB_PATH
+
+    def test_daemon_module_no_longer_reads_the_env_var(self):
+        """Again parsed, not grepped -- the comment above the import names it."""
+        import contextpulse_core.daemon as daemon_mod
+        tree = ast.parse(
+            Path(inspect.getfile(daemon_mod)).read_text(encoding="utf-8")
+        )
+        literals = [
+            n.lineno for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and n.value == "CONTEXTPULSE_ACTIVITY_DB"
+        ]
+        assert not literals, (
+            f"daemon.py still resolves the activity DB path itself (line(s) {literals}) "
+            "instead of importing contextpulse_core.config.ACTIVITY_DB_PATH"
+        )

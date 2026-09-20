@@ -50,24 +50,44 @@ def test_imports():
 
 
 def test_config():
-    """Verify config defaults are correct."""
-    print("\n2. Config Defaults")
-    from contextpulse_sight.config import (
-        ACTIVITY_MAX_AGE,
-        ALWAYS_BOTH_APPS,
-        AUTO_INTERVAL,
-        BUFFER_MAX_AGE,
-        EVENT_POLL_INTERVAL,
-        JPEG_QUALITY,
-        STORAGE_MODE,
+    """Print the EFFECTIVE config the daemon is running on.
+
+    This used to import contextpulse_sight.config and assert its constants.
+    That checked the wrong system twice over: those constants came from env
+    vars only, so the check passed while config.json was being ignored, and
+    one of the asserted values (JPEG_QUALITY == 75) had never been true --
+    the sight constant was 90, so this line reported a failure against
+    reality for as long as it existed.
+
+    Now it reads contextpulse_core.config, which IS what the daemon reads,
+    and reports the values rather than asserting defaults: a user who has
+    changed a setting is not a failing check.
+    """
+    print("\n2. Effective Config (contextpulse_core.config)")
+    from contextpulse_core.config import _DEFAULTS, CONFIG_FILE, load_config
+
+    cfg = load_config()
+    check("config.json readable (or absent)", isinstance(cfg, dict))
+    print(f"         Source: {CONFIG_FILE} ({'present' if CONFIG_FILE.exists() else 'absent'})")
+
+    for key in (
+        "auto_interval", "auto_interval_idle", "auto_idle_threshold",
+        "buffer_max_age", "change_threshold", "ocr_diff_threshold",
+        "jpeg_quality", "storage_mode", "activity_max_age",
+        "event_poll_interval",
+    ):
+        flag = "" if cfg[key] == _DEFAULTS[key] else f"  (default {_DEFAULTS[key]})"
+        print(f"         {key} = {cfg[key]}{flag}")
+
+    check("storage_mode is valid", cfg["storage_mode"] in ("smart", "visual", "both", "text"),
+          f"got {cfg['storage_mode']!r}")
+    check("jpeg_quality in 1..100", 1 <= cfg["jpeg_quality"] <= 100, f"got {cfg['jpeg_quality']}")
+    check("thinkorswim.exe in always_both_apps", "thinkorswim.exe" in cfg["always_both_apps"])
+    check(
+        f"blocklist has {len(cfg['blocklist_patterns'])} pattern(s)",
+        bool(cfg["blocklist_patterns"]),
+        "EMPTY -- the privacy blocklist is switched off",
     )
-    check("BUFFER_MAX_AGE == 1800 (30 min)", BUFFER_MAX_AGE == 1800, f"got {BUFFER_MAX_AGE}")
-    check("JPEG_QUALITY == 75", JPEG_QUALITY == 75, f"got {JPEG_QUALITY}")
-    check("STORAGE_MODE == 'smart'", STORAGE_MODE == "smart", f"got {STORAGE_MODE}")
-    check("thinkorswim.exe in ALWAYS_BOTH_APPS", "thinkorswim.exe" in ALWAYS_BOTH_APPS)
-    check("AUTO_INTERVAL == 5", AUTO_INTERVAL == 5, f"got {AUTO_INTERVAL}")
-    check("EVENT_POLL_INTERVAL == 0.5", EVENT_POLL_INTERVAL == 0.5, f"got {EVENT_POLL_INTERVAL}")
-    check("ACTIVITY_MAX_AGE == 86400 (24h)", ACTIVITY_MAX_AGE == 86400, f"got {ACTIVITY_MAX_AGE}")
 
 
 def test_daemon_running():
@@ -275,9 +295,11 @@ def test_ocr():
 def test_smart_storage():
     """Verify smart storage mode is working."""
     print("\n10. Smart Storage Mode")
-    from contextpulse_sight.config import BUFFER_DIR, STORAGE_MODE
+    from contextpulse_core.config import get as cfg_get
+    from contextpulse_sight.config import BUFFER_DIR
 
-    check(f"Storage mode is '{STORAGE_MODE}'", STORAGE_MODE == "smart")
+    storage_mode = cfg_get("storage_mode", "smart")
+    check(f"Storage mode is '{storage_mode}'", storage_mode == "smart")
 
     # Check if any text-only frames exist (jpg deleted, txt remains)
     text_only = [f for f in BUFFER_DIR.glob("*.txt") if not f.with_suffix(".jpg").exists()]

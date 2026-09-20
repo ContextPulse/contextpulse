@@ -475,11 +475,20 @@ class TestConfigEnvOverrides:
             assert has_api_key()
 
     def test_no_api_key(self):
+        # The stub is the full default config with an empty key, not `{}`.
+        # load_config() fills every key in _DEFAULTS -- it cannot return an
+        # empty dict -- and get_voice_config() now reads cfg["voice_hotkey"]
+        # straight out of it rather than cfg.get(key, <its own fallback>).
+        # A `{}` stub therefore tested a shape the producer cannot emit, and
+        # the fallbacks it exercised were exactly the duplicate declarations
+        # this change deletes.
+        from contextpulse_core.config import _DEFAULTS
+        stub = {**_DEFAULTS, "voice_anthropic_api_key": ""}
         with patch.dict(os.environ, {}, clear=True):
-            # Clear the config-based key too
-            with patch("contextpulse_voice.config.load_config", return_value={}):
-                from contextpulse_voice.config import get_api_key
-                get_api_key()  # May or may not be empty depending on dotenv, but should not error
+            with patch("contextpulse_voice.config.load_config", return_value=stub):
+                from contextpulse_voice.config import get_api_key, has_api_key
+                assert get_api_key() == ""
+                assert has_api_key() is False
 
 
 # ═══════════════════════════════════════════════════════════════════════

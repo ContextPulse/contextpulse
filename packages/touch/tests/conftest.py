@@ -14,6 +14,14 @@ sys.path.insert(0, str(TOUCH_SRC))
 sys.path.insert(0, str(VOICE_SRC))
 sys.path.insert(0, str(CORE_SRC))
 
+# Registers the shared config-isolation fixture for every test in this
+# package. It has to be imported rather than inherited: a conftest's fixtures
+# are visible only at or below its own directory, so core's copy cannot reach
+# here. test_touch_config.py exercises the REAL contextpulse_core.config file
+# path and would otherwise read (and save_config would WRITE) the developer's
+# own %APPDATA%/ContextPulse/config.json.
+from contextpulse_core.testing import isolated_config  # noqa: E402,F401
+
 # Save originals before mocking
 _MOCKED_MODULES = [
     "pynput", "pynput.keyboard", "pynput.mouse",

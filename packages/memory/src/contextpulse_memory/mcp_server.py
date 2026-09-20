@@ -18,14 +18,17 @@ from __future__ import annotations
 import functools
 import json
 import logging
-import os
 import threading
-from pathlib import Path
 
 from contextpulse_core.license import get_license_tier, has_pro_access
+from contextpulse_core.redact import redact_sensitive
 from mcp.server.fastmcp import FastMCP
 
-from contextpulse_memory.storage import MemoryStore
+from contextpulse_memory.storage import (
+    MemoryStore,
+    MemoryValueTooLarge,
+    default_memory_dir,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -64,9 +67,28 @@ def _require_pro(func):
         })
     return wrapper
 
-_DEFAULT_DIR = Path.home() / ".contextpulse" / "memory"
 _store: MemoryStore | None = None
 _store_lock = threading.Lock()
+
+
+def _scrub(obj):
+    """Redact every string in a result structure on its way out of a tool.
+
+    Applied to whole result objects rather than a named "value" field: warm-tier
+    rows carry the value, the key, the tag list and an FTS snippet, and a
+    future column would otherwise be returned raw by default. Walking the
+    structure means a new field is covered the day it is added.
+
+    Second layer, not the primary one -- MemoryStore.store redacts before the
+    value reaches any tier. This exists for entries written before that.
+    """
+    if isinstance(obj, str):
+        return redact_sensitive(obj)
+    if isinstance(obj, dict):
+        return {k: _scrub(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_scrub(v) for v in obj]
+    return obj
 
 
 def _get_store() -> MemoryStore:
@@ -75,7 +97,9 @@ def _get_store() -> MemoryStore:
         return _store
     with _store_lock:
         if _store is None:
-            db_dir = Path(os.environ.get("CONTEXTPULSE_MEMORY_DIR", str(_DEFAULT_DIR)))
+            # Resolved by the storage module so the startup secret sweep and
+            # this server cannot disagree about which files exist.
+            db_dir = default_memory_dir()
             _store = MemoryStore(db_dir)
             logger.info("MemoryStore initialized at %s", db_dir)
     return _store
@@ -94,9 +118,15 @@ def memory_store(
     Memories persist in warm tier (SQLite WAL) and hot tier (in-memory, 5 min).
     Use tags to group related memories; set ttl_hours=0 for permanent storage.
 
+    Secret patterns (API keys, passwords, card and SSN shapes, private keys)
+    are redacted before the value is stored, unconditionally and with no
+    opt-out. Values larger than 64 KB are REFUSED rather than truncated -- a
+    memory quietly cut in half is worse than one that was rejected.
+
     Args:
         key: Unique identifier (e.g., "user/preferences", "project/deadline")
-        value: Content to store (free text, JSON, code snippets, etc.)
+        value: Content to store (free text, JSON, code snippets, etc.),
+               up to 64 KB
         tags: Optional grouping tags (e.g., ["project", "contextpulse"])
         ttl_hours: Time-to-live in hours (default 24h, 0 = permanent)
     """
@@ -111,6 +141,13 @@ def memory_store(
     try:
         store.store(key=key, value=value, tags=tags, ttl_hours=ttl)
         return json.dumps({"success": True, "key": key, "tags": tags, "ttl_hours": ttl_hours})
+    except MemoryValueTooLarge as exc:
+        # Named explicitly rather than folded into the generic handler: this is
+        # a caller error with a clear remedy, and it must not be logged with
+        # logger.exception as if the store had failed. The message carries the
+        # actual size and the limit so the caller can act without guessing.
+        logger.warning("memory_store rejected an oversized value for key %s", key)
+        return json.dumps({"success": False, "error": str(exc), "reason": "value_too_large"})
     except Exception as exc:
         logger.exception("memory_store failed: %s", key)
         return json.dumps({"success": False, "error": str(exc)})
@@ -130,7 +167,7 @@ def memory_recall(key: str) -> str:
     result = store.recall(key)
     if result is None:
         return json.dumps({"found": False, "key": key})
-    return json.dumps({"found": True, **result}, default=str)
+    return json.dumps({"found": True, **_scrub(result)}, default=str)
 
 
 @mcp_app.tool()
@@ -171,7 +208,7 @@ def memory_search(
         results = store.search(query, limit=limit)
     return json.dumps({
         "count": len(results),
-        "results": results,
+        "results": _scrub(results),
         "query": query,
         "mode": mode,
     }, default=str)
@@ -197,7 +234,7 @@ def memory_semantic_search(query: str, limit: int = 20) -> str:
     results = store.semantic_search(query, limit=limit)
     return json.dumps({
         "count": len(results),
-        "results": results,
+        "results": _scrub(results),
         "query": query,
         "mode": "semantic",
     }, default=str)
@@ -219,7 +256,7 @@ def memory_list(tag: str | None = None, limit: int = 50) -> str:
     entries = store.list_all(tag=tag, limit=limit)
     return json.dumps({
         "count": len(entries),
-        "memories": entries,
+        "memories": _scrub(entries),
         "filter_tag": tag,
     }, default=str)
 
