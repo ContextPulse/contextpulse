@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.1] - 2026-09-19
+
 ### Added
 
 - The local MCP endpoint now requires a per-install bearer token. The token is
@@ -31,8 +35,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   client. `CONTEXTPULSE_MCP_AUTH=off` or `contextpulse-mcp --no-auth` restores
   the old unauthenticated behaviour and logs a warning banner; there is no
   other grace path and it is not persistable in `config.json`.
-
-## [0.1.1] - 2026-09-19
 
 ### Security
 
