@@ -104,6 +104,28 @@ class TestWordBoundary:
         assert privacy.is_title_blocked("Online Banking") is True
         assert privacy.is_title_blocked("Fairbanks weather") is False
 
+    def test_an_underscore_still_counts_as_a_word_start(self, isolated_config):
+        """SF-4: `\\w` includes `_`, so `(?<!\\w)` lost the suffix matches the
+        module docstring promises to keep.
+
+        Underscore-joined filenames are exactly the case a user typing "Bank"
+        into the blocklist is protecting -- under the old substring behaviour
+        both of these were blocked, and the word-start anchor silently took
+        that away. The anchor is now `(?<![A-Za-z0-9])`, which still kills
+        every mid-word match but treats `_` as a separator like any other
+        punctuation.
+        """
+        save_config({"blocklist_patterns": ["Bank", "1Password"]})
+        assert privacy.is_title_blocked("my_bank_statement.pdf - Edge") is True
+        assert privacy.is_title_blocked("screenshot_1password_login.png - Photos") is True
+
+    def test_the_underscore_change_does_not_widen_mid_word_matching(self, isolated_config):
+        """Negative control for the anchor change: a letter or digit before
+        the pattern must still block the match."""
+        save_config({"blocklist_patterns": ["Bank", "1Password"]})
+        assert privacy.is_title_blocked("Fairbanks weather") is False
+        assert privacy.is_title_blocked("x1password notes") is False
+
     def test_a_regex_metacharacter_is_matched_literally(self, isolated_config):
         save_config({"blocklist_patterns": ["Acct (1.2)"]})
         assert privacy.is_title_blocked("Acct (1.2) - statement") is True

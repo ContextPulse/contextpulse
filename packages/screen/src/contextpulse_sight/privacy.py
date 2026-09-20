@@ -20,8 +20,8 @@ inside "Design in Figma" and "Log in" is inside "Blog index". That never bit
 while the live list was empty; it would have started the moment the defaults
 became real, silently suppressing ordinary windows.
 
-Only the LEADING boundary is enforced (``(?<!\\w)pattern``), deliberately --
-the trailing one is not. A full ``\\b...\\b`` match would satisfy the spec's
+Only the LEADING boundary is enforced (``(?<![A-Za-z0-9])pattern``),
+deliberately -- the trailing one is not. A full ``\\b...\\b`` match would satisfy the spec's
 word-boundary row and break its own blocklist row in the same table: "Bank"
 would stop matching "Online Banking", and "Password" would stop matching
 "Passwords". For a privacy control that is a REGRESSION against today's
@@ -50,6 +50,15 @@ logger = logging.getLogger("contextpulse.sight.privacy")
 # ever observe a consistent pair.
 _COMPILED: tuple[tuple[str, ...], tuple[re.Pattern, ...]] | None = None
 
+# Word-START anchor. Deliberately NOT `(?<!\w)`: `\w` includes `_`, so that
+# spelling silently dropped the suffix matches the module docstring above
+# promises to keep -- "Bank" stopped blocking `my_bank_statement.pdf` and
+# "1Password" stopped blocking `screenshot_1password_login.png`, both of
+# which the old substring behaviour blocked. Underscore-joined filenames are
+# exactly the case a user typing a blocklist pattern is protecting. Only
+# letters and digits count as "inside a word" here.
+_LEADING_ANCHOR = r"(?<![A-Za-z0-9])"
+
 
 def _blocklist_patterns() -> tuple[str, ...]:
     """The blocklist as configured right now (defaults + config.json + env)."""
@@ -67,7 +76,7 @@ def _compiled_for(patterns: tuple[str, ...]) -> tuple[re.Pattern, ...]:
     if cached is not None and cached[0] == patterns:
         return cached[1]
     compiled = tuple(
-        re.compile(r"(?<!\w)" + re.escape(p), re.IGNORECASE)
+        re.compile(_LEADING_ANCHOR + re.escape(p), re.IGNORECASE)
         for p in patterns
     )
     _COMPILED = (patterns, compiled)
