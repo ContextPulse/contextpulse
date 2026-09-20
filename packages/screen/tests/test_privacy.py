@@ -14,6 +14,7 @@ value never exercises the resolver that produces it.
 import time
 from unittest.mock import MagicMock, patch
 
+import pytest
 from contextpulse_core.config import save_config
 from contextpulse_sight import privacy
 
@@ -130,6 +131,90 @@ class TestWordBoundary:
         save_config({"blocklist_patterns": ["Acct (1.2)"]})
         assert privacy.is_title_blocked("Acct (1.2) - statement") is True
         assert privacy.is_title_blocked("Acct (192) - statement") is False
+
+
+class TestShortAmbiguousDefaults:
+    """SF-3: four of the 14 shipped defaults produced measured false positives.
+
+    Word-START matching alone was not enough for a pattern whose tail is a
+    short ambiguous token. Every title below was measured against the shipped
+    defaults before the trailing-boundary rule landed; the first group was
+    BLOCKED, which is silent capture loss on ordinary developer windows --
+    David's wezterm and VS Code titles carry branch and commit text.
+
+    The second group is the negative control: the patterns must keep doing
+    the job they exist for.
+    """
+
+    # (title, pattern it used to hit)
+    FALSE_POSITIVES = [
+        ("build 2fa8c1d - Terminal", "2FA"),
+        ("feat/x @ 2fa3b1 - wezterm", "2FA"),
+        ("Log integration - Grafana", "Log in"),
+        ("Log inspector", "Log in"),
+        ("Sign indicator spec", "Sign in"),
+    ]
+
+    # Titles the word-start anchor already handled; pinned so the new rule
+    # cannot regress them.
+    ALREADY_FINE = [
+        "Design in Figma",
+        "Blog index",
+        "Changelog interface",
+        "commit a32fab1",
+        "app.py - Visual Studio Code",
+    ]
+
+    MUST_STILL_BLOCK = [
+        "Sign in to GitHub",
+        "2FA code",
+        "Log in - Bank of America",
+        "1Password - Login",
+        "Microsoft Authenticator",
+        "Two-Factor authentication required",
+    ]
+
+    @pytest.mark.parametrize("title,pattern", FALSE_POSITIVES)
+    def test_a_measured_false_positive_is_no_longer_blocked(self, isolated_config, title, pattern):
+        assert privacy.is_title_blocked(title) is False, f"{title!r} still blocked by {pattern!r}"
+
+    @pytest.mark.parametrize("title", ALREADY_FINE)
+    def test_a_title_the_anchor_already_handled_stays_unblocked(self, isolated_config, title):
+        assert privacy.is_title_blocked(title) is False
+
+    @pytest.mark.parametrize("title", MUST_STILL_BLOCK)
+    def test_the_real_thing_still_blocks(self, isolated_config, title):
+        assert privacy.is_title_blocked(title) is True
+
+    def test_a_single_alphabetic_word_keeps_matching_a_longer_word(self, isolated_config):
+        """The half of the rule that is NOT the trailing boundary.
+
+        "Bank" must keep blocking "Banking": a user who typed the short form
+        is relying on that, and narrowing a privacy control is the wrong
+        direction to fail in.
+        """
+        save_config({"blocklist_patterns": ["Bank", "Password"]})
+        assert privacy.is_title_blocked("Online Banking - Chase") is True
+        assert privacy.is_title_blocked("Passwords - Vault") is True
+
+    def test_a_pattern_that_is_not_a_single_alphabetic_word_gets_the_trailing_boundary(
+        self, isolated_config
+    ):
+        """The other half, pinned on a hyphenated pattern so the rule is not
+        merely "contains a space"."""
+        save_config({"blocklist_patterns": ["Two-Factor"]})
+        assert privacy.is_title_blocked("Two-Factor setup") is True
+        assert privacy.is_title_blocked("Two-Factorial notes") is False
+
+    def test_a_known_residual_is_recorded_rather_than_silently_wrong(self, isolated_config):
+        """`2fa` at a genuine word start, followed by a space, still blocks.
+
+        Documented, not fixed: distinguishing this from "2FA code" needs a
+        smarter rule than a boundary, and for a privacy control the trade is
+        the right way round. Pinned so the next reader learns it from a test
+        instead of from a missing screenshot.
+        """
+        assert privacy.is_title_blocked("v1.2fa release notes") is True
 
 
 class TestBlocklistLiveReload:

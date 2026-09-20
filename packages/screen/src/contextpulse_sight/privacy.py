@@ -20,14 +20,17 @@ inside "Design in Figma" and "Log in" is inside "Blog index". That never bit
 while the live list was empty; it would have started the moment the defaults
 became real, silently suppressing ordinary windows.
 
-Only the LEADING boundary is enforced (``(?<![A-Za-z0-9])pattern``),
-deliberately -- the trailing one is not. A full ``\\b...\\b`` match would satisfy the spec's
-word-boundary row and break its own blocklist row in the same table: "Bank"
-would stop matching "Online Banking", and "Password" would stop matching
-"Passwords". For a privacy control that is a REGRESSION against today's
-substring behaviour -- a user who typed "Bank" would silently lose the
-blocking they already had. Anchoring the start kills every mid-word false
-match (the entire documented hazard) while keeping every suffix match.
+Which boundaries a pattern gets is decided by ``anchored_pattern()`` below,
+and it is not the same for every pattern. A single alphabetic word gets the
+LEADING boundary only: a full ``\\b...\\b`` match would satisfy the spec's
+word-boundary row and break its own blocklist row in the same table --
+"Bank" would stop matching "Online Banking", and "Password" would stop
+matching "Passwords". For a privacy control that is a REGRESSION against
+today's substring behaviour. Every other pattern (one carrying a space,
+hyphen or digit -- "Sign in", "2FA", "Two-Factor") gets a trailing boundary
+too, because the leading one alone let "2FA" block any git SHA starting
+`2fa`. The full rule and the measurements behind it are in
+``anchored_pattern``'s docstring.
 
 The compiled patterns are cached per distinct list so the regex work happens
 once per list, not once per call.
@@ -58,6 +61,51 @@ _COMPILED: tuple[tuple[str, ...], tuple[re.Pattern, ...]] | None = None
 # exactly the case a user typing a blocklist pattern is protecting. Only
 # letters and digits count as "inside a word" here.
 _LEADING_ANCHOR = r"(?<![A-Za-z0-9])"
+_TRAILING_ANCHOR = r"(?![A-Za-z0-9])"
+
+
+def anchored_pattern(pattern: str) -> str:
+    """Return the regex source for one blocklist pattern.
+
+    ONE rule, two outcomes, because the two kinds of pattern fail in opposite
+    directions:
+
+    * A **single alphabetic word** -- "Bank", "Password", "Authenticator",
+      "Bitwarden" -- gets the LEADING anchor only. The trailing one is
+      omitted so "Bank" keeps blocking "Banking" and "Password" keeps
+      blocking "Passwords". A user who typed the short form is relying on
+      that today, and quietly narrowing a privacy control is the wrong
+      direction to fail in.
+
+    * **Anything else** -- a pattern carrying a space, a hyphen, a digit or
+      any other non-letter ("Sign in", "Log in", "Two-Factor", "2FA",
+      "1Password", "Password Manager") -- ALSO gets a trailing boundary.
+      These are the patterns whose tail is a short ambiguous token, where
+      word-start matching alone was measurably not enough. Against the
+      shipped defaults, before this rule:
+
+          build 2fa8c1d - Terminal     BLOCKED by "2FA"
+          feat/x @ 2fa3b1 - wezterm    BLOCKED by "2FA"
+          Log integration - Grafana    BLOCKED by "Log in"
+          Sign indicator spec          BLOCKED by "Sign in"
+
+      ANY short git SHA beginning `2fa` at a word start, in a terminal or
+      editor title, silently stopped being captured. That is capture loss,
+      not a privacy failure -- it fails closed -- but it is loss the user
+      never sees.
+
+    The trailing boundary costs these patterns nothing, because their tail is
+    not a stem anyone extends: "Sign in to GitHub", "2FA code",
+    "Log in - Bank of America" and "1Password - Login" all still block.
+
+    Known residual, pinned by a test rather than left to be rediscovered:
+    `v1.2fa release notes` still blocks, because there `2fa` really is at a
+    word start and really is followed by a space. Separating that from
+    "2FA code" needs something cleverer than a boundary, and for a privacy
+    control this is the right way round to be wrong.
+    """
+    body = _LEADING_ANCHOR + re.escape(pattern)
+    return body if pattern.isalpha() else body + _TRAILING_ANCHOR
 
 
 def _blocklist_patterns() -> tuple[str, ...]:
@@ -76,7 +124,7 @@ def _compiled_for(patterns: tuple[str, ...]) -> tuple[re.Pattern, ...]:
     if cached is not None and cached[0] == patterns:
         return cached[1]
     compiled = tuple(
-        re.compile(_LEADING_ANCHOR + re.escape(p), re.IGNORECASE)
+        re.compile(anchored_pattern(p), re.IGNORECASE)
         for p in patterns
     )
     _COMPILED = (patterns, compiled)
