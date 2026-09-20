@@ -1,0 +1,211 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2025-2026 Jerard Ventures LLC
+"""cp-daemon-heap-corruption-after-paste — the write side of the invariant.
+
+``pyperclip.copy()`` calls EmptyClipboard, which FREES the handles currently
+on the clipboard. The sight module's 1s poller may be holding a GlobalLock'd
+pointer into one of them, in the SAME process. The two windows must never
+overlap.
+
+This is a real concurrency test, not an assertion about code shape: it drives
+the actual ``paste_text()`` on one thread and the actual Win32 read path
+(``WindowsPlatformProvider.get_clipboard_text``, with the Win32 bindings
+pointed at an in-process fake) on another, and fails if any phase of a read
+is ever observed while a clipboard mutation is in flight.
+
+The interleaving is repeated in-test rather than via ``pytest-repeat``: that
+plugin is not a dependency of this project (checked — the venv has
+pytest-timeout and pytest-threadleak only), and a race test that depends on
+an absent plugin to be meaningful is a test that silently proves nothing.
+"""
+
+import sys
+import threading
+import time
+
+import pytest
+
+# The real sleep, captured before any test monkeypatches the module attribute.
+_real_sleep = time.sleep
+
+pytestmark = pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="exercises the Win32 clipboard read path against the paster",
+)
+
+# How many paste/poll interleavings to drive. A single pass of a concurrency
+# test proves almost nothing; each iteration is ~5ms here because the paster's
+# sleeps are compressed, so a few hundred is cheap.
+INTERLEAVINGS = 200
+
+
+@pytest.fixture
+def fast_paster(monkeypatch):
+    """The real paster with its sleeps compressed and its I/O faked."""
+    from contextpulse_voice import paster
+
+    monkeypatch.setattr(paster, "_BREADCRUMBS", False, raising=False)
+    monkeypatch.setattr(paster.pyautogui, "hotkey", lambda *a: None)
+    monkeypatch.setattr(paster, "_focused_is_terminal", lambda: False)
+    # paster.time IS the time module, so the replacement must call the sleep
+    # captured at import time or it recurses into itself.
+    monkeypatch.setattr(paster.time, "sleep", lambda _s: _real_sleep(0.001))
+    monkeypatch.setattr(paster, "_paste_lock", threading.Lock(), raising=False)
+    paster._last_paste_time = 0.0
+    paster._last_paste_hash = ""
+    yield paster
+    paster._last_paste_time = 0.0
+    paster._last_paste_hash = ""
+
+
+class TestClipboardRaceIsSerialised:
+    def test_no_poller_read_overlaps_a_clipboard_mutation(self, monkeypatch, fast_paster):
+        """No phase of a clipboard READ may run during a clipboard MUTATION."""
+        import ctypes
+
+        from contextpulse_core.platform import windows as win
+
+        paster = fast_paster
+        mutating = threading.Event()
+        overlaps: list[str] = []
+        reads = [0]
+
+        def fake_copy(_text=""):
+            # Stands in for EmptyClipboard + SetClipboardData: the window in
+            # which the previous handle is freed and a new one installed.
+            mutating.set()
+            _real_sleep(0.002)
+            mutating.clear()
+
+        monkeypatch.setattr(paster.pyperclip, "copy", fake_copy)
+
+        buf = ctypes.create_unicode_buffer("clipboard payload", 32)
+
+        def guard(phase, result):
+            if mutating.is_set():
+                overlaps.append(phase)
+            return result
+
+        monkeypatch.setattr(win._u32, "OpenClipboard", lambda _h: guard("OpenClipboard", True))
+        monkeypatch.setattr(win._u32, "IsClipboardFormatAvailable", lambda _f: True)
+        monkeypatch.setattr(win._u32, "GetClipboardData", lambda _f: guard("GetClipboardData", 0xDEADBEEF))
+        monkeypatch.setattr(win._k32, "GlobalSize", lambda _h: ctypes.sizeof(buf))
+
+        def fake_global_lock(_h):
+            guard("GlobalLock", None)
+            # Widen the read window so an unserialised poller would land in a
+            # mutation rather than slipping between two of them.
+            _real_sleep(0.002)
+            return ctypes.addressof(buf)
+
+        monkeypatch.setattr(win._k32, "GlobalLock", fake_global_lock)
+        monkeypatch.setattr(win._k32, "GlobalUnlock", lambda _h: guard("GlobalUnlock", True))
+        monkeypatch.setattr(win._u32, "CloseClipboard", lambda: guard("CloseClipboard", True))
+
+        provider = win.WindowsPlatformProvider()
+        stop = threading.Event()
+
+        def poll():
+            while not stop.is_set():
+                provider.get_clipboard_text()
+                reads[0] += 1
+                _real_sleep(0.0005)
+
+        poller = threading.Thread(target=poll, daemon=True)
+        poller.start()
+        try:
+            for i in range(INTERLEAVINGS):
+                paster._last_paste_time = 0.0
+                paster._last_paste_hash = ""
+                ts, digest = paster.paste_text(f"payload {i}")
+                assert ts > 0.0 and digest, "the paste itself must still succeed"
+        finally:
+            stop.set()
+            poller.join(timeout=10)
+
+        assert reads[0] > 0, "the poller never ran — the test proved nothing"
+        assert overlaps == [], f"read ran during a clipboard mutation: {set(overlaps)}"
+
+    def test_paste_holds_the_lock_across_the_whole_sequence(self, monkeypatch, fast_paster):
+        """The lock must span the trailing clear, not just the two copies.
+
+        The 0.5s window between the hotkey and the final ``copy("")`` is when
+        the target application is reading the clipboard; a poll landing in the
+        middle of it is the same race.
+        """
+        from contextpulse_core.clipboard_lock import clipboard_lock
+
+        paster = fast_paster
+        free_at: list[str] = []
+
+        def probe(phase):
+            got = []
+
+            def attempt():
+                if clipboard_lock.acquire(blocking=False):
+                    got.append(True)
+                    clipboard_lock.release()
+
+            t = threading.Thread(target=attempt)
+            t.start()
+            t.join(timeout=5)
+            if got:
+                free_at.append(phase)
+
+        calls = [0]
+
+        def fake_copy(_text=""):
+            calls[0] += 1
+            probe(f"copy#{calls[0]}")
+
+        monkeypatch.setattr(paster.pyperclip, "copy", fake_copy)
+        monkeypatch.setattr(paster.pyautogui, "hotkey", lambda *a: probe("hotkey"))
+
+        ts, _ = paster.paste_text("some transcription")
+
+        assert ts > 0.0
+        assert calls[0] == 3, "expected clear, copy, clear"
+        assert free_at == [], f"lock was not held during: {free_at}"
+
+    def test_paste_drops_rather_than_racing_when_the_lock_is_unavailable(
+        self, monkeypatch, fast_paster
+    ):
+        """Losing one dictation beats taking the daemon down mid-session."""
+        from contextpulse_core.clipboard_lock import clipboard_lock
+
+        paster = fast_paster
+        copied: list[str] = []
+        monkeypatch.setattr(paster.pyperclip, "copy", lambda t="": copied.append(t))
+        monkeypatch.setattr(paster, "CLIPBOARD_LOCK_TIMEOUT", 0.05, raising=False)
+
+        held = threading.Event()
+        release = threading.Event()
+
+        def holder():
+            with clipboard_lock:
+                held.set()
+                release.wait(timeout=5)
+
+        t = threading.Thread(target=holder)
+        t.start()
+        try:
+            assert held.wait(timeout=5)
+            ts, digest = paster.paste_text("some transcription")
+            assert (ts, digest) == (0.0, "")
+            assert copied == [], "must not touch the clipboard without the lock"
+        finally:
+            release.set()
+            t.join(timeout=5)
+
+        # And the drop must not have stranded anything.
+        got = []
+
+        def attempt():
+            if clipboard_lock.acquire(timeout=1.0):
+                got.append(True)
+                clipboard_lock.release()
+
+        t2 = threading.Thread(target=attempt)
+        t2.start()
+        t2.join(timeout=5)
+        assert got == [True]
