@@ -196,12 +196,10 @@ def parse_icacls_aces(stdout: str, path: Path | str) -> list[str]:
     return aces
 
 
-# Principals whose presence on the token file is not a finding: they already
-# have unrestricted access to every file on the machine, and denying them
-# would not change that -- SYSTEM and the local Administrators group can take
-# ownership at will, and OWNER RIGHTS is the file's own owner, which is us.
-# The module docstring's threat model is "any local caller that is not this
-# user"; none of these is that.
+# Principals whose presence on the token file is not a finding: SYSTEM, which
+# already reads every file on the machine, and OWNER RIGHTS, which is the
+# file's own owner -- us. The module docstring's threat model is "any local
+# caller that is not this user"; neither of these is that.
 #
 # They turn up as EXPLICIT (non-inherited) ACEs whenever the parent directory
 # has no inheritable ACEs: Windows then stamps the creating process's default
@@ -210,13 +208,55 @@ def parse_icacls_aces(stdout: str, path: Path | str) -> list[str]:
 # against a directory with inheritance removed, and it is what windows-latest
 # does to a pytest tmp dir -- four ACEs there, and PR #17 went red on a file
 # that was correctly restricted.
-ACL_TOLERATED = ("nt authority\\system", "builtin\\administrators", "owner rights")
+#
+# BUILTIN\Administrators was tolerated here until 2026-09-20, on the argument
+# that an administrator can take ownership anyway. That argument does not hold:
+# taking ownership rewrites the DACL and leaves a trace, reading a file the
+# DACL already grants does not. A second administrator account is precisely the
+# "other Windows account" the token exists to stop, and on a single-user machine
+# the grant buys nothing. `_restrict_windows` now removes that ACE rather than
+# excusing it, so it is forbidden below instead of tolerated.
+ACL_TOLERATED = ("nt authority\\system", "owner rights")
 
 # Present on the token file means the restriction did NOT take.
-ACL_FORBIDDEN = ("builtin\\users", "everyone", "authenticated users")
+ACL_FORBIDDEN = ("builtin\\users", "everyone", "authenticated users",
+                 "builtin\\administrators")
 
 
-def acl_complaints(aces: list[str], user: str) -> list[str]:
+def ace_principal(ace: str) -> str:
+    """The account an ACE names, without its rights.
+
+    icacls prints `DOMAIN\\account:(F)`, sometimes with several rights groups
+    (`(I)(F)`), so the split is on the LAST `:(` rather than the first.
+    """
+    head, sep, _ = ace.rpartition(":(")
+    return (head if sep else ace).strip()
+
+
+def _is_the_user(ace: str, principal: str) -> bool:
+    """Does this ACE grant the account the file was restricted to?
+
+    Equality, not `in`. The substring test accepted `CORSAIRAI\\developer:(F)`
+    as the ACE of a user called `dev`, and, because `user_seen` then went True,
+    skipped the "no ACE for the user" complaint as well -- a grant to a
+    different account passed twice over. `len(aces) == 1` used to make that
+    unreachable and no longer does.
+
+    `principal` is the `DOMAIN\\USER` string handed to `/grant:r`, so the
+    comparison is domain-aware: a same-named account from another domain is
+    not this user. When no domain is known (USERDOMAIN unset, or a caller
+    passing a bare account name) only the account half can be compared.
+    """
+    if not principal:
+        return False
+    named = ace_principal(ace).lower()
+    want = principal.lower()
+    if "\\" in want:
+        return named == want
+    return named.rpartition("\\")[2] == want
+
+
+def acl_complaints(aces: list[str], principal: str) -> list[str]:
     """What is wrong with this token file's ACL. Empty list means nothing.
 
     Replaces a `len(aces) == 1` check, which was a property of one machine's
@@ -233,12 +273,12 @@ def acl_complaints(aces: list[str], user: str) -> list[str]:
             complaints.append(f"inherited ACE: {ace}")
         elif any(bad in low for bad in ACL_FORBIDDEN):
             complaints.append(f"broad principal: {ace}")
-        elif user and user.lower() in low:
+        elif _is_the_user(ace, principal):
             user_seen = True
         elif not any(ok in low for ok in ACL_TOLERATED):
             complaints.append(f"unexpected principal: {ace}")
     if not user_seen:
-        complaints.append(f"no ACE for {user or '<unset USERNAME>'}: {aces}")
+        complaints.append(f"no ACE for {principal or '<unset USERNAME>'}: {aces}")
     return complaints
 
 
@@ -267,8 +307,16 @@ def _restrict_windows(path: Path) -> bool:
         "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
     }
     try:
+        # *S-1-5-32-544 is BUILTIN\Administrators by SID, so the removal also
+        # works on a localised Windows where the group has another name. It is
+        # a separate run because icacls applies the options of one invocation in
+        # its own order, and the grant must land before the removal.
         subprocess.run(
             ["icacls", str(path), "/inheritance:r", "/grant:r", f"{principal}:F"],
+            check=True, **kwargs,
+        )
+        subprocess.run(
+            ["icacls", str(path), "/remove:g", "*S-1-5-32-544"],
             check=True, **kwargs,
         )
         shown = subprocess.run(["icacls", str(path)], check=True, **kwargs).stdout
@@ -276,7 +324,7 @@ def _restrict_windows(path: Path) -> bool:
         logger.exception("icacls failed on %s; token file permissions are NOT restricted", path)
         return False
 
-    complaints = acl_complaints(parse_icacls_aces(shown, path), user)
+    complaints = acl_complaints(parse_icacls_aces(shown, path), principal)
     if complaints:
         logger.error("Token file %s has unexpected ACL: %s", path, complaints)
         return False

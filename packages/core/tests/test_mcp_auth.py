@@ -611,7 +611,8 @@ def test_token_file_acl_admits_no_ordinary_other_user_on_windows(tmp_path):
     aces = _icacls_aces(target)
     assert mcp_auth.acl_complaints(aces, os.environ["USERNAME"]) == [], aces
     assert any(os.environ["USERNAME"].lower() in ace.lower() for ace in aces), aces
-    for bad in ("(I)", "BUILTIN\\Users", "Everyone", "Authenticated Users"):
+    for bad in ("(I)", "BUILTIN\\Users", "Everyone", "Authenticated Users",
+                "BUILTIN\\Administrators"):
         assert all(bad.lower() not in ace.lower() for ace in aces), f"{bad} in {aces}"
 
 
@@ -654,13 +655,14 @@ def test_a_parent_with_no_inheritable_aces_is_still_a_restricted_token(tmp_path)
     [
         # This box, a directory that does inherit.
         (["CORSAIRAI\\david:(F)"], True),
-        # A parent with no inheritable ACEs: the process default DACL, explicit.
-        (["CORSAIRAI\\david:(F)", "BUILTIN\\Administrators:(F)",
-          "NT AUTHORITY\\SYSTEM:(F)"], True),
+        # A parent with no inheritable ACEs: the process default DACL, explicit,
+        # after `/remove:g *S-1-5-32-544` has taken the Administrators ACE out.
+        (["CORSAIRAI\\david:(F)", "NT AUTHORITY\\SYSTEM:(F)"], True),
         # The windows-latest 3.12 job on PR #17, verbatim apart from the
-        # account name (runnervmvmocb\runneradmin) swapped for this test's user.
+        # account name (runnervmvmocb\runneradmin) swapped for this test's user
+        # and the Administrators ACE removed.
         (["runnervmvmocb\\david:(F)", "NT AUTHORITY\\SYSTEM:(F)",
-          "BUILTIN\\Administrators:(F)", "OWNER RIGHTS:(F)"], True),
+          "OWNER RIGHTS:(F)"], True),
         # The cases the check exists for, none of which may pass.
         (["CORSAIRAI\\david:(F)", "BUILTIN\\Users:(RX)"], False),
         (["CORSAIRAI\\david:(F)", "Everyone:(F)"], False),
@@ -669,6 +671,10 @@ def test_a_parent_with_no_inheritable_aces_is_still_a_restricted_token(tmp_path)
         (["CORSAIRAI\\someone_else:(F)"], False),       # another ordinary account
         (["NT AUTHORITY\\SYSTEM:(F)"], False),          # we cannot read our own token
         ([], False),
+        # A second administrator account reads the token with no complaint if
+        # this ACE is excused, and taking ownership -- the reason it used to be
+        # excused -- rewrites the DACL and leaves a trace. Reading does not.
+        (["CORSAIRAI\\david:(F)", "BUILTIN\\Administrators:(F)"], False),
     ],
 )
 def test_acl_complaints_accepts_machine_principals_and_nothing_else(aces, expect_ok):
@@ -678,6 +684,48 @@ def test_acl_complaints_accepts_machine_principals_and_nothing_else(aces, expect
     is the input that broke CI, and no other machine reproduces it on demand.
     """
     assert (mcp_auth.acl_complaints(aces, "david") == []) is expect_ok
+
+
+def test_a_longer_account_name_is_not_this_user():
+    """R3-1: the user ACE was matched by substring.
+
+    `acl_complaints(["CORSAIRAI\\developer:(F)"], "dev")` returned [] before
+    this fix: a grant to a different account was read as the user's own, and
+    `user_seen` going True suppressed the "no ACE" complaint too. The
+    `len(aces) == 1` check used to make the hole unreachable.
+    """
+    assert mcp_auth.acl_complaints(["CORSAIRAI\\developer:(F)"], "dev") != []
+    assert mcp_auth.acl_complaints(["CORSAIRAI\\dev:(F)"], "dev") == []
+
+
+def test_the_same_name_in_another_domain_is_not_this_user():
+    """R3-2: the audit compared the bare USERNAME, not the granted principal.
+
+    `_restrict_windows` grants `DOMAIN\\user` and now audits the same string,
+    so an ACE for an identically named account in another domain is a finding.
+    """
+    assert mcp_auth.acl_complaints(["OTHERDOM\\david:(F)"], "CORSAIRAI\\david") != []
+    assert mcp_auth.acl_complaints(["CORSAIRAI\\david:(F)"], "CORSAIRAI\\david") == []
+    # Case is not part of a Windows account name.
+    assert mcp_auth.acl_complaints(["corsairai\\DAVID:(F)"], "CORSAIRAI\\david") == []
+
+
+def test_ace_principal_splits_on_the_last_rights_group():
+    assert mcp_auth.ace_principal("CORSAIRAI\\david:(I)(F)") == "CORSAIRAI\\david"
+    assert mcp_auth.ace_principal("OWNER RIGHTS:(F)") == "OWNER RIGHTS"
+    assert mcp_auth.ace_principal("NT AUTHORITY\\SYSTEM:(OI)(CI)(F)") == "NT AUTHORITY\\SYSTEM"
+
+
+@pytest.mark.windows_only
+@pytest.mark.skipif(sys.platform != "win32", reason="icacls is Windows-only")
+def test_restrict_removes_the_administrators_ace_on_windows(tmp_path):
+    """R3-3, end to end: the ACE is gone from the live file, not excused."""
+    target = tmp_path / "mcp_token"
+    mcp_auth.load_or_create_token(target)
+
+    aces = _icacls_aces(target)
+    assert all("administrators" not in ace.lower() for ace in aces), aces
+    assert mcp_auth.restrict_to_user(target) is True
 
 
 def test_parse_icacls_aces_handles_real_output_shape():
