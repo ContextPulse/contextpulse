@@ -5,7 +5,9 @@
 ContextPulse is a local-first desktop daemon (Windows primary, macOS Phase 1 ported and
 paused) that captures screen, voice, and keyboard/mouse activity in real time and
 exposes it to AI agents through the Model Context Protocol (MCP). One process, one
-tray icon, ~35 MCP tools, zero cloud dependency for the open-core daemon. It is a
+tray icon, **37 MCP tools** (counted 1:1 against a live MCP client 2026-09-19; the
+"~35" this file and the README carried was never measured), zero cloud dependency
+for the open-core daemon. It is a
 public, open-core project — AGPL-3.0 — with a separately-licensed, cleanly-partitioned
 paid cloud tier under active evaluation.
 
@@ -35,6 +37,20 @@ paid cloud tier under active evaluation.
 - GitHub: public repo `github.com/ContextPulse/contextpulse` (`origin`), private
   backup remote `contextpulse-wip` (`backup`). Code-in-progress and internal dossiers
   (`.internal/`, gitignored) live only on the private side until validated live.
+- **Privacy/security modules, added 0.1.1 (2026-09-19)** — all in `packages/core/src/contextpulse_core/`:
+  `redact.py` (the single pattern table, moved here from `screen` so every package
+  shares one matcher), `purge.py` (retro-sweep of stored rows + FTS rebuild),
+  `search_filter.py` (tokenizer-aware match, so search counts are computed against
+  redacted text rather than raw), `mcp_auth.py` (per-install bearer token) and
+  `env_guard.py` (snapshots the environment before `load_dotenv` so a `.env` cannot
+  silently disable auth).
+- **The live `contextpulse.ai` page is `.internal/site/index.html`** — byte-identical
+  to what is served, verified by fetch-and-diff 2026-09-19. It is gitignored and not
+  under git, so it has no revert point. `ContextPulse-jv-private/site/index.html` is
+  an OLDER 28-tool design; both carry a `wrangler.toml` naming the same Cloudflare
+  Pages project `contextpulse-site`, so deploying the jv-private copy would replace
+  the live page with the old one. Deploy from the directory holding the corrected
+  page: `npx wrangler pages deploy . --project-name=contextpulse-site --branch=main`.
 
 ## Packages (`packages/*`, each an independent `uv` package)
 
@@ -61,12 +77,49 @@ paid cloud tier under active evaluation.
 | Let the KG keep accumulating; no new dated deadline; do not build the injection redesign yet | Bigger ecosystem problems exist; this is not one of them right now | 2026-08-24 (David) |
 | `mcp` pinned `<2` across every package | 2.0.0 removed `mcp.server.fastmcp`; unbounded major ranges are a standing anti-pattern per `developing-python` | 2026-08-18 |
 | Public repo stays commercially separate from `ContextPulseCloudProto` (paid cloud tier) | AGPL-3.0 open-core boundary must not leak proprietary/cloud code | 2026-03-24 / ongoing |
+| Redact at **write AND at the MCP boundary**, for every modality — not at one chokepoint | An external report showed `redact_sensitive` had exactly one caller (`ocr_worker.py`), so OCR was protected and clipboard, voice, keystroke, memory and knowledge text were not. A single chokepoint is a chokepoint only for the path that happens to call it | 2026-09-19 |
+| Keep the hand-written `redact.py`; do not adopt a redaction library | Measured: ours matches 27/34 probe families against gitleaks' 16/34; Presidio would add 31 runtime deps to a package with 3, for a per-clipboard-event daemon. Vendoring gitleaks' 222 MIT rules **as data** is a 0.1.2 item | 2026-09-19 |
+| HOLD the public push of 0.1.1 until David reads the claims changes | The release changes public privacy claims, and publication is his call | 2026-09-19 (David) |
+| Config unification keeps `buffer_max_age` 1800 and deletes the placebo-era 300 | The 300 was typed into a Settings dialog whose value the daemon never read; carrying it forward would import a number that never had an effect | 2026-09-19 (David) |
 
 ## Current State
 
 ### Done
-- Public open-core daemon (Sight + Voice + Touch), ~35 MCP tools, packaged and
+- Public open-core daemon (Sight + Voice + Touch), 37 MCP tools, packaged and
   installable (installer under `installer_output/`, `dist/`).
+- **Version 0.1.1 SHIPPED 2026-09-19 23:40 MDT, a security release.** David approved the
+  public push after reading the release review doc; PR #17 merged to public `main`
+  (`50a4393`, all 14 CI checks green), GitHub release `v0.1.1` published, draft advisory
+  `GHSA-xfr9-62vj-4227` (medium, credits Hronom) awaiting the 7-day response to the
+  reporter before publication. Private backup `release-0.1.1` mirrors it. The release
+  includes the config unification (see below) and the MCP local auth. David's daemon
+  and MCP server run it since 23:43; the MCP token was rotated once after the rollout.
+  - Redaction now runs at write **and** at the MCP boundary for every stored-text
+    modality: clipboard, OCR, voice transcripts, keystroke burst/correction text,
+    memory and the knowledge-ingest bridge. Before this, `redact_sensitive` had one
+    caller and only OCR text was covered.
+  - `purge.py` plus a **one-time startup sweep, per store**, rewrites rows captured
+    before the fix. Ran live on David's machine after the 22:07 restart: markers
+    present for all five stores (activity, knowledge, memory, memory_cold, probe);
+    25 activity rows rewritten.
+  - Search was a **count oracle** — `search_clipboard`, `search_history` and
+    `memory_search` matched raw stored text and returned counts, so a secret was
+    recoverable character by character without ever appearing in output. Closed by
+    `search_filter.py`, which asks the same question of the *redacted* text through
+    the same tokenizer.
+  - The MCP endpoint now requires a **per-install bearer token** (`mcp_auth.py`,
+    `env_guard.py`): `O_EXCL` create, user-only ACL, fails closed. Verified live on
+    the release code — 401 / 401 / 200 / 403.
+  - `clipboard_enabled` is **wired**. It was declared with a default of true and read
+    nowhere, so a user who turned clipboard capture off was still captured.
+  - Per David's ruling the 19 affected clipboard rows were purged and the pre-purge
+    `activity.db` backup was permanently deleted, not recycled — it held the raw values.
+  - Full suite on the merged tree: **2015 passed, 14 skipped, 0 failed.**
+- Public CI and Security workflows green on `origin/main`, zero open PRs (2026-09-19).
+  Root cause was that no job installed `packages/knowledge`; four `packages/core`
+  tests import sibling packages. Dependabot noise closed with `versions:` ignore
+  rules — the `update-types: semver-major` form does **not** work for range-widening
+  updates on a library with no lockfile, proven by a controlled pair of runs.
 - Phase 1 KG-spine core built and tested independently: `cp_core.py` (bi-temporal
   referee), `store_sqlite.py`, schema v1, 14 language-neutral conformance vectors,
   29 tests green (adversarially reviewed, not just self-tested — see
@@ -77,6 +130,26 @@ paid cloud tier under active evaluation.
   repo root actually collects tests (fixed 2026-08-28).
 
 ### In Progress
+- **The 0.1.1 public push went out 2026-09-19 23:40 MDT** after David read the release
+  review doc (his hold of 22:10 lifted at 22:25). Shipped in it: the claim corrections from branch
+  `docs/claims-corrections` (README 12 changes, SECURITY.md 4 principles rewritten
+  plus a "what redaction does not cover" section, CONTRIBUTING 1), the corrected
+  live site page, a 0.1.x release, and a public GitHub Security Advisory crediting
+  Yevhen Tienkaiev by name.
+- **The external security report's clock is running.** Acknowledgment due
+  **2026-09-21 17:19 MDT**, detailed response due **2026-09-26**, per the 48h/7d
+  commitment ContextPulse's own `SECURITY.md` publishes. The clock started when the
+  report arrived, not when we reply. The acknowledgment is drafted and approved and
+  is receipt-only by design; David sends it himself.
+- **Config unification SHIPPED in 0.1.1 and is live on David's machine** (independent
+  review: no blockers; its should-fixes landed; cut over 23:43 with `buffer_max_age`
+  300 deleted from `config.json` per his ruling — it was the Settings spinbox ceiling,
+  not a preference). It was the fix for the dead-control
+  finding — the Settings dialog writes `config.json` while the capture daemon reads
+  an env-var-only config frozen at start, so **6 fields are dead, 12 misleading and
+  5 partial**, and the blocklist meant to stop capture of password managers and 2FA
+  prompts is empty in the path that actually runs. Ledger:
+  `.internal/audit-2026-09-19/dead-controls.md`.
 - Phase 0 wedge probe extended per David's 2026-08-22 ruling. **The attribution
   instrument is BUILT and live** (corrected 2026-09-19; this file previously said
   "not yet built", which was wrong): `probe.record_usage()` writes a `tool_usage`
@@ -140,23 +213,52 @@ paid cloud tier under active evaluation.
    `[]` on any parse failure and the caller records `error=None`, so a total
    extraction failure is indistinguishable from a quiet day. A gate fed by a
    silently-empty fact store would repeat the exact 2026-08-20 mistake.
-3. Get CI green on the public default branch. It is RED at `5c50d63`, the current
-   public HEAD, and has been since the repo was made public: `packages/core`'s own
-   tests import `contextpulse_sight` and `contextpulse_knowledge`, and no job in
-   `.github/workflows/ci.yml` installs `packages/knowledge` (the cross-platform job
-   also omits `packages/screen`), so 4 tests die on import in every job. All 6 open
-   Dependabot PRs show the same failures, which is how it was found. Same root cause
-   as `cp-knowledge-package-not-in-root-build`.
-4. Decide the 6 open Dependabot PRs, and set `versioning-strategy` in
-   `.github/dependabot.yml`. All six merely RAISE dependency floors, which narrows
-   who can install an open-core library for no stated benefit; the absent strategy
-   setting is why they were generated, and they will regenerate weekly until it is
-   set. That file also watches only `/`, so no `packages/*/pyproject.toml` is
-   monitored at all — a vulnerable pin in a sub-package would never raise a PR.
+3. **Ship 0.1.1 once David clears the claims changes** — push, tag, publish the
+   advisory, deploy the corrected site page. The advisory's exposure statement must
+   name **OCR'd screen text alongside clipboard text**, and must note that
+   pre-0.1.1 probe-consolidator runs sent raw captured text to an external model.
+   The scope widened twice during the fix; do not ship the first draft's narrower wording.
+4. ~~Review and cut over config unification~~ — done 2026-09-19 23:43; shipped in 0.1.1.
+   Verify once in daylight: focus a window whose title matches a default blocklist
+   pattern and confirm `Blocked window -- skipping` in the log; change a Settings
+   value and confirm it applies without a restart.
+5. The **0.1.2 list**, none of them release blockers and all of them named by the
+   reviews that cleared 0.1.1:
+   - Database files have no user-only ACLs.
+   - Vendor gitleaks' 222 MIT rules **as generated data** — 221 compile under Python
+     `re` after two mechanical rewrites, zero new runtime deps. Hazard measured: 165
+     of them use a capture group, so the dispatcher must replace the `group(1)` span,
+     not `group(0)`, or it swallows surrounding context.
+   - `xoxc-`/`xoxd-` Slack tokens are a missing alternation in one pattern (residual
+     N-3 from the release review).
+   - `packages/memory` cold-tier tests build timestamps one second apart and assume a
+     shared time window, so they fail intermittently on any platform; and
+     `test_platform_windows.py::TestClipboard::test_clipboard_read_roundtrip` uses the
+     real Win32 clipboard and fails whenever the live daemon is polling it.
+   - `tests/test_user_acceptance.py::test_daemon_lifecycle` writes `_test_daemon.log`
+     into the **live** output dir (`~/screenshots`), so the UAT file cannot run on the
+     dev machine at all. Should use `tmp_path` / `CONTEXTPULSE_OUTPUT_DIR`.
+   - The startup sweep should take `BEGIN IMMEDIATE` on the marker. Today the daemon
+     and the MCP server both scan; one wins and the other logs "database is locked"
+     and stands down. Correct, but a duplicate scan.
+6. Resolve `cp-security-alias-missing` — **needs David's hands.** The
+   `security@contextpulse.ai` send-as alias does not exist, measured live:
+   `users.settings.sendAs.list` returns exactly one identity. Until it exists, every
+   acknowledgment this project drafts is unsendable under its own identity rule,
+   because Gmail stamps the account default on a draft with no `From` and that
+   carries his full name into correspondence with an outside reporter.
+7. Decide whether `infra/infra-bak/` is the intended home for the AMI/boot scripts or
+   an abandoned backup (`cp-infra-scripts-moved-to-bak-docs-dead`). `infra/ami/` and
+   `infra/boot/` are now empty and five doc references across three skills are dead.
+   Nothing is lost — it was a move. `.gitignore` ignores `infra/` wholesale, so this
+   appears in no diff and no commit; a path gate is the only thing that sees it.
 
-**Settled 2026-09-19, listed here only so they are not re-proposed:** the README
-fragmentation between `main` and `phase1-kg-spine` is reconciled (both at `5c50d63`,
-0/0 divergence against both remotes), and the public-history leak is resolved — 102
+**Settled 2026-09-19, listed here only so they are not re-proposed:** public CI and
+Security are green with zero open PRs and the Dependabot noise is closed by config
+(the only mechanism that works for a grouped update — closing a grouped PR creates no
+ignore, and `@dependabot ignore this major version` does not work on one either); the
+README fragmentation between `main` and `phase1-kg-spine` is reconciled (it was `5c50d63`
+at reconciliation, since advanced by the 0.1.1 work); and the public-history leak is resolved — 102
 paths stripped, the repo deleted and recreated to kill `refs/pull/*` reachability,
 validated clean on a fresh clone, and returned to public. The private `contextpulse-wip`
 remote still holds the pre-rewrite line; that is private and untouched by design.
