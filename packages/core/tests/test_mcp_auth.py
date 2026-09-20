@@ -57,9 +57,17 @@ def _dummy_fastmcp() -> FastMCP:
 
 
 @pytest.fixture
-def auth_client():
-    """TestClient over BearerAuthASGI(FastMCP.streamable_http_app())."""
-    app = mcp_auth.BearerAuthASGI(_dummy_fastmcp().streamable_http_app(), TOKEN)
+def auth_client(tmp_path):
+    """TestClient over BearerAuthASGI(FastMCP.streamable_http_app()).
+
+    token_file points at a path that does not exist, on purpose: the wrapper
+    re-reads its token when that file changes, and defaulting to the real
+    %APPDATA% token file would both read David's live credential and make
+    these tests depend on whether he has one.
+    """
+    app = mcp_auth.BearerAuthASGI(
+        _dummy_fastmcp().streamable_http_app(), TOKEN, token_file=tmp_path / "absent"
+    )
     with TestClient(app, base_url=BASE_URL) as client:
         yield client
 
@@ -147,7 +155,7 @@ def test_no_token_with_foreign_origin_is_401_not_403(auth_client):
 
 # ── the SSE shape production actually serves ─────────────────────────
 
-def test_gate_holds_on_the_sse_response_shape():
+def test_gate_holds_on_the_sse_response_shape(tmp_path):
     """The fixture above sets json_response=True; production does not.
 
     Same gate, the response body framing differs. Without this, every
@@ -164,7 +172,9 @@ def test_gate_holds_on_the_sse_response_shape():
         """Present so tools/list is non-empty."""
         return "ok"
 
-    wrapped = mcp_auth.BearerAuthASGI(app.streamable_http_app(), TOKEN)
+    wrapped = mcp_auth.BearerAuthASGI(
+        app.streamable_http_app(), TOKEN, token_file=tmp_path / "absent"
+    )
     with TestClient(wrapped, base_url=BASE_URL) as client:
         assert _post(client).status_code == 401
         ok = _post(client, {"Authorization": f"Bearer {TOKEN}"})
@@ -175,19 +185,19 @@ def test_gate_holds_on_the_sse_response_shape():
 
 # ── non-http scopes ──────────────────────────────────────────────────
 
-def test_lifespan_scope_passes_through():
+def test_lifespan_scope_passes_through(tmp_path):
     """Eating lifespan would leave the session manager unstarted."""
     seen = []
 
     async def inner(scope, receive, send):
         seen.append(scope["type"])
 
-    wrapper = mcp_auth.BearerAuthASGI(inner, TOKEN)
+    wrapper = mcp_auth.BearerAuthASGI(inner, TOKEN, token_file=tmp_path / "absent")
     asyncio.run(wrapper({"type": "lifespan"}, _noop_receive, _noop_send))
     assert seen == ["lifespan"]
 
 
-def test_websocket_scope_is_refused_not_forwarded():
+def test_websocket_scope_is_refused_not_forwarded(tmp_path):
     """A future websocket route must not inherit an ungated path."""
     seen = []
     sent = []
@@ -198,10 +208,76 @@ def test_websocket_scope_is_refused_not_forwarded():
     async def send(message):
         sent.append(message)
 
-    wrapper = mcp_auth.BearerAuthASGI(inner, TOKEN)
+    wrapper = mcp_auth.BearerAuthASGI(inner, TOKEN, token_file=tmp_path / "absent")
     asyncio.run(wrapper({"type": "websocket"}, _noop_receive, send))
     assert seen == [], "websocket scope reached the app without authentication"
     assert sent == [{"type": "websocket.close", "code": 1008}]
+
+
+# ── live rotation ────────────────────────────────────────────────────
+
+class TestRegenerateTakesEffectWithoutARestart:
+    """B1-4. The server captured its token once, at startup. Regenerating
+    left the OLD token working and the NEW one dead -- the opposite of what
+    someone clicking Regenerate because they think a token leaked is asking
+    for.
+    """
+
+    def _client(self, tmp_path):
+        token_file = tmp_path / "mcp_token"
+        token = mcp_auth.load_or_create_token(token_file)
+        app = mcp_auth.BearerAuthASGI(
+            _dummy_fastmcp().streamable_http_app(), token, token_file=token_file
+        )
+        return token_file, token, TestClient(app, base_url=BASE_URL)
+
+    def test_the_old_token_stops_working_and_the_new_one_starts(self, tmp_path):
+        token_file, old, client = self._client(tmp_path)
+        with client:
+            assert _post(client, {"Authorization": f"Bearer {old}"}).status_code == 200
+
+            new = mcp_auth.regenerate_token(token_file)
+            assert new != old
+
+            assert _post(client, {"Authorization": f"Bearer {old}"}).status_code == 401, (
+                "the revoked token still works"
+            )
+            assert _post(client, {"Authorization": f"Bearer {new}"}).status_code == 200
+
+    def test_an_unchanged_file_is_not_re_read(self, tmp_path, monkeypatch):
+        """One stat per request, not one read -- the file is only opened when
+        its stamp moved."""
+        token_file, token, client = self._client(tmp_path)
+        reads: list[str] = []
+        real_read = Path.read_text
+
+        def spy(self, *a, **kw):
+            reads.append(str(self))
+            return real_read(self, *a, **kw)
+
+        monkeypatch.setattr(Path, "read_text", spy)
+        with client:
+            for _ in range(3):
+                assert _post(client, {"Authorization": f"Bearer {token}"}).status_code == 200
+        assert str(token_file) not in reads
+
+    def test_a_deleted_token_file_keeps_the_running_token(self, tmp_path):
+        """Rotation unlinks before it creates; a request in that window must
+        neither open the endpoint nor lock out a working client."""
+        token_file, token, client = self._client(tmp_path)
+        with client:
+            token_file.unlink()
+            assert _post(client, {"Authorization": f"Bearer {token}"}).status_code == 200
+            assert _post(client).status_code == 401
+
+    def test_an_empty_token_file_keeps_the_running_token(self, tmp_path):
+        """Seen mid-write: zero bytes must never mean 'no auth'."""
+        token_file, token, client = self._client(tmp_path)
+        with client:
+            token_file.write_text("", encoding="utf-8")
+            assert _post(client).status_code == 401
+            assert _post(client, {"Authorization": "Bearer "}).status_code == 401
+            assert _post(client, {"Authorization": f"Bearer {token}"}).status_code == 200
 
 
 async def _noop_receive():

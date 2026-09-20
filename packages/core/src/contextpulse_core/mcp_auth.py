@@ -327,11 +327,51 @@ class BearerAuthASGI:
     understand" is how an unauthenticated path appears the day it gains one.
     """
 
-    def __init__(self, app, token: str) -> None:
+    def __init__(self, app, token: str, token_file: Path | str | None = None) -> None:
         if not token:
             raise ValueError("BearerAuthASGI requires a non-empty token")
         self.app = app
         self._token = token
+        self._token_file = Path(token_file) if token_file is not None else TOKEN_FILE
+        self._stamp = self._file_stamp()
+
+    def _file_stamp(self) -> tuple | None:
+        """Cheap identity of the token file: one stat, no read."""
+        try:
+            st = os.stat(self._token_file)
+        except OSError:
+            return None
+        # ctime as well as mtime: regeneration unlinks and recreates, and the
+        # replacement is always the same length, so size alone proves nothing.
+        return (st.st_mtime_ns, st.st_ctime_ns, st.st_size)
+
+    def current_token(self) -> str:
+        """The live token, re-read when the file underneath has changed.
+
+        Without this, "Regenerate token" in the Settings dialog left the OLD
+        token working and the NEW one dead until someone restarted the MCP
+        server -- the exact opposite of what a user clicking Regenerate
+        because they think a token leaked is asking for.
+
+        Every failure path keeps the token already in hand. A file that is
+        missing, unreadable, or momentarily empty mid-rotation must not open
+        the endpoint or lock out a working client.
+        """
+        stamp = self._file_stamp()
+        if stamp is None or stamp == self._stamp:
+            return self._token
+        try:
+            rotated = self._token_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            logger.warning("Could not re-read %s; keeping the token in memory", self._token_file)
+            return self._token
+        if not rotated:
+            return self._token  # mid-write; the writer will bump the stamp again
+        if rotated != self._token:
+            logger.info("MCP access token changed on disk -- now serving the new one")
+        self._token = rotated
+        self._stamp = stamp
+        return self._token
 
     async def __call__(self, scope, receive, send) -> None:
         scope_type = scope.get("type")
@@ -351,7 +391,7 @@ class BearerAuthASGI:
                 header = value.decode("latin-1")
                 break
 
-        if not verify(extract_bearer(header), self._token):
+        if not verify(extract_bearer(header), self.current_token()):
             await self._send_401(send)
             return
 

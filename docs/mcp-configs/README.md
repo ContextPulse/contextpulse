@@ -140,7 +140,7 @@ The trade-off: every client that does this starts its own process, and each one 
 
 ## Rotating the token
 
-Settings -> MCP Access -> **Regenerate token**, or delete the token file and restart the MCP server. Either way, re-run `contextpulse --setup` to update your clients and reconnect them.
+Settings -> MCP Access -> **Regenerate token**, or overwrite the token file yourself. The running MCP server re-reads the file when it changes, so the old token stops being accepted immediately and no restart is needed. Re-run `contextpulse --setup` to update your clients, then reconnect them.
 
 ## Verifying the connection
 

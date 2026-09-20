@@ -197,10 +197,11 @@ def build_http_app(fastmcp_app: FastMCP, no_auth: bool = False, token_file: Path
     token = mcp_auth.load_or_create_token(token_file)
     logger.info(
         "MCP auth enabled -- clients must send 'Authorization: Bearer <token>'. "
-        "Token file: %s",
+        "Token file: %s (re-read on change, so Regenerate takes effect without "
+        "a restart)",
         token_file or mcp_auth.TOKEN_FILE,
     )
-    return mcp_auth.BearerAuthASGI(app, token)
+    return mcp_auth.BearerAuthASGI(app, token, token_file=token_file)
 
 
 def main():

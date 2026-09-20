@@ -393,8 +393,10 @@ def _build_and_run() -> None:
         if not messagebox.askyesno(
             "ContextPulse",
             "Generate a new access token?\n\n"
-            "Every client configured with the old token stops working until you\n"
-            "re-run  contextpulse --setup  and reconnect it.",
+            "The old token stops working immediately — the running MCP server\n"
+            "picks up the change without a restart. Every client configured\n"
+            "with it stops working until you re-run  contextpulse --setup\n"
+            "and reconnect.",
         ):
             return
         try:
@@ -408,10 +410,9 @@ def _build_and_run() -> None:
         show_btn["w"].config(text="Show")
         messagebox.showinfo(
             "ContextPulse",
-            "New token generated.\n\n"
+            "New token generated. The old one is already refused.\n\n"
             "1. Run  contextpulse --setup  to update your clients\n"
-            "2. Restart the ContextPulse MCP server\n"
-            "3. Reconnect the client",
+            "2. Reconnect the client (no server restart needed)",
         )
 
     show_btn["w"] = ttk.Button(
