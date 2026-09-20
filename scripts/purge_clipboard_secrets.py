@@ -46,11 +46,19 @@ for _pkg in ("screen", "core"):
     if _src.is_dir() and str(_src) not in sys.path:
         sys.path.insert(0, str(_src))
 
+from contextpulse_core.spine.events import _TEXT_PAYLOAD_KEYS  # noqa: E402
 from contextpulse_sight.redact import redact_with_counts  # noqa: E402
 
-# Payload keys the spine's text_content generated column reads, in its order.
-# Keep in step with _SCHEMA_SQL in contextpulse_core/spine/bus.py.
-_PAYLOAD_TEXT_KEYS = ("ocr_text", "transcript", "text")
+# Imported from the spine rather than re-listed here, so a new text key cannot
+# be added to the event schema and silently escape this scan.
+#
+# Deliberately WIDER than the events_fts trigger, which indexes only the first
+# three (ocr_text, transcript, text). burst_text -- captured typed text -- and
+# correction_text are stored payload, are read by probe.py and by the knowledge
+# bridge, and are redacted by nothing at write time. Scanning only what FTS
+# indexes would let this script report the events table clean while a typed
+# password sat in it.
+_PAYLOAD_TEXT_KEYS = _TEXT_PAYLOAD_KEYS
 
 
 def resolve_db_path() -> Path:

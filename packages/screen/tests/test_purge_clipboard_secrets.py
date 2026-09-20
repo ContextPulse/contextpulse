@@ -252,6 +252,63 @@ class TestApplyRemovesSecretsEverywhere:
         assert clip_payloads[0]["hash"] == "deadbeef", "non-text keys were clobbered"
 
 
+class TestPayloadKeyCoverage:
+    """burst_text and correction_text are scanned too.
+
+    Only the first three of the spine's five text keys are indexed by the
+    events_fts trigger, so scanning "what FTS indexes" would leave typed-text
+    bursts unexamined -- and nothing redacts those at write time. On the live
+    database they happen to be clean today, so this fixture is the only
+    evidence the widened scan does anything.
+    """
+
+    BURST_SECRET = "zqburstneedle0123456789abcdefghij0123"
+
+    def _db_with_burst(self, tmp_path):
+        from contextpulse_core.spine import ContextEvent, EventBus, EventType, Modality
+
+        db_path = tmp_path / "activity.db"
+        db = ActivityDB(db_path=db_path)
+        bus = EventBus(db_path)
+        bus.emit(
+            ContextEvent(
+                timestamp=time.time(),
+                modality=Modality.KEYS,
+                event_type=EventType.TYPING_BURST,
+                app_name="Editor",
+                window_title="notes",
+                payload={"burst_text": f"ghp_{self.BURST_SECRET}"},
+            )
+        )
+        bus.close()
+        db.close()
+        return db_path
+
+    def test_burst_text_is_scanned(self, purge, tmp_path, capsys):
+        db_path = self._db_with_burst(tmp_path)
+        purge.main(["--db", str(db_path)])
+        out = capsys.readouterr().out
+        assert "GH_TOKEN" in out, "burst_text was not scanned"
+        assert self.BURST_SECRET not in out
+
+    def test_burst_text_is_purged(self, purge, tmp_path):
+        db_path = self._db_with_burst(tmp_path)
+        purge.main(["--db", str(db_path), "--apply"])
+        conn = sqlite3.connect(str(db_path))
+        try:
+            payloads = " ".join(r[0] for r in conn.execute("SELECT payload FROM events"))
+        finally:
+            conn.close()
+        assert self.BURST_SECRET not in payloads
+
+    def test_scan_keys_track_the_spine_schema(self, purge):
+        from contextpulse_core.spine.events import _TEXT_PAYLOAD_KEYS
+
+        # If a text key is added to the event schema it must not silently
+        # escape the purge scan.
+        assert tuple(purge._PAYLOAD_TEXT_KEYS) == tuple(_TEXT_PAYLOAD_KEYS)
+
+
 class TestWindowTitleScope:
     """Titles are reported always, rewritten only on request.
 
