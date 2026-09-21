@@ -7,8 +7,6 @@ event queues to back up and create runaway loops.
 
 import inspect
 
-import pytest
-
 
 class TestNoSleepInCallbacks:
     """Source inspection tests: callbacks must never block."""

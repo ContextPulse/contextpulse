@@ -398,10 +398,10 @@ class TestBoundedGrab:
         cap._dxcam_timeout_counts = {}
 
     def test_fast_grab_returns_frame_and_resets_counter(self):
-        import numpy as np
         from unittest.mock import MagicMock
 
         import contextpulse_sight.capture as cap
+        import numpy as np
 
         cap._dxcam_timeout_counts[0] = 2  # pretend 2 prior timeouts
         fake_frame = np.zeros((10, 10, 3), dtype=np.uint8)
