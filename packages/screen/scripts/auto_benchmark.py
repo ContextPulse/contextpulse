@@ -159,13 +159,12 @@ def main():
     for label, action_type, target, wait in SCENARIOS:
         print(f"  [{time.strftime('%H:%M:%S')}] Testing: {label}...", end=" ", flush=True)
 
-        proc = None
         try:
             if action_type == "url":
-                proc = open_url(target)
+                open_url(target)
                 time.sleep(wait)
             elif action_type == "shell":
-                proc = open_app(target)
+                open_app(target)
                 time.sleep(wait)
             else:
                 time.sleep(0.5)
