@@ -87,13 +87,16 @@ ENV_READ_ALLOWLIST: dict[str, set[str]] = {
         "CONTEXTPULSE_LOG_REPEAT_THRESHOLD",
         "CONTEXTPULSE_LOG_REPEAT_EVERY",
     },
-    # Both read before config.json is loaded: apply_caps() runs ahead of the
-    # numeric imports, and the Whisper budget is its deliberately separate
-    # sibling (the hot-path cap must not inherit a stale CPU_THREADS value).
-    # Neither has a Settings control; they are operator overrides, not tunables.
+    # All three read before config.json is loaded: apply_caps() runs ahead of
+    # the numeric imports, and the Whisper and OCR budgets are its deliberately
+    # separate siblings (neither hot path may inherit a stale CPU_THREADS
+    # value). None has a Settings control; they are operator overrides, not
+    # tunables. OCR_THREADS bounds the one pool the four env vars cannot reach
+    # -- onnxruntime's CPU wheel is not an OpenMP build.
     "packages/core/src/contextpulse_core/_thread_caps.py": {
         "CONTEXTPULSE_CPU_THREADS",
         "CONTEXTPULSE_WHISPER_THREADS",
+        "CONTEXTPULSE_OCR_THREADS",
     },
     "packages/core/src/contextpulse_core/probe.py": {
         "CONTEXTPULSE_ACTIVITY_DB",

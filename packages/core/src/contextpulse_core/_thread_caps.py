@@ -63,6 +63,39 @@ _ENV_VARS: tuple[str, ...] = (
     "NUMEXPR_NUM_THREADS",    # NumExpr (pandas eval)
 )
 
+# onnxruntime is the one pool NONE of the four vars above can reach, and this
+# module's docstring has read as though they bounded the daemon since 2026-04-29.
+# The CPU wheel has not been an OpenMP build since ORT 1.10 (1.20.1 is installed),
+# so OMP_NUM_THREADS is inert against it. RapidOCR constructs a bare
+# SessionOptions() and never sets intra_op_num_threads, leaving ORT's default of
+# 0 = "one thread per physical core" -- 16 here, across three sessions.
+#
+# Measured 2026-09-22, same machine as the Whisper numbers above (AMD Ryzen AI
+# MAX+ 395, 16 physical / 32 logical). A 75.0s clip transcribed by Whisper
+# small/int8 at cpu_threads=6, with a real 3840x2160 frame OCR'd back-to-back on
+# another thread of the same process -- the daemon's actual shape. Median of 3:
+#
+#   ocr intra_op   daemon threads   dictation alone   with OCR   penalty   OCR burst
+#   0 (all cores)             93            5.03s        9.06s   +80.1%       3.34s
+#   4                         57            5.04s        6.15s   +21.8%       4.74s
+#   2                         51            5.02s        5.77s   +14.9%       6.37s
+#
+# 4 is the choice, and 2 is deliberately NOT taken despite winning on latency.
+# Auto-capture runs every 5s (config auto_interval), and OCR at cap 2 costs
+# 6.37s per 4K frame -- slower than the interval, so sustained screen activity
+# would back up the 10-slot OCRWorker queue and start DROPPING frames. That
+# would lose screen-text coverage, which is a change to what Sight captures and
+# therefore David's call, not mine. At 4 the burst stays under the interval.
+#
+# OCR output was byte-identical at every setting (203 lines, 6472 chars), as was
+# the transcript (297 chars). This buys latency with threads and changes nothing
+# about what is captured or extracted.
+#
+# Overridable via CONTEXTPULSE_OCR_THREADS. A separate knob from get_cap() for
+# the same reason get_whisper_cap() is: CONTEXTPULSE_CPU_THREADS has a history of
+# lingering as a stale persistent Windows user variable.
+_DEFAULT_OCR_CAP = 4
+
 
 def get_cap() -> int:
     """Return the configured per-pool thread cap.
@@ -102,6 +135,32 @@ def get_whisper_cap() -> int:
         return max(1, int(raw))
     except ValueError:
         return _DEFAULT_WHISPER_CAP
+
+
+def get_ocr_cap() -> int:
+    """Return the intra-op thread budget for the OCR ONNX sessions.
+
+    Read by :func:`contextpulse_sight.classifier._get_ocr` and passed to
+    every ``onnxruntime.SessionOptions`` RapidOCR builds. See the comment on
+    :data:`_DEFAULT_OCR_CAP` for the measurement this number comes from and
+    for why 2 was rejected.
+
+    Deliberately a SEPARATE knob from :func:`get_cap`, and it does not read
+    ``CONTEXTPULSE_CPU_THREADS`` -- that var has a history of lingering as a
+    stale persistent Windows user variable, and onnxruntime is precisely the
+    pool that never honoured it in the first place.
+
+    Overridable via ``CONTEXTPULSE_OCR_THREADS``. Floors at 1: ORT reads 0 as
+    "use every core", which is the default this exists to replace, so a 0 here
+    would silently restore the defect.
+    """
+    raw = os.environ.get("CONTEXTPULSE_OCR_THREADS")
+    if raw is None:
+        return _DEFAULT_OCR_CAP
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return _DEFAULT_OCR_CAP
 
 
 def apply_caps(
