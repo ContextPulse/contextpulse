@@ -25,6 +25,16 @@ from typing import Any
 import pytest
 from contextpulse_core._thread_caps import get_ocr_cap
 
+# macOS takes the VisionOCR branch in _get_ocr() and never builds an ONNX
+# session, so these assertions are meaningless there. Declared in the file
+# rather than by leaving macOS off the CI matrix: the matrix currently runs
+# tests/ on ubuntu and windows only, and a file that has a platform
+# requirement should say so itself instead of depending on a workflow line
+# nobody will remember when macOS is added.
+pytestmark = pytest.mark.skipif(
+    sys.platform == "darwin", reason="macOS uses VisionOCR, not rapidocr/onnxruntime"
+)
+
 rapidocr_utils = pytest.importorskip(
     "rapidocr_onnxruntime.utils",
     reason="rapidocr_onnxruntime is the non-macOS OCR backend",
