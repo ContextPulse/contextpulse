@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- The daemon no longer grows by one full-screen staging texture (33 MB at
+  3840x2160) every couple of seconds while the screen is locked. dxcam's
+  display-recovery loop released those textures without flushing the D3D11
+  context, so none was destroyed; the daemon reached 17 GB and 28 GB on
+  overnight runs. ContextPulse now flushes the context after each recovery
+  release.
 
 ## [0.1.1] - 2026-09-19
 

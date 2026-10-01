@@ -199,6 +199,70 @@ def _warn_dxcam_fallback(exc: Exception) -> None:
         )
 
 
+# --- Flush after every recovery release ------------------------------------
+#
+# Incidents 2026-09-26 (17.2 GB) and 2026-09-30 (27.9 GB working set): while
+# the desktop is denied to Desktop Duplication (lock screen, HRESULT
+# 0x80070005), dxcam 0.3.0's recovery loop retries forever. Each attempt
+# releases and rebuilds a full-resolution staging texture and then fails to
+# create the duplicator. D3D11 destroys a released resource only when the
+# device context is flushed, and that loop submits no GPU work, so every
+# released texture stays allocated: 33.2 MB per attempt at 3840x2160, an
+# attempt every ~2 s. Measured: +1,995 MB over 60 attempts without a flush,
+# one texture's worth with it. Reproduced live 2026-10-01 (592 MB -> 4.69 GB
+# private in about two minutes after the display turned off and locked).
+#
+# dxcam has no public hook for this, so the guard wraps two private
+# attributes. If a future dxcam renames them, the guard logs a WARNING and the
+# camera is still used; tests/test_dxcam_recovery_flush.py fails on the change.
+_RECOVERY_FLUSH_MARK = "_contextpulse_flush_after_release"
+
+
+def _install_recovery_flush(camera: object) -> bool:
+    """Make dxcam's recovery release flush the immediate context afterwards.
+
+    Returns True when the guard is in place (newly or already), False when the
+    camera lacks the expected internals. Never raises: a camera without the
+    guard still captures, it only keeps the leak.
+    """
+    recovery = getattr(camera, "_display_recovery", None)
+    device = getattr(camera, "_device", None)
+    release = getattr(recovery, "_release_resources", None)
+    context = getattr(device, "im_context", None)
+    if release is None or context is None or not hasattr(context, "Flush"):
+        logger.warning(
+            "dxcam recovery-leak guard NOT installed: camera %s lacks "
+            "_display_recovery._release_resources or _device.im_context.Flush "
+            "(dxcam internals changed?) -- a long display loss can grow memory "
+            "by one staging texture per recovery attempt",
+            type(camera).__name__,
+        )
+        return False
+    if getattr(release, _RECOVERY_FLUSH_MARK, False):
+        return True
+
+    try:
+        from comtypes import COMError as _com_error  # dxcam depends on comtypes
+    except ImportError:  # only reachable with a non-dxcam camera object (tests, other OSes)
+        _com_error = OSError
+
+    def _release_then_flush() -> None:
+        release()
+        try:
+            context.Flush()
+        except (OSError, _com_error) as exc:
+            logger.warning(
+                "dxcam recovery: Flush after release failed (%s); released "
+                "textures may stay allocated until the next flush",
+                exc,
+            )
+
+    setattr(_release_then_flush, _RECOVERY_FLUSH_MARK, True)
+    recovery._release_resources = _release_then_flush
+    logger.info("dxcam recovery-leak guard installed (flush after each recovery release)")
+    return True
+
+
 def _get_dxcam_camera(output_idx: int = 0) -> object | None:
     """Get or create a DXcam camera for the given monitor output index.
 
@@ -210,7 +274,15 @@ def _get_dxcam_camera(output_idx: int = 0) -> object | None:
     if output_idx not in _dxcam_cameras:
         import dxcam
         try:
-            _dxcam_cameras[output_idx] = dxcam.create(output_idx=output_idx, output_color="BGR")
+            camera = dxcam.create(output_idx=output_idx, output_color="BGR")
+            try:
+                _install_recovery_flush(camera)
+            except Exception:  # noqa: BLE001 -- the guard must never cost us the camera
+                logger.warning(
+                    "dxcam recovery-leak guard raised while installing; camera kept without it",
+                    exc_info=True,
+                )
+            _dxcam_cameras[output_idx] = camera
         except Exception as exc:
             logger.info(
                 "DXcam output_idx=%d unavailable (%s) — caching None, mss will handle",
