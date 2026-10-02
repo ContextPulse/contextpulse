@@ -72,6 +72,11 @@ _dxcam_retry_at: dict[int, float] = {}  # output_idx -> time.monotonic() of next
 _DXCAM_GRAB_TIMEOUT_SEC = 5.0
 _DXCAM_MAX_CONSECUTIVE_TIMEOUTS = 3
 _dxcam_timeout_counts: dict[int, int] = {}
+# Grab threads abandoned since the last successful grab, per monitor.
+_dxcam_grab_workers: dict[int, list[threading.Thread]] = {}
+# Evicted cameras, with the grab threads still blocked inside them. Restored
+# by _get_dxcam_camera once every one of those threads has returned.
+_dxcam_parked: dict[int, tuple[object, list[threading.Thread]]] = {}
 
 
 def _dxcam_grab_bounded(camera: object, output_idx: int) -> np.ndarray | None:
@@ -109,6 +114,7 @@ def _dxcam_grab_bounded(camera: object, output_idx: int) -> np.ndarray | None:
     if worker.is_alive():
         count = _dxcam_timeout_counts.get(output_idx, 0) + 1
         _dxcam_timeout_counts[output_idx] = count
+        _dxcam_grab_workers.setdefault(output_idx, []).append(worker)
         logger.warning(
             "DXcam grab() exceeded %.1fs timeout for monitor %d (consecutive "
             "timeout %d/%d) -- output may be detached (lock/sleep/reconfig); "
@@ -118,13 +124,16 @@ def _dxcam_grab_bounded(camera: object, output_idx: int) -> np.ndarray | None:
         if count >= _DXCAM_MAX_CONSECUTIVE_TIMEOUTS:
             logger.warning(
                 "DXcam monitor %d exceeded %d consecutive grab timeouts -- "
-                "evicting camera, future captures use mss until process restart",
+                "parking camera, captures use mss until its blocked grabs return",
                 output_idx, _DXCAM_MAX_CONSECUTIVE_TIMEOUTS,
             )
-            _dxcam_cameras[output_idx] = None
+            _dxcam_cameras.pop(output_idx, None)
+            _dxcam_parked[output_idx] = (camera, _dxcam_grab_workers.pop(output_idx, []))
+            _dxcam_retry_at[output_idx] = time.monotonic() + _DXCAM_RETRY_S
         return None
 
     _dxcam_timeout_counts[output_idx] = 0
+    _dxcam_grab_workers.pop(output_idx, None)
     if "exc" in box:
         raise box["exc"]  # type: ignore[misc]
     return box.get("frame")  # type: ignore[return-value]
@@ -317,6 +326,22 @@ def _get_dxcam_camera(output_idx: int = 0) -> object | None:
     now = time.monotonic()
     if now < _dxcam_retry_at.get(output_idx, now):
         return None
+
+    if output_idx in _dxcam_parked:
+        camera, workers = _dxcam_parked[output_idx]
+        if any(w.is_alive() for w in workers):
+            _dxcam_retry_at[output_idx] = now + _DXCAM_RETRY_S
+            return None
+        del _dxcam_parked[output_idx]
+        _dxcam_retry_at.pop(output_idx, None)
+        if not getattr(camera, "is_released", False):
+            # Recreating would not help: dxcam's registry returns this same
+            # instance while it is alive and unreleased.
+            _dxcam_timeout_counts[output_idx] = 0
+            _dxcam_cameras[output_idx] = camera
+            logger.info("DXcam monitor %d: blocked grabs returned, camera restored", output_idx)
+            return camera
+        logger.info("DXcam monitor %d: parked camera was released, recreating", output_idx)
 
     import dxcam
     try:

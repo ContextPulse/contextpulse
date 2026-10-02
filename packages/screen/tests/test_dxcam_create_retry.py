@@ -75,6 +75,7 @@ class _Clock:
 def state(monkeypatch):
     monkeypatch.setattr(cap, "_dxcam_cameras", {})
     monkeypatch.setattr(cap, "_dxcam_retry_at", {})
+    monkeypatch.setattr(cap, "_dxcam_parked", {})
     monkeypatch.setattr(cap, "_install_recovery_flush", lambda camera: True)
     clock = _Clock()
     monkeypatch.setattr(cap.time, "monotonic", clock)
@@ -150,6 +151,7 @@ def test_real_failed_creates_do_not_grow_private_memory(monkeypatch):
 
     monkeypatch.setattr(cap, "_dxcam_cameras", {})
     monkeypatch.setattr(cap, "_dxcam_retry_at", {})
+    monkeypatch.setattr(cap, "_dxcam_parked", {})
     monkeypatch.setattr(cap, "_DXCAM_RETRY_S", 0.0)
     monkeypatch.setattr(DXCamera, "_create_duplicator", denied)
 
