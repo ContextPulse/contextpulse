@@ -10,6 +10,7 @@ DXcam is unavailable (Linux, macOS, RDP, import failure).
 import logging
 import sys
 import threading
+import time
 from io import BytesIO
 from pathlib import Path
 
@@ -39,6 +40,13 @@ def _max_size() -> tuple[int, int]:
 
 _backend: str | None = None  # "dxcam" or "mss", set on first use
 _dxcam_cameras: dict[int, object | None] = {}  # output_idx -> camera (None = unavailable)
+
+# A create that fails for any reason other than a missing output (IndexError)
+# is retried after this many seconds instead of being cached as None forever.
+# The common case is the lock screen (E_ACCESSDENIED): a daemon started while
+# locked used to capture with mss for its whole life (2026-10-01: ~23 hours).
+_DXCAM_RETRY_S = 120.0
+_dxcam_retry_at: dict[int, float] = {}  # output_idx -> time.monotonic() of next attempt
 
 # --- Bounded camera.grab() -------------------------------------------------
 #
@@ -263,33 +271,89 @@ def _install_recovery_flush(camera: object) -> bool:
     return True
 
 
+def _flush_after_failed_create(dxcam_module: object, device_idx: int = 0) -> bool:
+    """Flush the device a failed dxcam.create() used, so its texture is freed.
+
+    DXCamera builds a full-resolution staging texture before it creates the
+    duplicator, and releases it when the duplicator fails. D3D11 destroys a
+    released resource only when the context is flushed, so without this every
+    retried create would keep one texture (~33 MB at 4K). Returns False when
+    the flush cannot be reached; the caller must then stop retrying.
+    """
+    factory = vars(dxcam_module).get("__factory")
+    try:
+        context = factory.devices[device_idx].im_context
+        flush = context.Flush
+    except (AttributeError, IndexError, TypeError):
+        logger.warning(
+            "dxcam internals changed: cannot flush after a failed create -- not "
+            "retrying, a retry would keep one staging texture per attempt"
+        )
+        return False
+
+    try:
+        from comtypes import COMError as _com_error  # dxcam depends on comtypes
+    except ImportError:  # only reachable with a non-dxcam module (tests, other OSes)
+        _com_error = OSError
+    try:
+        flush()
+    except (OSError, _com_error) as exc:
+        logger.warning("dxcam: Flush after a failed create failed (%s) -- not retrying", exc)
+        return False
+    return True
+
+
 def _get_dxcam_camera(output_idx: int = 0) -> object | None:
     """Get or create a DXcam camera for the given monitor output index.
 
-    Returns None when dxcam cannot create a camera for this output (e.g.,
-    output_idx beyond the adapter's output list raises IndexError). The
-    None is cached so subsequent captures skip dxcam straight to mss
-    without spamming warnings.
+    Returns None when dxcam cannot create a camera for this output, and mss
+    handles the capture. An output beyond the adapter's list (IndexError) is
+    cached as None for good. Any other failure, typically the lock screen's
+    E_ACCESSDENIED, is retried every _DXCAM_RETRY_S seconds, flushing the
+    device after each failure so a retry cannot leak a staging texture.
     """
-    if output_idx not in _dxcam_cameras:
-        import dxcam
-        try:
-            camera = dxcam.create(output_idx=output_idx, output_color="BGR")
-            try:
-                _install_recovery_flush(camera)
-            except Exception:  # noqa: BLE001 -- the guard must never cost us the camera
-                logger.warning(
-                    "dxcam recovery-leak guard raised while installing; camera kept without it",
-                    exc_info=True,
-                )
-            _dxcam_cameras[output_idx] = camera
-        except Exception as exc:
+    if output_idx in _dxcam_cameras:
+        return _dxcam_cameras[output_idx]
+    now = time.monotonic()
+    if now < _dxcam_retry_at.get(output_idx, now):
+        return None
+
+    import dxcam
+    try:
+        camera = dxcam.create(output_idx=output_idx, output_color="BGR")
+    except IndexError as exc:
+        logger.info(
+            "DXcam output_idx=%d unavailable (%s) — caching None, mss will handle",
+            output_idx, exc,
+        )
+        _dxcam_cameras[output_idx] = None
+        return None
+    except Exception as exc:  # noqa: BLE001 -- dxcam raises COMError, RuntimeError, OSError
+        if not _flush_after_failed_create(dxcam):
             logger.info(
                 "DXcam output_idx=%d unavailable (%s) — caching None, mss will handle",
                 output_idx, exc,
             )
             _dxcam_cameras[output_idx] = None
-    return _dxcam_cameras[output_idx]
+            return None
+        log = logger.debug if output_idx in _dxcam_retry_at else logger.info
+        log(
+            "DXcam output_idx=%d unavailable (%s) — mss until retry in %.0f s",
+            output_idx, exc, _DXCAM_RETRY_S,
+        )
+        _dxcam_retry_at[output_idx] = now + _DXCAM_RETRY_S
+        return None
+
+    _dxcam_retry_at.pop(output_idx, None)
+    try:
+        _install_recovery_flush(camera)
+    except Exception:  # noqa: BLE001 -- the guard must never cost us the camera
+        logger.warning(
+            "dxcam recovery-leak guard raised while installing; camera kept without it",
+            exc_info=True,
+        )
+    _dxcam_cameras[output_idx] = camera
+    return camera
 
 
 def _dxcam_to_pil(frame: np.ndarray) -> Image.Image:
