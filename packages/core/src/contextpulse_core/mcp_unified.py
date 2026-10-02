@@ -52,6 +52,20 @@ logger = logging.getLogger("contextpulse.mcp.unified")
 
 MCP_PORT = 8420
 
+# Sent in the InitializeResult. Claude Code puts server instructions in every
+# session's system prompt but loads the tools themselves deferred (names only),
+# so this is the only text a session sees before it decides to use a tool.
+# Names only tools that both recall backends (probe and knowledge) register.
+SERVER_INSTRUCTIONS = (
+    "ContextPulse records this computer's screen, voice and input, and distils "
+    "them into facts. Before asking the user about, or searching files for, a "
+    "person, trip, project, purchase or past decision they name, call "
+    "facts_about with that name: it returns what was decided and why. For "
+    "'what was I doing around <time>', call context_at. For what is on screen "
+    "now, call get_screen_text or get_screenshot. If these tools are deferred, "
+    "load them first with ToolSearch (search for facts_about or context_at)."
+)
+
 
 # ── Import and register tools from each package ─────────────────────
 
@@ -204,6 +218,18 @@ def build_http_app(fastmcp_app: FastMCP, no_auth: bool = False, token_file: Path
     return mcp_auth.BearerAuthASGI(app, token, token_file=token_file)
 
 
+def build_app(host: str, port: int) -> FastMCP:
+    """The unified FastMCP app, before any tools are registered on it."""
+    return FastMCP(
+        "ContextPulse",
+        instructions=SERVER_INSTRUCTIONS,
+        host=host,
+        port=port,
+        stateless_http=True,  # No per-session state needed — all state is in SQLite
+        transport_security=build_transport_security(port),
+    )
+
+
 def main():
     global mcp_app
 
@@ -241,13 +267,7 @@ def main():
     signal.signal(signal.SIGINT, _shutdown)
 
     # Create the FastMCP app with the configured host/port
-    mcp_app = FastMCP(
-        "ContextPulse",
-        host=args.host,
-        port=args.port,
-        stateless_http=True,  # No per-session state needed — all state is in SQLite
-        transport_security=build_transport_security(args.port),
-    )
+    mcp_app = build_app(args.host, args.port)
 
     _register_all()
 
