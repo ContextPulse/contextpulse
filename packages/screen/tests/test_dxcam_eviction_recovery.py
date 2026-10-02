@@ -127,6 +127,68 @@ def test_successful_grab_clears_the_tracked_workers(state):
         def grab(self):
             return "frame"
 
-    cap._dxcam_grab_workers[0] = ["stale"]
+    finished = threading.Thread(target=lambda: None)
+    finished.start()
+    finished.join()
+    cap._dxcam_grab_workers[0] = [finished]
     assert cap._dxcam_grab_bounded(_Fast(), 0) == "frame"
     assert cap._dxcam_grab_workers.get(0, []) == []
+
+
+def test_three_consecutive_grab_errors_also_park_the_camera(state):
+    """A restored camera whose recovery left it broken raises on every grab
+    instead of timing out. Errors must count toward parking, or it would stay
+    in use, warning and falling back to mss on every capture, for good."""
+
+    class _Broken:
+        is_released = False
+
+        def grab(self):
+            raise AttributeError("'NoneType' object has no attribute 'AcquireNextFrame'")
+
+    camera = _Broken()
+    cap._dxcam_cameras[0] = camera
+    for _ in range(cap._DXCAM_MAX_CONSECUTIVE_TIMEOUTS):
+        with pytest.raises(AttributeError):
+            cap._dxcam_grab_bounded(camera, 0)
+    assert cap._dxcam_cameras.get(0) is None
+    assert cap._dxcam_parked[0][0] is camera
+
+
+def test_parking_resets_the_failure_count(state):
+    camera = _BlockingCamera()
+    _evict(camera)
+    assert cap._dxcam_timeout_counts.get(0, 0) == 0
+    camera.unblock.set()
+
+
+def test_a_good_grab_keeps_still_blocked_threads_tracked(state):
+    """Threads stuck before a good grab must still block a later restore."""
+    clock, creates = state
+    stuck = threading.Event()
+
+    class _Flaky:
+        is_released = False
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def grab(self):
+            self.calls += 1
+            if self.calls == 3:
+                return "frame"
+            stuck.wait()
+            return None
+
+    camera = _Flaky()
+    cap._dxcam_cameras[0] = camera
+    assert cap._dxcam_grab_bounded(camera, 0) is None  # thread 1 stuck
+    assert cap._dxcam_grab_bounded(camera, 0) is None  # thread 2 stuck
+    assert cap._dxcam_grab_bounded(camera, 0) == "frame"
+    assert len(cap._dxcam_grab_workers.get(0, [])) == 2
+    for _ in range(cap._DXCAM_MAX_CONSECUTIVE_TIMEOUTS):
+        cap._dxcam_grab_bounded(camera, 0)
+    assert len(cap._dxcam_parked[0][1]) == 2 + cap._DXCAM_MAX_CONSECUTIVE_TIMEOUTS
+    clock.now += cap._DXCAM_RETRY_S + 1
+    assert cap._get_dxcam_camera(0) is None, "restored while earlier grabs were still blocked"
+    stuck.set()

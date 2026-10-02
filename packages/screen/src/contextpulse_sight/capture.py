@@ -79,6 +79,34 @@ _dxcam_grab_workers: dict[int, list[threading.Thread]] = {}
 _dxcam_parked: dict[int, tuple[object, list[threading.Thread]]] = {}
 
 
+def _keep_blocked_workers(output_idx: int) -> list[threading.Thread]:
+    """Forget abandoned grab threads that have returned; keep the blocked ones."""
+    alive = [w for w in _dxcam_grab_workers.get(output_idx, []) if w.is_alive()]
+    if alive:
+        _dxcam_grab_workers[output_idx] = alive
+    else:
+        _dxcam_grab_workers.pop(output_idx, None)
+    return alive
+
+
+def _note_failed_grab(camera: object, output_idx: int) -> None:
+    """Count a timed-out or raising grab; park the camera at the threshold."""
+    count = _dxcam_timeout_counts.get(output_idx, 0) + 1
+    _dxcam_timeout_counts[output_idx] = count
+    if count < _DXCAM_MAX_CONSECUTIVE_TIMEOUTS:
+        return
+    logger.warning(
+        "DXcam monitor %d: %d consecutive failed grabs -- parking camera, "
+        "captures use mss until its blocked grabs return",
+        output_idx, count,
+    )
+    _dxcam_timeout_counts[output_idx] = 0
+    _dxcam_cameras.pop(output_idx, None)
+    _dxcam_parked[output_idx] = (camera, _keep_blocked_workers(output_idx))
+    _dxcam_grab_workers.pop(output_idx, None)
+    _dxcam_retry_at[output_idx] = time.monotonic() + _DXCAM_RETRY_S
+
+
 def _dxcam_grab_bounded(camera: object, output_idx: int) -> np.ndarray | None:
     """Call ``camera.grab()`` with a hard wall-clock timeout.
 
@@ -87,11 +115,11 @@ def _dxcam_grab_bounded(camera: object, output_idx: int) -> np.ndarray | None:
     genuine exception raised inside grab() re-raises on the calling thread
     unchanged, so existing exception handling at call sites is untouched.
 
-    After ``_DXCAM_MAX_CONSECUTIVE_TIMEOUTS`` consecutive timeouts for a
-    given monitor, the cached camera is evicted (mirrors the existing
-    None-caching pattern for ``dxcam.create()`` failures) so future
-    captures skip DXcam entirely for that monitor instead of repeatedly
-    spawning a thread behind an already-stuck grab().
+    After ``_DXCAM_MAX_CONSECUTIVE_TIMEOUTS`` consecutive failed grabs
+    (timeouts or exceptions) for a given monitor, the camera is parked with
+    the grab threads still blocked inside it, so future captures use mss
+    instead of spawning a thread behind an already-stuck grab().
+    ``_get_dxcam_camera`` restores it once those threads have returned.
 
     Note: the daemon thread blocked inside the real ``camera.grab()`` is
     abandoned, not killed -- Python cannot forcibly terminate a thread. This
@@ -112,30 +140,20 @@ def _dxcam_grab_bounded(camera: object, output_idx: int) -> np.ndarray | None:
     worker.join(timeout=_DXCAM_GRAB_TIMEOUT_SEC)
 
     if worker.is_alive():
-        count = _dxcam_timeout_counts.get(output_idx, 0) + 1
-        _dxcam_timeout_counts[output_idx] = count
         _dxcam_grab_workers.setdefault(output_idx, []).append(worker)
         logger.warning(
-            "DXcam grab() exceeded %.1fs timeout for monitor %d (consecutive "
-            "timeout %d/%d) -- output may be detached (lock/sleep/reconfig); "
-            "falling back to mss",
-            _DXCAM_GRAB_TIMEOUT_SEC, output_idx, count, _DXCAM_MAX_CONSECUTIVE_TIMEOUTS,
+            "DXcam grab() exceeded %.1fs timeout for monitor %d -- output may be "
+            "detached (lock/sleep/reconfig); falling back to mss",
+            _DXCAM_GRAB_TIMEOUT_SEC, output_idx,
         )
-        if count >= _DXCAM_MAX_CONSECUTIVE_TIMEOUTS:
-            logger.warning(
-                "DXcam monitor %d exceeded %d consecutive grab timeouts -- "
-                "parking camera, captures use mss until its blocked grabs return",
-                output_idx, _DXCAM_MAX_CONSECUTIVE_TIMEOUTS,
-            )
-            _dxcam_cameras.pop(output_idx, None)
-            _dxcam_parked[output_idx] = (camera, _dxcam_grab_workers.pop(output_idx, []))
-            _dxcam_retry_at[output_idx] = time.monotonic() + _DXCAM_RETRY_S
+        _note_failed_grab(camera, output_idx)
         return None
 
-    _dxcam_timeout_counts[output_idx] = 0
-    _dxcam_grab_workers.pop(output_idx, None)
     if "exc" in box:
+        _note_failed_grab(camera, output_idx)
         raise box["exc"]  # type: ignore[misc]
+    _dxcam_timeout_counts[output_idx] = 0
+    _keep_blocked_workers(output_idx)
     return box.get("frame")  # type: ignore[return-value]
 
 
