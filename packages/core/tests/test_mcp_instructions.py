@@ -39,6 +39,25 @@ def test_instructions_say_how_to_load_deferred_tools():
     assert "ToolSearch" in _sent_instructions()
 
 
+def test_instructions_put_recall_before_journal_and_memory_search():
+    # Measured 2026-10-03: in the 24 h after the first instructions shipped, three
+    # interactive sessions received them and none called facts_about. When David
+    # wrote "you were doing this for me like a week ago", the session went straight
+    # to query-journal.py, the estate's documented recall route. The instruction
+    # has to name that competing route and say which comes first.
+    sent = _sent_instructions().lower()
+    assert "journal" in sent
+    assert sent.index("facts_about") < sent.index("journal")
+
+
+@pytest.mark.parametrize("cue", ["we discussed", "last week", "why did you forget"])
+def test_instructions_cover_references_to_earlier_events(cue):
+    # The missed questions referred to an earlier event, not a name:
+    # "we already discussed the clear renewal...why did you forget",
+    # "you were doing this for me like a week ago". Name-only wording missed them.
+    assert cue in _sent_instructions().lower()
+
+
 def test_instructions_stay_short():
     # Paid on every session's system prompt; keep it to a short paragraph.
     assert len(_sent_instructions()) <= 900

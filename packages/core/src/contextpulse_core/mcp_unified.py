@@ -60,10 +60,14 @@ SERVER_INSTRUCTIONS = (
     "ContextPulse records this computer's screen, voice and input, and distils "
     "them into facts. Before asking the user about, or searching files for, a "
     "person, trip, project, purchase or past decision they name, call "
-    "facts_about with that name: it returns what was decided and why. For "
-    "'what was I doing around <time>', call context_at. For what is on screen "
-    "now, call get_screen_text or get_screenshot. If these tools are deferred, "
-    "load them first with ToolSearch (search for facts_about or context_at)."
+    "facts_about with that name: it returns what was decided and why. Do the "
+    "same when the user refers to something that happened earlier ('we "
+    "discussed', 'last week', 'you did this before', 'why did you forget'): "
+    "call facts_about on the subject first, then search the journal or memory "
+    "files. For 'what was I doing around <time>', call context_at. For what is "
+    "on screen now, call get_screen_text or get_screenshot. If these tools are "
+    "deferred, load them first with ToolSearch (search for facts_about or "
+    "context_at)."
 )
 
 
