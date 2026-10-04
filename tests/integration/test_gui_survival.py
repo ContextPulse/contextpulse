@@ -47,11 +47,10 @@ class TestSettingsDialogSafety:
         is still alive. Creating a second tk.Tk() crashes the process.
         Comments mentioning winfo_exists are fine — the code must not call it.
         """
+        import ast
         import inspect
 
         from contextpulse_core import gui_theme
-
-        import ast
         source = inspect.getsource(gui_theme._get_root)
         # Parse AST to check for actual winfo_exists calls in code,
         # ignoring comments and docstrings

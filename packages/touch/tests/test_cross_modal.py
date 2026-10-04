@@ -411,7 +411,7 @@ class TestFullCorrectionLoop:
         # "cube control" -> "kubectl" is already in user vocabulary
         bridge = VocabularyBridge(learned_file=learned_file)
         # Try to add a correction that matches existing user vocab key
-        result = bridge.add_correction("cube control", "kubectl")
+        bridge.add_correction("cube control", "kubectl")
         # User vocab file has "cube control" so bridge should check against it
         # Actually bridge checks learned_file's parent/vocabulary.json
         # Since our vocab file has it, this should be rejected

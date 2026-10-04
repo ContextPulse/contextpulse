@@ -102,7 +102,7 @@ class TestOCRLazyInit:
              patch.dict("sys.modules", {"rapidocr_onnxruntime": MagicMock(RapidOCR=mock_rapid)}):
             mock_sys.platform = "win32"
             from contextpulse_sight.classifier import _get_ocr
-            result = _get_ocr()
+            _get_ocr()
             mock_rapid.assert_called_once()
 
     def test_get_ocr_cached(self):

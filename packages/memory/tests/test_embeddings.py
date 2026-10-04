@@ -32,12 +32,16 @@ def _make_mock_session(output_vec: list[float] | None = None):
     session = MagicMock()
 
     # Simulate input / output metadata
-    inp_input_ids = MagicMock(); inp_input_ids.name = "input_ids"
-    inp_attn = MagicMock(); inp_attn.name = "attention_mask"
-    inp_tt = MagicMock(); inp_tt.name = "token_type_ids"
+    inp_input_ids = MagicMock()
+    inp_input_ids.name = "input_ids"
+    inp_attn = MagicMock()
+    inp_attn.name = "attention_mask"
+    inp_tt = MagicMock()
+    inp_tt.name = "token_type_ids"
     session.get_inputs.return_value = [inp_input_ids, inp_attn, inp_tt]
 
-    out_hidden = MagicMock(); out_hidden.name = "last_hidden_state"
+    out_hidden = MagicMock()
+    out_hidden.name = "last_hidden_state"
     session.get_outputs.return_value = [out_hidden]
 
     def _run(output_names, feeds):
