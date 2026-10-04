@@ -11,13 +11,29 @@ emitted no error.
 """
 
 import ctypes
+import os
 import sys
+from collections.abc import Mapping
 
 import pytest
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "win32", reason="Windows-only tests"
 )
+
+
+def _may_touch_shared_clipboard(env: Mapping[str, str]) -> bool:
+    """Whether a test may write to the REAL system clipboard.
+
+    The roundtrip test below is the only end-to-end proof that a clipboard
+    pointer deref succeeds, so it must keep running on the Windows CI runner
+    (GitHub sets CI=true) -- nothing else is using that clipboard. On a dev box
+    it is a different test: the live ContextPulse daemon polls the clipboard,
+    so OpenClipboard contends and the test flakes, and the daemon's monitor
+    records the sentinel into the user's own clipboard history. There it runs
+    only on the same explicit opt-in the live-desktop acceptance harness uses.
+    """
+    return env.get("CI") == "true" or env.get("CONTEXTPULSE_ACCEPTANCE") == "1"
 
 
 @pytest.fixture
@@ -92,6 +108,11 @@ class TestClipboard:
         text = provider.get_clipboard_text()
         assert text is None or isinstance(text, str)
 
+    @pytest.mark.skipif(
+        not _may_touch_shared_clipboard(os.environ),
+        reason="writes the real system clipboard, which a live ContextPulse "
+        "daemon is polling; runs on CI, or opt in with CONTEXTPULSE_ACCEPTANCE=1",
+    )
     def test_clipboard_read_roundtrip(self, provider):
         """Write a known value, read it back, then restore the prior text.
 
@@ -152,3 +173,21 @@ def _set_clipboard_text(text: str) -> None:
         u32.SetClipboardData(13, handle)  # ownership transfers to the clipboard
     finally:
         u32.CloseClipboard()
+
+
+class TestSharedClipboardGate:
+    """The gate decides whether the roundtrip test may touch the real clipboard."""
+
+    @pytest.mark.parametrize(
+        ("env", "expected"),
+        [
+            ({"CI": "true"}, True),  # GitHub Actions runner
+            ({"CONTEXTPULSE_ACCEPTANCE": "1"}, True),  # explicit dev-box opt-in
+            ({}, False),  # dev box, default: the live daemon owns the clipboard
+            ({"CI": ""}, False),
+            ({"CI": "false"}, False),
+            ({"CONTEXTPULSE_ACCEPTANCE": "0"}, False),
+        ],
+    )
+    def test_gate(self, env, expected):
+        assert _may_touch_shared_clipboard(env) is expected
