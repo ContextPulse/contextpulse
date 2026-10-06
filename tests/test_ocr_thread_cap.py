@@ -47,7 +47,17 @@ pytest.importorskip(
 # Spying on a hard-coded path tested one release and crashed on the other.
 from contextpulse_sight.classifier import _vendor_session_module  # noqa: E402
 
-rapidocr_utils = _vendor_session_module()
+try:
+    rapidocr_utils = _vendor_session_module()
+except ImportError:
+    # packages/screen/tests/conftest.py replaces rapidocr_onnxruntime with a
+    # MagicMock in sys.modules, so a bare `pytest` (which collects both trees)
+    # sees a "package" with no submodules. Skip rather than fail collection
+    # for every test in the run; CI and scripts/ci-tests.sh run tests/ alone.
+    pytest.skip(
+        "rapidocr_onnxruntime is stubbed in this session (screen conftest)",
+        allow_module_level=True,
+    )
 
 
 @pytest.fixture
