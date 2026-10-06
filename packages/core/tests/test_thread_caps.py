@@ -161,6 +161,71 @@ class TestGetWhisperCap:
             assert _thread_caps.get_whisper_cap() == 6
 
 
+class TestGetOcrCap:
+    """onnxruntime is the pool none of the four env vars can reach.
+
+    Measured 2026-09-22, same machine as the Whisper numbers above. A 75.0s clip
+    transcribed at cpu_threads=6 while a real 3840x2160 frame was OCR'd
+    back-to-back on another thread of the same process -- the daemon's shape.
+    Median of 3:
+
+        ocr intra_op   daemon threads   alone    with OCR   penalty   OCR burst
+        0 (all cores)             93    5.03s       9.06s   +80.1%      3.34s
+        4                         57    5.04s       6.15s   +21.8%      4.74s
+        2                         51    5.02s       5.77s   +14.9%      6.37s
+
+    4, not 2, despite 2 winning on latency: auto-capture runs every 5s, and OCR
+    at cap 2 costs 6.37s per 4K frame, so sustained activity would back up the
+    10-slot OCRWorker queue and drop frames. Dropping frames loses screen-text
+    coverage, which is a change to what Sight captures -- David's call, not the
+    director's. At 4 the burst stays under the capture interval.
+
+    OCR output was byte-identical at every setting (203 lines, 6472 chars).
+    """
+
+    @pytest.fixture(autouse=True)
+    def clean_ocr_env(self) -> Iterator[None]:
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CONTEXTPULSE_OCR_THREADS", None)
+            yield
+
+    def test_default_is_4(self):
+        assert _thread_caps.get_ocr_cap() == 4
+
+    def test_is_larger_than_the_idle_pool_cap(self):
+        assert _thread_caps.get_ocr_cap() > _thread_caps.get_cap()
+
+    def test_is_below_the_whisper_budget(self):
+        # Whisper is the latency-critical foreground work; OCR is background
+        # capture. If OCR ever outranked Whisper the contention this cap exists
+        # to remove would come back pointing the other way.
+        assert _thread_caps.get_ocr_cap() < _thread_caps.get_whisper_cap()
+
+    def test_override_via_env_var(self):
+        with patch.dict(os.environ, {"CONTEXTPULSE_OCR_THREADS": "8"}):
+            assert _thread_caps.get_ocr_cap() == 8
+
+    def test_invalid_override_falls_back_to_default(self):
+        with patch.dict(os.environ, {"CONTEXTPULSE_OCR_THREADS": "all"}):
+            assert _thread_caps.get_ocr_cap() == 4
+
+    def test_zero_does_not_mean_use_every_core(self):
+        # ORT reads intra_op_num_threads=0 as "one thread per physical core",
+        # which is the default this cap exists to replace. A 0 that passed
+        # through would silently restore the +80% contention penalty.
+        for raw in ("0", "-1"):
+            with patch.dict(os.environ, {"CONTEXTPULSE_OCR_THREADS": raw}):
+                assert _thread_caps.get_ocr_cap() == 1
+
+    def test_does_not_read_the_cpu_threads_var(self):
+        with patch.dict(os.environ, {"CONTEXTPULSE_CPU_THREADS": "16"}):
+            assert _thread_caps.get_ocr_cap() == 4
+
+    def test_does_not_read_the_whisper_var(self):
+        with patch.dict(os.environ, {"CONTEXTPULSE_WHISPER_THREADS": "12"}):
+            assert _thread_caps.get_ocr_cap() == 4
+
+
 class TestWhisperCapDoesNotLeakIntoIdlePools:
     """What could have BROKEN, not just what was added.
 

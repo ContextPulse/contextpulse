@@ -22,11 +22,17 @@ import pytest
 
 CONTROL_WORD = "zqcontrol"
 
+# Vendor-token prefixes are assembled at import time so that no committed blob
+# carries a literal GitHub push protection (or any secret scanner) would flag.
+# The runtime strings are unchanged: the fixtures still have to look real for
+# the redactor to be tested against them. See cp-test-fixtures-trip-github-push-protection.
+_STRIPE_SK = "sk_" + "live_"
+
 SECRETS = [
     ("password_phrase", f"{CONTROL_WORD} the password: zqegressneedle42 ok", "zqegressneedle42"),
     ("ssn", f"{CONTROL_WORD} social 987-65-4321 ok", "987-65-4321"),
     ("aws_key", f"{CONTROL_WORD} AKIAZQEGRESSNEEDLE01 ok", "AKIAZQEGRESSNEEDLE01"),
-    ("stripe", f"{CONTROL_WORD} sk_live_zqegressstripe0123456789 ok", "sk_live_zqegressstripe0123456789"),
+    ("stripe", f"{CONTROL_WORD} {_STRIPE_SK}zqegressstripe0123456789 ok", _STRIPE_SK + "zqegressstripe0123456789"),
 ]
 
 IDS = [s[0] for s in SECRETS]

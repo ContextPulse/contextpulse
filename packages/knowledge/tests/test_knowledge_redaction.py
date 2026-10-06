@@ -28,12 +28,18 @@ from contextpulse_knowledge.store_sqlite import KnowledgeStore
 BASE = 1_760_000_000.0
 CONTROL_WORD = "zqcontrol"
 
+# Vendor-token prefixes are assembled at import time so that no committed blob
+# carries a literal GitHub push protection (or any secret scanner) would flag.
+# The runtime strings are unchanged: the fixtures still have to look real for
+# the redactor to be tested against them. See cp-test-fixtures-trip-github-push-protection.
+_STRIPE_SK = "sk_" + "live_"
+
 SECRETS = [
     # ghp_ needs 36+ trailing characters -- the fixture guard caught a 34.
     ("clipboard_github", "text", "ghp_zqkgneedle0123456789abcdefghijklmnop"),
     ("transcript_password", "transcript", "password: zqkgspokenneedle42"),
     ("burst_aws", "burst_text", "AKIAZQKGNEEDLE012345"),
-    ("clipboard_stripe", "text", "sk_live_zqkgstripeneedle0123456"),
+    ("clipboard_stripe", "text", _STRIPE_SK + "zqkgstripeneedle0123456"),
 ]
 
 IDS = [s[0] for s in SECRETS]

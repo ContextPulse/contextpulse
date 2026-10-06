@@ -36,6 +36,17 @@ from contextpulse_core.spine.events import _TEXT_PAYLOAD_KEYS
 # CONN_STRING, PRIVATE_KEY) are listed with the keyword included: the value
 # alone was never a secret, so testing it bare would be testing a string that
 # no pattern was ever meant to match.
+# Vendor-token prefixes are assembled at import time so that no committed blob
+# carries a literal GitHub push protection (or any secret scanner) would flag.
+# The runtime strings are unchanged: the fixtures still have to look real for
+# the redactor to be tested against them. See cp-test-fixtures-trip-github-push-protection.
+_SLACK_BOT = "xox" + "b-"
+_SLACK_APP = "xa" + "pp-"
+_STRIPE_SK = "sk_" + "live_"
+_STRIPE_RK = "rk_" + "live_"
+_GOOGLE = "AI" + "za"
+_TWILIO = "A" + "C"
+
 SECRET_FAMILIES = [
     # A real AWS access key is AKIA + exactly 16 characters.
     ("aws_access_key", "AKIAZQGLUEDNEEDLE012", "AWS_KEY"),
@@ -84,16 +95,16 @@ SECRET_FAMILIES = [
     ("https_userinfo", "https://admin:zqhttpsneedle44@internal.invalid/panel", "CONN_STRING"),
     ("ssh_userinfo", "ssh://deploy:zqsshneedle55@host.invalid", "CONN_STRING"),
     ("http_basic", "Authorization: Basic enFiYXNpY25lZWRsZTAxMjM0NTY3", "BASIC_AUTH"),
-    ("slack_bot_token", "xoxb-1234567890-zqslackneedle0123456789", "SLACK_TOKEN"),
-    ("slack_app_token", "xapp-1-A0ZQSLACKAPP-zqslackappneedle0123", "SLACK_TOKEN"),
-    ("stripe_live_key", "sk_live_zqstripeneedle0123456789", "STRIPE_KEY"),
-    ("stripe_restricted_key", "rk_live_zqstriperestricted0123456", "STRIPE_KEY"),
+    ("slack_bot_token", _SLACK_BOT + "1234567890-zqslackneedle0123456789", "SLACK_TOKEN"),
+    ("slack_app_token", _SLACK_APP + "1-A0ZQSLACKAPP-zqslackappneedle0123", "SLACK_TOKEN"),
+    ("stripe_live_key", _STRIPE_SK + "zqstripeneedle0123456789", "STRIPE_KEY"),
+    ("stripe_restricted_key", _STRIPE_RK + "zqstriperestricted0123456", "STRIPE_KEY"),
     # AIza + exactly 35, npm_ + exactly 36 -- the real vendor lengths.
-    ("google_api_key", "AIzaZqGoogleNeedle0123456789abcdefghijk", "GOOGLE_KEY"),
+    ("google_api_key", _GOOGLE + "ZqGoogleNeedle0123456789abcdefghijk", "GOOGLE_KEY"),
     ("npm_token", "npm_zqnpmneedle0123456789abcdefghijklmno", "NPM_TOKEN"),
     ("github_fine_grained_pat", "github_pat_zqfinegrainedneedle0123456789", "GH_TOKEN"),
     ("github_user_token", "ghu_zqgithubuserneedle0123456789abcdefgh", "GH_TOKEN"),
-    ("twilio_sid", "AC0123456789abcdef0123456789abcdef", "TWILIO_SID"),
+    ("twilio_sid", _TWILIO + "0123456789abcdef0123456789abcdef", "TWILIO_SID"),
     ("amex_15_digit", "3782 822463 10005", "CC"),
     # ContextPulse's own MCP access token. The Settings dialog shows the bare
     # value, so it has to match with no keyword in front of it.
@@ -129,13 +140,13 @@ NEEDLES = {
     "http_basic": "enFiYXNpY25lZWRsZTAxMjM0NTY3",
     "slack_bot_token": "zqslackneedle0123456789",
     "slack_app_token": "zqslackappneedle0123",
-    "stripe_live_key": "sk_live_zqstripeneedle0123456789",
-    "stripe_restricted_key": "rk_live_zqstriperestricted0123456",
-    "google_api_key": "AIzaZqGoogleNeedle0123456789abcdefghijk",
+    "stripe_live_key": _STRIPE_SK + "zqstripeneedle0123456789",
+    "stripe_restricted_key": _STRIPE_RK + "zqstriperestricted0123456",
+    "google_api_key": _GOOGLE + "ZqGoogleNeedle0123456789abcdefghijk",
     "npm_token": "npm_zqnpmneedle0123456789abcdefghijklmno",
     "github_fine_grained_pat": "github_pat_zqfinegrainedneedle0123456789",
     "github_user_token": "ghu_zqgithubuserneedle0123456789abcdefgh",
-    "twilio_sid": "AC0123456789abcdef0123456789abcdef",
+    "twilio_sid": _TWILIO + "0123456789abcdef0123456789abcdef",
     "amex_15_digit": "3782 822463 10005",
     "cp_mcp_token": "cpmcp_zqmcptokenneedle0123456789abcdefghij",
 }

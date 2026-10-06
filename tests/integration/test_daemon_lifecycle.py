@@ -104,7 +104,8 @@ class TestModuleLifecycle:
         )
         # The actual return statement must use _running, not _listener.is_alive()
         # (comments mentioning _listener are fine — they explain the design decision)
-        lines = [l.strip() for l in source.splitlines() if not l.strip().startswith("#")]
+        lines = [ln.strip() for ln in source.splitlines()
+                 if not ln.strip().startswith("#")]
         code_only = "\n".join(lines)
         assert "_listener.is_alive" not in code_only, (
             "is_alive() code must NOT call _listener.is_alive() — "

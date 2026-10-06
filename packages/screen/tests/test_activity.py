@@ -103,7 +103,7 @@ class TestActivityDB:
 
     def test_record_with_diff_score(self, tmp_path):
         db = ActivityDB(db_path=tmp_path / "test.db")
-        row_id = db.record(
+        db.record(
             timestamp=time.time(),
             window_title="VS Code",
             app_name="Code.exe",
