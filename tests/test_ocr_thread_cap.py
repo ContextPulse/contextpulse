@@ -35,10 +35,19 @@ pytestmark = pytest.mark.skipif(
     sys.platform == "darwin", reason="macOS uses VisionOCR, not rapidocr/onnxruntime"
 )
 
-rapidocr_utils = pytest.importorskip(
-    "rapidocr_onnxruntime.utils",
+pytest.importorskip(
+    "rapidocr_onnxruntime",
     reason="rapidocr_onnxruntime is the non-macOS OCR backend",
 )
+
+# The module whose globals OrtInferSession resolves SessionOptions and
+# InferenceSession from. It moved between vendor releases -- 1.2.x keeps them
+# in rapidocr_onnxruntime.utils, 1.4.x in rapidocr_onnxruntime.utils.infer_engine
+# -- and CI installs both: Python 3.12 resolves 1.4.4, 3.13 resolves 1.2.3.
+# Spying on a hard-coded path tested one release and crashed on the other.
+from contextpulse_sight.classifier import _vendor_session_module  # noqa: E402
+
+rapidocr_utils = _vendor_session_module()
 
 
 @pytest.fixture
@@ -151,13 +160,24 @@ class TestVendorShapeStillSupportsTheCap:
         assert hasattr(rapidocr_utils, "SessionOptions")
 
     def test_vendor_still_builds_session_options_itself(self) -> None:
+        """Whole class, not ``__init__``: 1.4.x moved the call into a helper."""
         import inspect
 
-        src = inspect.getsource(rapidocr_utils.OrtInferSession.__init__)
+        src = inspect.getsource(rapidocr_utils.OrtInferSession)
         assert "SessionOptions()" in src, (
             "OrtInferSession no longer constructs SessionOptions() -- the swap "
             "in classifier._capped_session_options can no longer reach it"
         )
+
+    def test_the_resolved_module_is_where_the_vendor_looks_names_up(self) -> None:
+        """The swap only works if it lands in the namespace OrtInferSession reads.
+
+        Patching any other module that happens to import SessionOptions would
+        succeed, restore cleanly, and change nothing.
+        """
+        init_globals = rapidocr_utils.OrtInferSession.__init__.__globals__
+        assert init_globals is vars(rapidocr_utils)
+        assert init_globals["SessionOptions"] is rapidocr_utils.SessionOptions
 
     @pytest.mark.skipif(
         sys.platform == "darwin", reason="macOS uses VisionOCR, not rapidocr"

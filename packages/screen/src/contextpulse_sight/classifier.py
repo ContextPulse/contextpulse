@@ -27,11 +27,36 @@ _ocr = None
 _ocr_lock = threading.Lock()
 
 
+def _vendor_session_module():
+    """Return the RapidOCR module whose globals ``OrtInferSession`` reads.
+
+    ``OrtInferSession`` looks ``SessionOptions`` up in its own module's globals,
+    and that module moved between releases: 1.2.x defines it in
+    ``rapidocr_onnxruntime.utils`` (a single file), 1.4.x in
+    ``rapidocr_onnxruntime.utils.infer_engine`` (``utils`` became a package that
+    re-exports only ``OrtInferSession``). Which one a user gets depends on their
+    Python: 3.12 resolves 1.4.4, 3.13 resolves 1.2.3. Swapping the class in the
+    wrong module succeeds, restores cleanly, and caps nothing.
+
+    Raises ``ImportError`` when RapidOCR is not installed at all.
+    """
+    import importlib
+
+    try:
+        return importlib.import_module("rapidocr_onnxruntime.utils.infer_engine")
+    except ModuleNotFoundError as exc:
+        # 1.2.x: utils is a module, not a package, so the submodule cannot exist.
+        # Re-raise anything else -- a missing rapidocr is the caller's ImportError.
+        if exc.name != "rapidocr_onnxruntime.utils.infer_engine":
+            raise
+        return importlib.import_module("rapidocr_onnxruntime.utils")
+
+
 @contextmanager
 def _capped_session_options(cap: int):
     """Make every ``SessionOptions`` RapidOCR builds carry ``intra_op_num_threads``.
 
-    RapidOCR 1.2.3 exposes no thread knob: ``OrtInferSession.__init__`` builds a
+    RapidOCR 1.2.3 exposes no thread knob (1.4.x has one; the swap covers both): ``OrtInferSession.__init__`` builds a
     bare ``SessionOptions()`` and reads only ``use_cuda`` and ``model_path`` from
     its config, so ORT's default of 0 ("one thread per physical core") applies to
     all three sessions. The daemon's ``OMP_NUM_THREADS`` cap cannot reach them --
@@ -55,8 +80,7 @@ def _capped_session_options(cap: int):
     ``SessionOptions`` itself.
     """
     try:
-        import rapidocr_onnxruntime.utils as vendor
-
+        vendor = _vendor_session_module()
         original = vendor.SessionOptions
     except (ImportError, AttributeError) as exc:
         logger.warning(
