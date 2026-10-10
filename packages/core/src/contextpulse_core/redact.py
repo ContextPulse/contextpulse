@@ -382,7 +382,7 @@ def _subn_validated(
 # Rules listed in _VENDOR_SKIP are not run, each for a measured reason.
 #
 #   generic-api-key  Run read-only over the whole live activity.db on
-#                    2026-10-10 it fired 15 times; at least 9 were not secrets
+#                    2026-10-10 it fired 14 times; 9 were not secrets
 #                    (a card's account label like "visa-gold-0000" after a
 #                    --card style flag, seven times; an age PUBLIC key after
 #                    "# public key:"). Our own CREDENTIAL rule already covers a
@@ -408,14 +408,17 @@ def _load_vendor_rules() -> tuple[list[dict[str, Any]], dict[str, Any]]:
             compiled.append(
                 {
                     "id": rule["id"],
-                    "pattern": re.compile(rule["regex"]),
+                    # re.ASCII: Go's \b \w \d \s are ASCII-only. Under Python's
+                    # Unicode default a token touching CJK text or an accent
+                    # had no word boundary and escaped (review, 2026-10-10).
+                    "pattern": re.compile(rule["regex"], re.ASCII),
                     "keywords": tuple(rule["keywords"]),
                     "entropy": rule["entropy"],
                     "secret_group": rule["secret_group"],
                     "allowlists": [
                         {
                             "target": a["target"],
-                            "regexes": [re.compile(r) for r in a["regexes"]],
+                            "regexes": [re.compile(r, re.ASCII) for r in a["regexes"]],
                             "stopwords": tuple(a["stopwords"]),
                         }
                         for a in rule["allowlists"]
@@ -423,7 +426,7 @@ def _load_vendor_rules() -> tuple[list[dict[str, Any]], dict[str, Any]]:
                 }
             )
         _vendor_global = {
-            "regexes": [re.compile(r) for r in data.GLOBAL_ALLOWLIST["regexes"]],
+            "regexes": [re.compile(r, re.ASCII) for r in data.GLOBAL_ALLOWLIST["regexes"]],
             "stopwords": tuple(data.GLOBAL_ALLOWLIST["stopwords"]),
         }
         _vendor_compiled = compiled
@@ -477,6 +480,33 @@ def _vendor_allowed(
     return False
 
 
+# Long text is scanned in overlapping windows. Several vendored patterns are
+# quadratic in the length of a keyword-bearing run under Python's backtracking
+# engine (Go's RE2 is linear): a 300 KB single-line base64 paste took 3.7 s in
+# one pass (review, 2026-10-10). Windows bound that to linear time. A match
+# that touches a window's right edge is dropped unless the edge is the end of
+# the text -- `$` and `\b` treat the edge as an end, so it may be a truncation
+# -- and the overlap guarantees the next window sees it whole. The overlap must
+# exceed the longest token a rule matches (pypi-upload-token: about 1,020
+# chars; an RSA-4096 PEM block, which our own table replaces first, ~3.3 KB).
+_VENDOR_WINDOW = 16_384
+_VENDOR_OVERLAP = 4_096
+
+
+def _vendor_windows(length: int) -> list[tuple[int, int]]:
+    if length <= _VENDOR_WINDOW:
+        return [(0, length)]
+    step = _VENDOR_WINDOW - _VENDOR_OVERLAP
+    windows = []
+    start = 0
+    while True:
+        end = min(start + _VENDOR_WINDOW, length)
+        windows.append((start, end))
+        if end == length:
+            return windows
+        start += step
+
+
 def vendor_findings(text: str) -> list[tuple[int, int, str]]:
     """Spans the vendored gitleaks rules would redact, as (start, end, rule_id).
 
@@ -487,23 +517,28 @@ def vendor_findings(text: str) -> list[tuple[int, int, str]]:
         return []
     rules, glob = _load_vendor_rules()
     lowered = text.lower()
-    findings: list[tuple[int, int, str]] = []
-    for rule in rules:
-        if rule["keywords"] and not any(k in lowered for k in rule["keywords"]):
-            continue
-        for match in rule["pattern"].finditer(text):
-            start, end = _secret_span(match, rule["secret_group"])
-            if start < 0 or end <= start:
+    length = len(text)
+    findings: set[tuple[int, int, str]] = set()
+    for win_start, win_end in _vendor_windows(length):
+        window_lowered = lowered[win_start:win_end]
+        for rule in rules:
+            if rule["keywords"] and not any(k in window_lowered for k in rule["keywords"]):
                 continue
-            secret = text[start:end]
-            if "[REDACTED:" in secret:
-                continue
-            if rule["entropy"] and _shannon_entropy(secret) <= rule["entropy"]:
-                continue
-            if _vendor_allowed(text, match, secret, start, end, rule, glob):
-                continue
-            findings.append((start, end, rule["id"]))
-    return findings
+            for match in rule["pattern"].finditer(text, win_start, win_end):
+                if match.end() == win_end and win_end != length:
+                    continue
+                start, end = _secret_span(match, rule["secret_group"])
+                if start < 0 or end <= start:
+                    continue
+                secret = text[start:end]
+                if "[REDACTED:" in secret:
+                    continue
+                if rule["entropy"] and _shannon_entropy(secret) <= rule["entropy"]:
+                    continue
+                if _vendor_allowed(text, match, secret, start, end, rule, glob):
+                    continue
+                findings.add((start, end, rule["id"]))
+    return sorted(findings)
 
 
 def _redact_vendor(text: str) -> tuple[str, int]:

@@ -211,7 +211,7 @@ def _generator():
         (r"\b(p8e-(?i)[a-z0-9]{32})x", r"\b(p8e-(?i:[a-z0-9]{32}))x"),
         (r"dp\.pt\.(?i)[a-z0-9]{43}", r"dp\.pt\.(?i:[a-z0-9]{43})"),
         (r"(?i)abc", r"(?i)abc"),
-        (r"(a|(?i)b|c)d", r"(a|(?i:b|c))d"),
+        (r"(a|(?i)b|c)d", r"(a|(?i:b)|(?i:c))d"),
         (r"x[(?i)]y", r"x[(?i)]y"),
         (r"end\z", r"end\Z"),
         (r"[[:alnum:]]+", r"[a-zA-Z0-9]+"),
@@ -219,3 +219,81 @@ def _generator():
 )
 def test_go_regex_translation(go: str, python: str) -> None:
     assert _generator().go_to_python(go) == python
+
+
+def test_inline_flag_does_not_swallow_the_next_alternative() -> None:
+    """Go keeps (?i) on across '|' but the alternatives stay separate (review finding 1)."""
+    import re
+
+    translated = re.compile(_generator().go_to_python(r"""(?:"(?i)(?:auth:x)"|'(?i)(?:auth:y)')"""))
+    assert translated.fullmatch('"AUTH:X"')
+    assert translated.fullmatch("'AUTH:Y'")
+    assert not translated.fullmatch("\"'auth:y'")
+
+
+# --- review findings, 2026-10-10 --------------------------------------------
+
+
+def test_single_quoted_curl_header_is_redacted() -> None:
+    """The common shell form. It escaped while the (?i) scoper swallowed the '|' branch."""
+    token = _alnum("curl", 30)
+    text = f"curl --header 'Authorization: Token {token}' https://x.io"
+    cleaned = redact_sensitive(text)
+    assert token not in cleaned
+    assert cleaned.startswith("curl --header 'Authorization: Token [REDACTED:")
+
+
+@pytest.mark.parametrize("prefix", ["中文", "é"])
+@pytest.mark.parametrize("token", [HF_TOKEN, "SG." + _alnum("sg1", 22) + "." + _alnum("sg2", 43)])
+def test_token_after_non_ascii_text_is_redacted(prefix: str, token: str) -> None:
+    """Go's \\b is ASCII-only; under Python's Unicode default these escaped (review finding 2).
+
+    A token FOLLOWED directly by non-ASCII text is not covered, by gitleaks
+    either: these rules end in a required delimiter group ([`'"\\s;] or end of
+    text), and a CJK character or an accent is neither in Go or in Python.
+    """
+    cleaned = redact_sensitive(f"{prefix}{token} next")
+    assert token not in cleaned
+    assert cleaned == f"{prefix}[REDACTED:VENDOR_SECRET] next"
+
+
+def _base64_blob(size: int) -> str:
+    import base64
+
+    raw = b"".join(hashlib.sha256(str(i).encode()).digest() for i in range(size // 32 + 1))
+    return base64.b64encode(raw).decode()[:size]
+
+
+def test_large_single_line_paste_is_linear_and_still_redacts() -> None:
+    """300 KB of base64 took 3.7 s in one pass (review finding 3); windows bound it."""
+    blob = _base64_blob(300_000)
+    edge = redact._VENDOR_WINDOW - 20  # a token straddling the first window edge
+    text = blob[:edge] + f" {DO_TOKEN} " + blob[edge:150_000] + f" {HF_TOKEN} " + blob[150_000:]
+    start = time.perf_counter()
+    cleaned = redact_sensitive(text)
+    elapsed = time.perf_counter() - start
+    assert DO_TOKEN not in cleaned and HF_TOKEN not in cleaned
+    assert cleaned.count("[REDACTED:VENDOR_SECRET]") == 2
+    assert elapsed < 1.5, elapsed
+
+
+def test_window_edge_does_not_invent_a_token() -> None:
+    """`$` matches at a window's end, so a longer run cut there must not be reported.
+
+    hf_ + 40 letters is not a HuggingFace token (the rule needs exactly 34 and a
+    delimiter). Cut by the first window's edge after 34 letters, it looks like one.
+    """
+    run = "hf_" + _letters("edge", 40)
+    start = redact._VENDOR_WINDOW - 37
+    text = "x" * (start - 1) + " " + run + " " + "y " * 5_000
+    assert text[start : start + 3] == "hf_"
+    assert redact_sensitive(text) == text
+
+
+def test_windows_cover_the_text_with_overlap() -> None:
+    n = 100_000
+    windows = redact._vendor_windows(n)
+    assert windows[0][0] == 0 and windows[-1][1] == n
+    for (s1, e1), (s2, _e2) in zip(windows, windows[1:]):
+        assert e1 - s2 == redact._VENDOR_OVERLAP
+    assert redact._vendor_windows(10) == [(0, 10)]

@@ -15,8 +15,13 @@ each is translated mechanically here rather than by hand:
 * A mid-pattern ``(?i)`` switches case-folding on until the end of the
   enclosing group. Python only allows global flags at the very start, so the
   flag becomes a scoped ``(?i:...)`` group closed where the enclosing group
-  closes. That keeps the semantics exact; hoisting it to a compile flag would
-  have made the prefix before it case-insensitive too.
+  closes, and closed and reopened around every ``|`` in that group so it
+  never swallows the next alternative. That keeps the semantics exact;
+  hoisting it to a compile flag would have made the prefix before it
+  case-insensitive too.
+* Go's ``\\b``, ``\\w``, ``\\d`` and ``\\s`` are ASCII-only. That is a
+  compile flag, not syntax, so contextpulse_core.redact compiles every
+  vendored pattern with ``re.ASCII``.
 * POSIX classes inside a bracket (``[[:alnum:]]``) become explicit ranges.
 
 A rule that still fails to compile is left out and named in the generated
@@ -102,6 +107,20 @@ def _scope_inline_ignorecase(pattern: str) -> str:
                 pending.pop()
             depth -= 1
             out.append(ch)
+            i += 1
+            continue
+        if ch == "|":
+            # The flag stays on across '|' in Go, but a scoped group must not
+            # swallow the next alternative: close it before the bar and reopen
+            # it after, so 'x"(?i)A"|'B'' keeps two alternatives, both folded.
+            open_here = 0
+            while pending and pending[-1] == depth:
+                out.append(")")
+                pending.pop()
+                open_here += 1
+            out.append("|")
+            out.extend("(?i:" for _ in range(open_here))
+            pending.extend(depth for _ in range(open_here))
             i += 1
             continue
         out.append(ch)

@@ -304,7 +304,7 @@ RULES = [{'allowlists': [],  # gitleaks:allow
            '\\t]{0,5})(?:"(?i:(?:Authorization:[ \\t]{0,5}(?:Basic[ '  # gitleaks:allow
            '\\t]([a-z0-9+/]{8,}={0,3})|(?:Bearer|(?:Api-)?Token)[ '  # gitleaks:allow
            '\\t]([\\w=~@.+/-]{8,})|([\\w=~@.+/-]{8,}))|(?:(?:X-(?:[a-z]+-)?)?(?:Api-?)?(?:Key|Token)):[ '  # gitleaks:allow
-           '\\t]{0,5}([\\w=~@.+/-]{8,}))"|\'(?i:(?:Authorization:[ \\t]{0,5}(?:Basic[ '  # gitleaks:allow
+           '\\t]{0,5}([\\w=~@.+/-]{8,}))")|(?i:\'(?i:(?:Authorization:[ \\t]{0,5}(?:Basic[ '  # gitleaks:allow
            '\\t]([a-z0-9+/]{8,}={0,3})|(?:Bearer|(?:Api-)?Token)[ '  # gitleaks:allow
            '\\t]([\\w=~@.+/-]{8,})|([\\w=~@.+/-]{8,}))|(?:(?:X-(?:[a-z]+-)?)?(?:Api-?)?(?:Key|Token)):[ '  # gitleaks:allow
            "\\t]{0,5}([\\w=~@.+/-]{8,}))')))(?:\\B|\\s|\\Z)",  # gitleaks:allow
