@@ -486,11 +486,22 @@ def _vendor_allowed(
 # one pass (review, 2026-10-10). Windows bound that to linear time. A match
 # that touches a window's right edge is dropped unless the edge is the end of
 # the text -- `$` and `\b` treat the edge as an end, so it may be a truncation
-# -- and the overlap guarantees the next window sees it whole. The overlap must
-# exceed the longest token a rule matches (pypi-upload-token: about 1,020
-# chars; an RSA-4096 PEM block, which our own table replaces first, ~3.3 KB).
+# -- and the overlap lets the next window see it whole, for any token shorter
+# than the overlap. That covers every bounded rule (the longest,
+# pypi-upload-token, is about 1,020 chars). It does NOT cover an UNBOUNDED rule
+# whose token is longer than 4 KB and straddles an inner edge: a 5 KB JWT can be
+# missed by this pass. Our own table redacts JWTs and PEM blocks before this
+# pass runs, so that case is covered upstream, not here (review, 2026-10-10).
 _VENDOR_WINDOW = 16_384
 _VENDOR_OVERLAP = 4_096
+
+# Python's ASCII-mode \s does not match non-ASCII whitespace, while most rules
+# end with a [`'"\s;] delimiter. A token followed by a no-break space or an
+# ideographic space (pasted from a web page) would no longer end. Mapping each
+# such character to a plain space keeps every offset and restores the
+# delimiter (review, 2026-10-10).
+_UNICODE_SPACES = "\x85\xa0                　"
+_SPACE_TO_ASCII = str.maketrans({ch: " " for ch in _UNICODE_SPACES})
 
 
 def _vendor_windows(length: int) -> list[tuple[int, int]]:
@@ -516,11 +527,15 @@ def vendor_findings(text: str) -> list[tuple[int, int, str]]:
     if not text:
         return []
     rules, glob = _load_vendor_rules()
-    lowered = text.lower()
+    # Same length as the input, so every offset found in it is an offset in text.
+    text = text.translate(_SPACE_TO_ASCII)
     length = len(text)
     findings: set[tuple[int, int, str]] = set()
     for win_start, win_end in _vendor_windows(length):
-        window_lowered = lowered[win_start:win_end]
+        # Lower-case the WINDOW, never slice a lowered copy of the whole text:
+        # str.lower() can lengthen a string ("İ" becomes two characters),
+        # which shifts every later offset (review, 2026-10-10).
+        window_lowered = text[win_start:win_end].lower()
         for rule in rules:
             if rule["keywords"] and not any(k in window_lowered for k in rule["keywords"]):
                 continue

@@ -277,6 +277,24 @@ def test_large_single_line_paste_is_linear_and_still_redacts() -> None:
     assert elapsed < 1.5, elapsed
 
 
+@pytest.mark.parametrize("space", [" ", "　", " ", " "])
+def test_vendor_only_token_followed_by_unicode_space_is_redacted(space: str) -> None:
+    """re.ASCII made \\s miss these, so the rules' trailing delimiter failed (re-review finding 2)."""
+    cleaned = redact_sensitive(f"key{space}{HF_TOKEN}{space}copied")
+    assert HF_TOKEN not in cleaned
+    assert cleaned == f"key{space}[REDACTED:VENDOR_SECRET]{space}copied"
+
+
+@pytest.mark.parametrize("count", [45, 10_000])
+def test_lowercase_that_lengthens_text_does_not_shift_the_keyword_gate(count: int) -> None:
+    """'\\u0130'.lower() is two characters; a lowered copy sliced by text offsets
+    lost the tail, so a vendor-only token near the end was skipped (re-review finding 1)."""
+    text = "İ" * count + " " + "z " * 2_500 + HF_TOKEN + " end"
+    cleaned = redact_sensitive(text)
+    assert HF_TOKEN not in cleaned
+    assert cleaned.endswith("[REDACTED:VENDOR_SECRET] end")
+
+
 def test_window_edge_does_not_invent_a_token() -> None:
     """`$` matches at a window's end, so a longer run cut there must not be reported.
 
