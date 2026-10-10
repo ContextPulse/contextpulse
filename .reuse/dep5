@@ -57,3 +57,8 @@ License: AGPL-3.0-or-later
 Files: scripts/* */scripts/*
 Copyright: 2025-2026 Jerard Ventures LLC
 License: AGPL-3.0-or-later
+
+# Vendored gitleaks rule list (MIT). The module generated from it carries its own SPDX header.
+Files: third_party/gitleaks/*
+Copyright: 2019 Zachary Rice
+License: MIT

@@ -32,6 +32,7 @@ path, and the OCR behaviour gated on ``redact_ocr_text``, are unchanged.
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 from typing import Any, Iterable
 
@@ -359,6 +360,168 @@ def _subn_validated(
     return pattern.sub(_replace, text), hits
 
 
+# ── vendor token formats, from gitleaks ─────────────────────────────
+#
+# The table above wins on the families it covers (see
+# .internal/audit-2026-09-19/redaction-prior-art.md: 27 of 34 probe families
+# against gitleaks' 16). What it cannot do is keep up with ~220 vendors'
+# token formats. gitleaks (MIT) does, so its default rule list is vendored as
+# generated data (redact_vendor_rules.py) and run as a SECOND pass, after ours,
+# so a family we already label keeps its own category.
+#
+# Three things make it safe to run over clipboard and OCR text:
+#   * the keyword gate -- a rule runs only when one of its keywords is in the
+#     text, which is also what keeps a 220-rule pass inside the per-call budget;
+#   * only the SECRET is replaced, never the whole match. 165 of the rules
+#     match surrounding context ("kucoin_key = ...") and capture the value in a
+#     group; replacing group(0) would scrub the context this module exists to
+#     keep;
+#   * gitleaks' own false-positive machinery is honoured: entropy floors,
+#     per-rule allowlists and stopwords, and the global allowlist.
+#
+# Rules listed in _VENDOR_SKIP are not run, each for a measured reason.
+#
+#   generic-api-key  Run read-only over the whole live activity.db on
+#                    2026-10-10 it fired 15 times; at least 9 were not secrets
+#                    (a card's account label like "visa-gold-0000" after a
+#                    --card style flag, seven times; an age PUBLIC key after
+#                    "# public key:"). Our own CREDENTIAL rule already covers a
+#                    labelled password/secret/token/api_key value, so skipping
+#                    it loses little and keeps account labels intact.
+_VENDOR_REPLACEMENT = "[REDACTED:VENDOR_SECRET]"
+_VENDOR_SKIP: frozenset[str] = frozenset({"generic-api-key"})
+
+_vendor_compiled: list[dict[str, Any]] | None = None
+_vendor_global: dict[str, Any] | None = None
+
+
+def _load_vendor_rules() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Compile the vendored rules once, on first use."""
+    global _vendor_compiled, _vendor_global
+    if _vendor_compiled is None or _vendor_global is None:
+        from contextpulse_core import redact_vendor_rules as data
+
+        compiled = []
+        for rule in data.RULES:
+            if rule["id"] in _VENDOR_SKIP:
+                continue
+            compiled.append(
+                {
+                    "id": rule["id"],
+                    "pattern": re.compile(rule["regex"]),
+                    "keywords": tuple(rule["keywords"]),
+                    "entropy": rule["entropy"],
+                    "secret_group": rule["secret_group"],
+                    "allowlists": [
+                        {
+                            "target": a["target"],
+                            "regexes": [re.compile(r) for r in a["regexes"]],
+                            "stopwords": tuple(a["stopwords"]),
+                        }
+                        for a in rule["allowlists"]
+                    ],
+                }
+            )
+        _vendor_global = {
+            "regexes": [re.compile(r) for r in data.GLOBAL_ALLOWLIST["regexes"]],
+            "stopwords": tuple(data.GLOBAL_ALLOWLIST["stopwords"]),
+        }
+        _vendor_compiled = compiled
+    return _vendor_compiled, _vendor_global
+
+
+def _shannon_entropy(value: str) -> float:
+    """Bits per character, as gitleaks computes it."""
+    if not value:
+        return 0.0
+    length = len(value)
+    return -sum(
+        (n / length) * math.log2(n / length) for n in (value.count(c) for c in set(value))
+    )
+
+
+def _secret_span(match: re.Match, secret_group: int) -> tuple[int, int]:
+    """The span gitleaks treats as the secret: the named group, else the first non-empty one."""
+    if secret_group and secret_group <= (match.re.groups or 0):
+        return match.span(secret_group)
+    for index in range(1, (match.re.groups or 0) + 1):
+        if match.group(index):
+            return match.span(index)
+    return match.span(0)
+
+
+def _line_of(text: str, start: int, end: int) -> str:
+    line_start = text.rfind("\n", 0, start) + 1
+    line_end = text.find("\n", end)
+    return text[line_start : len(text) if line_end == -1 else line_end]
+
+
+def _vendor_allowed(
+    text: str, match: re.Match, secret: str, start: int, end: int, rule: dict[str, Any], glob: dict[str, Any]
+) -> bool:
+    """True when gitleaks would allow (not report) this candidate."""
+    lowered = secret.lower()
+    if any(r.search(secret) for r in glob["regexes"]) or any(s in lowered for s in glob["stopwords"]):
+        return True
+    for allow in rule["allowlists"]:
+        if allow["target"] == "match":
+            subject = match.group(0)
+        elif allow["target"] == "line":
+            subject = _line_of(text, start, end)
+        else:
+            subject = secret
+        if any(r.search(subject) for r in allow["regexes"]):
+            return True
+        if any(s in lowered for s in allow["stopwords"]):
+            return True
+    return False
+
+
+def vendor_findings(text: str) -> list[tuple[int, int, str]]:
+    """Spans the vendored gitleaks rules would redact, as (start, end, rule_id).
+
+    Exposed for auditing: it lets a measurement say WHICH rule fired without
+    ever printing the value.
+    """
+    if not text:
+        return []
+    rules, glob = _load_vendor_rules()
+    lowered = text.lower()
+    findings: list[tuple[int, int, str]] = []
+    for rule in rules:
+        if rule["keywords"] and not any(k in lowered for k in rule["keywords"]):
+            continue
+        for match in rule["pattern"].finditer(text):
+            start, end = _secret_span(match, rule["secret_group"])
+            if start < 0 or end <= start:
+                continue
+            secret = text[start:end]
+            if "[REDACTED:" in secret:
+                continue
+            if rule["entropy"] and _shannon_entropy(secret) <= rule["entropy"]:
+                continue
+            if _vendor_allowed(text, match, secret, start, end, rule, glob):
+                continue
+            findings.append((start, end, rule["id"]))
+    return findings
+
+
+def _redact_vendor(text: str) -> tuple[str, int]:
+    """Replace every vendor finding's secret span; overlapping spans merge into one."""
+    spans = sorted((s, e) for s, e, _rid in vendor_findings(text))
+    if not spans:
+        return text, 0
+    merged: list[list[int]] = []
+    for start, end in spans:
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    for start, end in reversed(merged):
+        text = text[:start] + _VENDOR_REPLACEMENT + text[end:]
+    return text, len(merged)
+
+
 def redact_with_counts(text: str) -> tuple[str, dict[str, int]]:
     """Redact, and report how many matches each category accounted for.
 
@@ -398,6 +561,12 @@ def redact_with_counts(text: str) -> tuple[str, dict[str, int]]:
         if n:
             category = category_of(replacement)
             counts[category] = counts.get(category, 0) + n
+
+    # Vendor formats last, so anything our own table labels keeps its label.
+    text, n = _redact_vendor(text)
+    if n:
+        category = category_of(_VENDOR_REPLACEMENT)
+        counts[category] = counts.get(category, 0) + n
     return text, counts
 
 

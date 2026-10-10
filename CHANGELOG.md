@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Redaction now recognises about 220 vendor token formats (HuggingFace,
+  Perplexity, DigitalOcean, GitLab, age secret keys and more) by running
+  gitleaks' MIT-licensed rule list as a second pass after ContextPulse's own
+  patterns. Only the token is replaced, so the text around it is kept.
+  gitleaks' entropy floors, allowlists and keyword gate are honoured. Its
+  `generic-api-key` rule is not run: on real captured text it mostly matched
+  account labels and public keys.
+
 ### Fixed
 
 - The daemon no longer grows by one full-screen staging texture (33 MB at
