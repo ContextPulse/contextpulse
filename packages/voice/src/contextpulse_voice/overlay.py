@@ -308,6 +308,22 @@ class RecordingOverlay:
         self._root.deiconify()
         self._visible = True
 
+    def show_briefing(self) -> None:
+        """Brief mode is waiting on the model (11-16 s); silence would read as broken."""
+        if self._root is None:
+            return
+        try:
+            self._root.after(0, self._show_briefing_ui)
+        except Exception:
+            pass
+
+    def _show_briefing_ui(self) -> None:
+        self._animating = False
+        self._icon_label.configure(image=self._ready_frame)
+        self._text_label.configure(text="Briefing...", fg="#c084fc")
+        self._root.deiconify()
+        self._visible = True
+
     def show_ready(self) -> None:
         if self._root is None:
             return

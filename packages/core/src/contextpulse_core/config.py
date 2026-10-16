@@ -149,6 +149,12 @@ _DEFAULTS: dict = {
     "voice_whisper_model": "small",    # base | small | medium | large
     "voice_always_use_llm": False,
     "voice_anthropic_api_key": "",
+    # Brief mode: a third hold-to-talk hotkey that turns a dictation into a
+    # brief for an agent. Template: brief | reply | verbatim. Backend:
+    # auto (Claude Code CLI if installed, else the API key) | claude-cli | api.
+    "voice_brief_hotkey": "ctrl+alt+space",
+    "voice_brief_template": "brief",
+    "voice_llm_backend": "auto",
 
     # Touch — typing/mouse event shaping. Declared here (not in
     # contextpulse_touch.config) so the Settings dialog and get_touch_config()
@@ -183,6 +189,9 @@ _ENV_MAP: dict[str, str] = {
     "voice_fix_hotkey": "CONTEXTPULSE_VOICE_FIX_HOTKEY",
     "voice_whisper_model": "CONTEXTPULSE_VOICE_MODEL",
     "voice_always_use_llm": "CONTEXTPULSE_VOICE_ALWAYS_LLM",
+    "voice_brief_hotkey": "CONTEXTPULSE_VOICE_BRIEF_HOTKEY",
+    "voice_brief_template": "CONTEXTPULSE_VOICE_BRIEF_TEMPLATE",
+    "voice_llm_backend": "CONTEXTPULSE_VOICE_LLM_BACKEND",
     "knowledge_enabled": "CONTEXTPULSE_KNOWLEDGE_ENABLED",
     "clipboard_enabled": "CONTEXTPULSE_CLIPBOARD_ENABLED",
     "touch_burst_timeout": "CONTEXTPULSE_TOUCH_BURST_TIMEOUT",

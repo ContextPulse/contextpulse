@@ -688,8 +688,8 @@ class TestDefaultsTable:
         assert len(_DEFAULTS["blocklist_patterns"]) == 14
 
     def test_key_count(self):
-        """29 on this branch - 3 removed + 7 added."""
-        assert len(_DEFAULTS) == 33
+        """29 on this branch - 3 removed + 7 added, + 3 brief-mode keys (voice_brief_*, voice_llm_backend)."""
+        assert len(_DEFAULTS) == 36
 
     def test_output_dir_is_a_module_constant_not_a_config_key(self):
         from pathlib import Path
