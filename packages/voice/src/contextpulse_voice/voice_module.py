@@ -606,7 +606,9 @@ class VoiceModule(ModalityModule):
         said. The stored event carries no paste hash: what gets pasted is
         model-written, and the Touch correction detector must not learn
         vocabulary from it. _last_wav_bytes is left alone, so Fix-last still
-        re-does the last ordinary dictation rather than overwriting a brief.
+        re-does the last ordinary dictation rather than overwriting a brief --
+        except when transcription itself fails, when the audio is kept there
+        because nothing else holds it.
         """
         try:
             raw_text = self._transcriber.transcribe(
