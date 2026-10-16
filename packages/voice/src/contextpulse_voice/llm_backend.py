@@ -46,6 +46,8 @@ _API_MODELS = {"haiku": "claude-haiku-4-5-20251001"}
 
 Runner = Callable[..., subprocess.CompletedProcess]
 
+_MAX_ARGV_CHARS = 24_000
+
 
 @dataclass(frozen=True)
 class LLMResult:
@@ -97,6 +99,11 @@ def run_claude_cli(
     exe = exe or find_claude()
     if not exe:
         return LLMResult(ok=False, text="", backend="claude-cli", error="claude CLI not found")
+    if exe.lower().endswith((".cmd", ".bat")):
+        # A script shim (npm install) runs through cmd.exe, which cuts the
+        # multi-line prompt at its first newline and expands % and &.
+        return LLMResult(ok=False, text="", backend="claude-cli",
+                         error=f"claude CLI is a script shim ({exe}); native claude.exe needed")
 
     start = time.monotonic()
 
@@ -104,6 +111,10 @@ def run_claude_cli(
         return LLMResult(ok=False, text="", backend="claude-cli", error=error,
                          duration_s=time.monotonic() - start)
 
+    # Prompt and dictation travel in argv. Windows caps a command line at
+    # 32,767 characters; refuse well before that rather than fail obscurely.
+    if len(system_prompt) + len(user_text) > _MAX_ARGV_CHARS:
+        return fail(f"claude-cli prompt too long ({len(user_text)} chars of dictation)")
     cmd = build_cli_command(exe, system_prompt, user_text, model)
     try:
         with tempfile.TemporaryDirectory(prefix="cp-llm-", ignore_cleanup_errors=True) as empty:

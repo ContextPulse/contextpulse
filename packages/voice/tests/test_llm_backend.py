@@ -116,6 +116,19 @@ class TestClaudeCliResults:
         assert r.backend == "claude-cli"
         assert fragment in r.error
 
+    @pytest.mark.parametrize("shim", [r"C:\npm\claude.cmd", r"C:\x\CLAUDE.BAT"])
+    def test_script_shim_is_refused_without_running(self, shim):
+        fake = FakeRun(stdout=_cli_json())
+        r = run_claude_cli("S", "x", exe=shim, runner=fake)
+        assert r.ok is False and "shim" in r.error
+        assert fake.calls == []
+
+    def test_overlong_prompt_is_refused_without_running(self):
+        fake = FakeRun(stdout=_cli_json())
+        r = run_claude_cli("S", "x" * 30_000, exe="claude.exe", runner=fake)
+        assert r.ok is False and "too long" in r.error
+        assert fake.calls == []
+
     def test_missing_executable_reports_unavailable_without_running(self, monkeypatch):
         monkeypatch.setattr(llm_backend, "find_claude", lambda: None)
         fake = FakeRun(stdout=_cli_json())

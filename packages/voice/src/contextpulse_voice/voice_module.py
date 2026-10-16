@@ -279,6 +279,14 @@ class VoiceModule(ModalityModule):
         if brief_held:
             if not self._recording and not self._recorder_busy and not self._briefing:
                 self._start_recording("brief")
+            elif self._recording and self._record_mode == "dictation" and not self._briefing:
+                # Pressed in the other order (ctrl, space, then alt): the
+                # dictation hotkey matched first and a dictation recording is
+                # already running. The audio is the same either way, so the
+                # recording becomes a brief rather than ignoring the hotkey.
+                self._record_mode = "brief"
+                self._briefing = True
+                logger.info("Recording upgraded to a brief")
             return
 
         # Main dictation hotkey (hold)
@@ -365,15 +373,23 @@ class VoiceModule(ModalityModule):
             # during stream teardown) is a precise signal: a 1-second wall
             # clock was an imprecise proxy for it.
             self._recording = False
-            if self._overlay:
-                self._overlay.show_transcribing()
-            app_name, window_title = self._get_foreground_info()
-            self._emit(ContextEvent(
-                modality=Modality.VOICE,
-                event_type=EventType.SPEECH_END,
-                app_name=app_name,
-                window_title=window_title,
-            ))
+            # Nothing between here and the thread spawn below may raise past
+            # it: the spawned thread is what releases _recorder_busy and
+            # _briefing, so an exception here (an overlay call failing, say)
+            # would refuse every hotkey until the daemon restarted.
+            app_name, window_title = "", ""
+            try:
+                if self._overlay:
+                    self._overlay.show_transcribing()
+                app_name, window_title = self._get_foreground_info()
+                self._emit(ContextEvent(
+                    modality=Modality.VOICE,
+                    event_type=EventType.SPEECH_END,
+                    app_name=app_name,
+                    window_title=window_title,
+                ))
+            except Exception:
+                logger.exception("Release bookkeeping failed — still stopping the recorder")
 
             # Stop recording and transcribe in a background thread.
             # The thread adds a brief tail delay before stopping the
@@ -592,9 +608,15 @@ class VoiceModule(ModalityModule):
         vocabulary from it. _last_wav_bytes is left alone, so Fix-last still
         re-does the last ordinary dictation rather than overwriting a brief.
         """
-        raw_text = self._transcriber.transcribe(
-            wav_bytes, initial_prompt=self._build_whisper_prompt(),
-        )
+        try:
+            raw_text = self._transcriber.transcribe(
+                wav_bytes, initial_prompt=self._build_whisper_prompt(),
+            )
+        except Exception:
+            # Nothing was stored yet, so keep the audio where Fix-last can
+            # retry it; otherwise what was said exists nowhere.
+            self._last_wav_bytes = wav_bytes
+            raise
         if not raw_text or len(raw_text.strip()) < 2:
             logger.warning("Brief: empty or too-short transcription — skipping")
             if self._overlay:

@@ -206,3 +206,38 @@ class TestRealThread:
             while vm._briefing and time.time() < deadline:
                 time.sleep(0.01)
         assert vm._briefing is False
+
+    def _press_release_and_wait(self, vm, keys, release_key, make_brief_rv=None):
+        pasted = threading.Event()
+        with patch("contextpulse_voice.voice_module.make_brief",
+                   return_value=make_brief_rv or BriefOutcome(text="B", template="brief", llm_ok=True)) as mb, \
+             patch("contextpulse_voice.voice_module.paste_text", side_effect=lambda t: pasted.set()), \
+             patch("contextpulse_voice.voice_module.get_voice_config", return_value=dict(CFG)):
+            press(vm, *keys)
+            vm._on_release_inner(release_key)
+            pasted.wait(5)
+            deadline = time.time() + 5
+            while (vm._briefing or vm._recorder_busy) and time.time() < deadline:
+                time.sleep(0.01)
+        return mb
+
+    def test_other_press_order_upgrades_the_recording_to_a_brief(self, vm):
+        """ctrl, space, then alt: dictation matched first; the hold must still produce a brief."""
+        mb = self._press_release_and_wait(vm, (kb.Key.ctrl_l, kb.Key.space, kb.Key.alt_l), kb.Key.alt_l)
+        assert vm._recorder.start.call_count == 1
+        mb.assert_called_once()
+        assert (vm._briefing, vm._recorder_busy) == (False, False)
+
+    def test_overlay_failure_on_release_does_not_strand_any_flag(self, vm):
+        vm._overlay = MagicMock()
+        vm._overlay.show_transcribing.side_effect = RuntimeError("tk gone")
+        mb = self._press_release_and_wait(vm, (kb.Key.ctrl_l, kb.Key.alt_l, kb.Key.space), kb.Key.space)
+        mb.assert_called_once()
+        assert (vm._recording, vm._recorder_busy, vm._briefing) == (False, False, False)
+
+    def test_transcription_failure_keeps_the_audio_for_fix_last(self, vm):
+        vm._transcriber.transcribe.side_effect = RuntimeError("whisper died")
+        vm._last_wav_bytes = None
+        self._press_release_and_wait(vm, (kb.Key.ctrl_l, kb.Key.alt_l, kb.Key.space), kb.Key.space)
+        assert vm._last_wav_bytes == b"\x01" * 3200
+        assert vm._briefing is False
