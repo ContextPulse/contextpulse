@@ -146,6 +146,22 @@ class TestMainEndToEnd:
         assert "facts_about: 1 calls, 1 with hits" in out
         assert "context_at: 1 calls, 0 with hits" in out
         assert "Confirmed saves (journal, category=phase0-save): 0" in out
+        assert "STAGE 1 NOT MET -- 2 of 20" in out
+
+        with patch("subprocess.run", return_value=_FakeCompleted(0, "[]")):
+            assert mod.main(["--probe-db", str(db), "--min-calls", "2", "--min-saves", "1"]) == 0
+        out = capsys.readouterr().out
+        assert "STAGE 1 MET (2 tool calls), 0 of 1 confirmed saves" in out
+
+
+class TestStageOneBoundary:
+    def test_nineteen_calls_is_not_met_and_twenty_is(self):
+        mod = _load_report_module()
+        for calls, expect in ((19, "STAGE 1 NOT MET -- 19 of 20"), (20, "STAGE 1 MET (20 tool calls)")):
+            summary = {"total_calls": calls, "calls_with_hits": 0, "by_tool": {}}
+            text = mod.format_report(summary, saves=2, probe_db=Path("x.db"))
+            assert expect in text, (calls, text)
+            assert ("2 of 3 confirmed saves" in text) is (calls == 20)
 
 
 class TestSinceAppliesToBothHalves:
