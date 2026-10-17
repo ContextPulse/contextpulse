@@ -32,6 +32,7 @@ path, and the OCR behaviour gated on ``redact_ocr_text``, are unchanged.
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 from typing import Any, Iterable
 
@@ -359,6 +360,218 @@ def _subn_validated(
     return pattern.sub(_replace, text), hits
 
 
+# ── vendor token formats, from gitleaks ─────────────────────────────
+#
+# The table above wins on the families it covers (see
+# .internal/audit-2026-09-19/redaction-prior-art.md: 27 of 34 probe families
+# against gitleaks' 16). What it cannot do is keep up with ~220 vendors'
+# token formats. gitleaks (MIT) does, so its default rule list is vendored as
+# generated data (redact_vendor_rules.py) and run as a SECOND pass, after ours,
+# so a family we already label keeps its own category.
+#
+# Three things make it safe to run over clipboard and OCR text:
+#   * the keyword gate -- a rule runs only when one of its keywords is in the
+#     text, which is also what keeps a 220-rule pass inside the per-call budget;
+#   * only the SECRET is replaced, never the whole match. 165 of the rules
+#     match surrounding context ("kucoin_key = ...") and capture the value in a
+#     group; replacing group(0) would scrub the context this module exists to
+#     keep;
+#   * gitleaks' own false-positive machinery is honoured: entropy floors,
+#     per-rule allowlists and stopwords, and the global allowlist.
+#
+# Rules listed in _VENDOR_SKIP are not run, each for a measured reason.
+#
+#   generic-api-key  Run read-only over the whole live activity.db on
+#                    2026-10-10 it fired 14 times; 9 were not secrets
+#                    (a card's account label like "visa-gold-0000" after a
+#                    --card style flag, seven times; an age PUBLIC key after
+#                    "# public key:"). Our own CREDENTIAL rule already covers a
+#                    labelled password/secret/token/api_key value, so skipping
+#                    it loses little and keeps account labels intact.
+_VENDOR_REPLACEMENT = "[REDACTED:VENDOR_SECRET]"
+_VENDOR_SKIP: frozenset[str] = frozenset({"generic-api-key"})
+
+_vendor_compiled: list[dict[str, Any]] | None = None
+_vendor_global: dict[str, Any] | None = None
+
+
+def _load_vendor_rules() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Compile the vendored rules once, on first use."""
+    global _vendor_compiled, _vendor_global
+    if _vendor_compiled is None or _vendor_global is None:
+        from contextpulse_core import redact_vendor_rules as data
+
+        compiled = []
+        for rule in data.RULES:
+            if rule["id"] in _VENDOR_SKIP:
+                continue
+            compiled.append(
+                {
+                    "id": rule["id"],
+                    # re.ASCII: Go's \b \w \d \s are ASCII-only. Under Python's
+                    # Unicode default a token touching CJK text or an accent
+                    # had no word boundary and escaped (review, 2026-10-10).
+                    "pattern": re.compile(rule["regex"], re.ASCII),
+                    "keywords": tuple(rule["keywords"]),
+                    "entropy": rule["entropy"],
+                    "secret_group": rule["secret_group"],
+                    "allowlists": [
+                        {
+                            "target": a["target"],
+                            "regexes": [re.compile(r, re.ASCII) for r in a["regexes"]],
+                            "stopwords": tuple(a["stopwords"]),
+                        }
+                        for a in rule["allowlists"]
+                    ],
+                }
+            )
+        _vendor_global = {
+            "regexes": [re.compile(r, re.ASCII) for r in data.GLOBAL_ALLOWLIST["regexes"]],
+            "stopwords": tuple(data.GLOBAL_ALLOWLIST["stopwords"]),
+        }
+        _vendor_compiled = compiled
+    return _vendor_compiled, _vendor_global
+
+
+def _shannon_entropy(value: str) -> float:
+    """Bits per character, as gitleaks computes it."""
+    if not value:
+        return 0.0
+    length = len(value)
+    return -sum(
+        (n / length) * math.log2(n / length) for n in (value.count(c) for c in set(value))
+    )
+
+
+def _secret_span(match: re.Match, secret_group: int) -> tuple[int, int]:
+    """The span gitleaks treats as the secret: the named group, else the first non-empty one."""
+    if secret_group and secret_group <= (match.re.groups or 0):
+        return match.span(secret_group)
+    for index in range(1, (match.re.groups or 0) + 1):
+        if match.group(index):
+            return match.span(index)
+    return match.span(0)
+
+
+def _line_of(text: str, start: int, end: int) -> str:
+    line_start = text.rfind("\n", 0, start) + 1
+    line_end = text.find("\n", end)
+    return text[line_start : len(text) if line_end == -1 else line_end]
+
+
+def _vendor_allowed(
+    text: str, match: re.Match, secret: str, start: int, end: int, rule: dict[str, Any], glob: dict[str, Any]
+) -> bool:
+    """True when gitleaks would allow (not report) this candidate."""
+    lowered = secret.lower()
+    if any(r.search(secret) for r in glob["regexes"]) or any(s in lowered for s in glob["stopwords"]):
+        return True
+    for allow in rule["allowlists"]:
+        if allow["target"] == "match":
+            subject = match.group(0)
+        elif allow["target"] == "line":
+            subject = _line_of(text, start, end)
+        else:
+            subject = secret
+        if any(r.search(subject) for r in allow["regexes"]):
+            return True
+        if any(s in lowered for s in allow["stopwords"]):
+            return True
+    return False
+
+
+# Long text is scanned in overlapping windows. Several vendored patterns are
+# quadratic in the length of a keyword-bearing run under Python's backtracking
+# engine (Go's RE2 is linear): a 300 KB single-line base64 paste took 3.7 s in
+# one pass (review, 2026-10-10). Windows bound that to linear time. A match
+# that touches a window's right edge is dropped unless the edge is the end of
+# the text -- `$` and `\b` treat the edge as an end, so it may be a truncation
+# -- and the overlap lets the next window see it whole, for any token shorter
+# than the overlap. That covers every bounded rule (the longest,
+# pypi-upload-token, is about 1,020 chars). It does NOT cover an UNBOUNDED rule
+# whose token is longer than 4 KB and straddles an inner edge: a 5 KB JWT can be
+# missed by this pass. Our own table redacts JWTs and PEM blocks before this
+# pass runs, so that case is covered upstream, not here (review, 2026-10-10).
+_VENDOR_WINDOW = 16_384
+_VENDOR_OVERLAP = 4_096
+
+# Python's ASCII-mode \s does not match non-ASCII whitespace, while most rules
+# end with a [`'"\s;] delimiter. A token followed by a no-break space or an
+# ideographic space (pasted from a web page) would no longer end. Mapping each
+# such character to a plain space keeps every offset and restores the
+# delimiter (review, 2026-10-10).
+_UNICODE_SPACES = "\x85\xa0                　"
+_SPACE_TO_ASCII = str.maketrans({ch: " " for ch in _UNICODE_SPACES})
+
+
+def _vendor_windows(length: int) -> list[tuple[int, int]]:
+    if length <= _VENDOR_WINDOW:
+        return [(0, length)]
+    step = _VENDOR_WINDOW - _VENDOR_OVERLAP
+    windows = []
+    start = 0
+    while True:
+        end = min(start + _VENDOR_WINDOW, length)
+        windows.append((start, end))
+        if end == length:
+            return windows
+        start += step
+
+
+def vendor_findings(text: str) -> list[tuple[int, int, str]]:
+    """Spans the vendored gitleaks rules would redact, as (start, end, rule_id).
+
+    Exposed for auditing: it lets a measurement say WHICH rule fired without
+    ever printing the value.
+    """
+    if not text:
+        return []
+    rules, glob = _load_vendor_rules()
+    # Same length as the input, so every offset found in it is an offset in text.
+    text = text.translate(_SPACE_TO_ASCII)
+    length = len(text)
+    findings: set[tuple[int, int, str]] = set()
+    for win_start, win_end in _vendor_windows(length):
+        # Lower-case the WINDOW, never slice a lowered copy of the whole text:
+        # str.lower() can lengthen a string ("İ" becomes two characters),
+        # which shifts every later offset (review, 2026-10-10).
+        window_lowered = text[win_start:win_end].lower()
+        for rule in rules:
+            if rule["keywords"] and not any(k in window_lowered for k in rule["keywords"]):
+                continue
+            for match in rule["pattern"].finditer(text, win_start, win_end):
+                if match.end() == win_end and win_end != length:
+                    continue
+                start, end = _secret_span(match, rule["secret_group"])
+                if start < 0 or end <= start:
+                    continue
+                secret = text[start:end]
+                if "[REDACTED:" in secret:
+                    continue
+                if rule["entropy"] and _shannon_entropy(secret) <= rule["entropy"]:
+                    continue
+                if _vendor_allowed(text, match, secret, start, end, rule, glob):
+                    continue
+                findings.add((start, end, rule["id"]))
+    return sorted(findings)
+
+
+def _redact_vendor(text: str) -> tuple[str, int]:
+    """Replace every vendor finding's secret span; overlapping spans merge into one."""
+    spans = sorted((s, e) for s, e, _rid in vendor_findings(text))
+    if not spans:
+        return text, 0
+    merged: list[list[int]] = []
+    for start, end in spans:
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    for start, end in reversed(merged):
+        text = text[:start] + _VENDOR_REPLACEMENT + text[end:]
+    return text, len(merged)
+
+
 def redact_with_counts(text: str) -> tuple[str, dict[str, int]]:
     """Redact, and report how many matches each category accounted for.
 
@@ -398,6 +611,12 @@ def redact_with_counts(text: str) -> tuple[str, dict[str, int]]:
         if n:
             category = category_of(replacement)
             counts[category] = counts.get(category, 0) + n
+
+    # Vendor formats last, so anything our own table labels keeps its label.
+    text, n = _redact_vendor(text)
+    if n:
+        category = category_of(_VENDOR_REPLACEMENT)
+        counts[category] = counts.get(category, 0) + n
     return text, counts
 
 

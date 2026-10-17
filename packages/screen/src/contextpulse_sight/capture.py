@@ -10,6 +10,7 @@ DXcam is unavailable (Linux, macOS, RDP, import failure).
 import logging
 import sys
 import threading
+import time
 from io import BytesIO
 from pathlib import Path
 
@@ -40,6 +41,13 @@ def _max_size() -> tuple[int, int]:
 _backend: str | None = None  # "dxcam" or "mss", set on first use
 _dxcam_cameras: dict[int, object | None] = {}  # output_idx -> camera (None = unavailable)
 
+# A create that fails for any reason other than a missing output (IndexError)
+# is retried after this many seconds instead of being cached as None forever.
+# The common case is the lock screen (E_ACCESSDENIED): a daemon started while
+# locked used to capture with mss for its whole life (2026-10-01: ~23 hours).
+_DXCAM_RETRY_S = 120.0
+_dxcam_retry_at: dict[int, float] = {}  # output_idx -> time.monotonic() of next attempt
+
 # --- Bounded camera.grab() -------------------------------------------------
 #
 # Incident 2026-08-24/25: dxcam's Desktop Duplication backend lost the
@@ -64,6 +72,39 @@ _dxcam_cameras: dict[int, object | None] = {}  # output_idx -> camera (None = un
 _DXCAM_GRAB_TIMEOUT_SEC = 5.0
 _DXCAM_MAX_CONSECUTIVE_TIMEOUTS = 3
 _dxcam_timeout_counts: dict[int, int] = {}
+# Grab threads abandoned since the last successful grab, per monitor.
+_dxcam_grab_workers: dict[int, list[threading.Thread]] = {}
+# Evicted cameras, with the grab threads still blocked inside them. Restored
+# by _get_dxcam_camera once every one of those threads has returned.
+_dxcam_parked: dict[int, tuple[object, list[threading.Thread]]] = {}
+
+
+def _keep_blocked_workers(output_idx: int) -> list[threading.Thread]:
+    """Forget abandoned grab threads that have returned; keep the blocked ones."""
+    alive = [w for w in _dxcam_grab_workers.get(output_idx, []) if w.is_alive()]
+    if alive:
+        _dxcam_grab_workers[output_idx] = alive
+    else:
+        _dxcam_grab_workers.pop(output_idx, None)
+    return alive
+
+
+def _note_failed_grab(camera: object, output_idx: int) -> None:
+    """Count a timed-out or raising grab; park the camera at the threshold."""
+    count = _dxcam_timeout_counts.get(output_idx, 0) + 1
+    _dxcam_timeout_counts[output_idx] = count
+    if count < _DXCAM_MAX_CONSECUTIVE_TIMEOUTS:
+        return
+    logger.warning(
+        "DXcam monitor %d: %d consecutive failed grabs -- parking camera, "
+        "captures use mss until its blocked grabs return",
+        output_idx, count,
+    )
+    _dxcam_timeout_counts[output_idx] = 0
+    _dxcam_cameras.pop(output_idx, None)
+    _dxcam_parked[output_idx] = (camera, _keep_blocked_workers(output_idx))
+    _dxcam_grab_workers.pop(output_idx, None)
+    _dxcam_retry_at[output_idx] = time.monotonic() + _DXCAM_RETRY_S
 
 
 def _dxcam_grab_bounded(camera: object, output_idx: int) -> np.ndarray | None:
@@ -74,11 +115,11 @@ def _dxcam_grab_bounded(camera: object, output_idx: int) -> np.ndarray | None:
     genuine exception raised inside grab() re-raises on the calling thread
     unchanged, so existing exception handling at call sites is untouched.
 
-    After ``_DXCAM_MAX_CONSECUTIVE_TIMEOUTS`` consecutive timeouts for a
-    given monitor, the cached camera is evicted (mirrors the existing
-    None-caching pattern for ``dxcam.create()`` failures) so future
-    captures skip DXcam entirely for that monitor instead of repeatedly
-    spawning a thread behind an already-stuck grab().
+    After ``_DXCAM_MAX_CONSECUTIVE_TIMEOUTS`` consecutive failed grabs
+    (timeouts or exceptions) for a given monitor, the camera is parked with
+    the grab threads still blocked inside it, so future captures use mss
+    instead of spawning a thread behind an already-stuck grab().
+    ``_get_dxcam_camera`` restores it once those threads have returned.
 
     Note: the daemon thread blocked inside the real ``camera.grab()`` is
     abandoned, not killed -- Python cannot forcibly terminate a thread. This
@@ -99,26 +140,20 @@ def _dxcam_grab_bounded(camera: object, output_idx: int) -> np.ndarray | None:
     worker.join(timeout=_DXCAM_GRAB_TIMEOUT_SEC)
 
     if worker.is_alive():
-        count = _dxcam_timeout_counts.get(output_idx, 0) + 1
-        _dxcam_timeout_counts[output_idx] = count
+        _dxcam_grab_workers.setdefault(output_idx, []).append(worker)
         logger.warning(
-            "DXcam grab() exceeded %.1fs timeout for monitor %d (consecutive "
-            "timeout %d/%d) -- output may be detached (lock/sleep/reconfig); "
-            "falling back to mss",
-            _DXCAM_GRAB_TIMEOUT_SEC, output_idx, count, _DXCAM_MAX_CONSECUTIVE_TIMEOUTS,
+            "DXcam grab() exceeded %.1fs timeout for monitor %d -- output may be "
+            "detached (lock/sleep/reconfig); falling back to mss",
+            _DXCAM_GRAB_TIMEOUT_SEC, output_idx,
         )
-        if count >= _DXCAM_MAX_CONSECUTIVE_TIMEOUTS:
-            logger.warning(
-                "DXcam monitor %d exceeded %d consecutive grab timeouts -- "
-                "evicting camera, future captures use mss until process restart",
-                output_idx, _DXCAM_MAX_CONSECUTIVE_TIMEOUTS,
-            )
-            _dxcam_cameras[output_idx] = None
+        _note_failed_grab(camera, output_idx)
         return None
 
-    _dxcam_timeout_counts[output_idx] = 0
     if "exc" in box:
+        _note_failed_grab(camera, output_idx)
         raise box["exc"]  # type: ignore[misc]
+    _dxcam_timeout_counts[output_idx] = 0
+    _keep_blocked_workers(output_idx)
     return box.get("frame")  # type: ignore[return-value]
 
 
@@ -199,25 +234,169 @@ def _warn_dxcam_fallback(exc: Exception) -> None:
         )
 
 
+# --- Flush after every recovery release ------------------------------------
+#
+# Incidents 2026-09-26 (17.2 GB) and 2026-09-30 (27.9 GB working set): while
+# the desktop is denied to Desktop Duplication (lock screen, HRESULT
+# 0x80070005), dxcam 0.3.0's recovery loop retries forever. Each attempt
+# releases and rebuilds a full-resolution staging texture and then fails to
+# create the duplicator. D3D11 destroys a released resource only when the
+# device context is flushed, and that loop submits no GPU work, so every
+# released texture stays allocated: 33.2 MB per attempt at 3840x2160, an
+# attempt every ~2 s. Measured: +1,995 MB over 60 attempts without a flush,
+# one texture's worth with it. Reproduced live 2026-10-01 (592 MB -> 4.69 GB
+# private in about two minutes after the display turned off and locked).
+#
+# dxcam has no public hook for this, so the guard wraps two private
+# attributes. If a future dxcam renames them, the guard logs a WARNING and the
+# camera is still used; tests/test_dxcam_recovery_flush.py fails on the change.
+_RECOVERY_FLUSH_MARK = "_contextpulse_flush_after_release"
+
+
+def _install_recovery_flush(camera: object) -> bool:
+    """Make dxcam's recovery release flush the immediate context afterwards.
+
+    Returns True when the guard is in place (newly or already), False when the
+    camera lacks the expected internals. Never raises: a camera without the
+    guard still captures, it only keeps the leak.
+    """
+    recovery = getattr(camera, "_display_recovery", None)
+    device = getattr(camera, "_device", None)
+    release = getattr(recovery, "_release_resources", None)
+    context = getattr(device, "im_context", None)
+    if release is None or context is None or not hasattr(context, "Flush"):
+        logger.warning(
+            "dxcam recovery-leak guard NOT installed: camera %s lacks "
+            "_display_recovery._release_resources or _device.im_context.Flush "
+            "(dxcam internals changed?) -- a long display loss can grow memory "
+            "by one staging texture per recovery attempt",
+            type(camera).__name__,
+        )
+        return False
+    if getattr(release, _RECOVERY_FLUSH_MARK, False):
+        return True
+
+    try:
+        from comtypes import COMError as _com_error  # dxcam depends on comtypes
+    except ImportError:  # only reachable with a non-dxcam camera object (tests, other OSes)
+        _com_error = OSError
+
+    def _release_then_flush() -> None:
+        release()
+        try:
+            context.Flush()
+        except (OSError, _com_error) as exc:
+            logger.warning(
+                "dxcam recovery: Flush after release failed (%s); released "
+                "textures may stay allocated until the next flush",
+                exc,
+            )
+
+    setattr(_release_then_flush, _RECOVERY_FLUSH_MARK, True)
+    recovery._release_resources = _release_then_flush
+    logger.info("dxcam recovery-leak guard installed (flush after each recovery release)")
+    return True
+
+
+def _flush_after_failed_create(dxcam_module: object, device_idx: int = 0) -> bool:
+    """Flush the device a failed dxcam.create() used, so its texture is freed.
+
+    DXCamera builds a full-resolution staging texture before it creates the
+    duplicator, and releases it when the duplicator fails. D3D11 destroys a
+    released resource only when the context is flushed, so without this every
+    retried create would keep one texture (~33 MB at 4K). Returns False when
+    the flush cannot be reached; the caller must then stop retrying.
+    """
+    factory = vars(dxcam_module).get("__factory")
+    try:
+        context = factory.devices[device_idx].im_context
+        flush = context.Flush
+    except (AttributeError, IndexError, TypeError):
+        logger.warning(
+            "dxcam internals changed: cannot flush after a failed create -- not "
+            "retrying, a retry would keep one staging texture per attempt"
+        )
+        return False
+
+    try:
+        from comtypes import COMError as _com_error  # dxcam depends on comtypes
+    except ImportError:  # only reachable with a non-dxcam module (tests, other OSes)
+        _com_error = OSError
+    try:
+        flush()
+    except (OSError, _com_error) as exc:
+        logger.warning("dxcam: Flush after a failed create failed (%s) -- not retrying", exc)
+        return False
+    return True
+
+
 def _get_dxcam_camera(output_idx: int = 0) -> object | None:
     """Get or create a DXcam camera for the given monitor output index.
 
-    Returns None when dxcam cannot create a camera for this output (e.g.,
-    output_idx beyond the adapter's output list raises IndexError). The
-    None is cached so subsequent captures skip dxcam straight to mss
-    without spamming warnings.
+    Returns None when dxcam cannot create a camera for this output, and mss
+    handles the capture. An output beyond the adapter's list (IndexError) is
+    cached as None for good. Any other failure, typically the lock screen's
+    E_ACCESSDENIED, is retried every _DXCAM_RETRY_S seconds, flushing the
+    device after each failure so a retry cannot leak a staging texture.
     """
-    if output_idx not in _dxcam_cameras:
-        import dxcam
-        try:
-            _dxcam_cameras[output_idx] = dxcam.create(output_idx=output_idx, output_color="BGR")
-        except Exception as exc:
+    if output_idx in _dxcam_cameras:
+        return _dxcam_cameras[output_idx]
+    now = time.monotonic()
+    if now < _dxcam_retry_at.get(output_idx, now):
+        return None
+
+    if output_idx in _dxcam_parked:
+        camera, workers = _dxcam_parked[output_idx]
+        if any(w.is_alive() for w in workers):
+            _dxcam_retry_at[output_idx] = now + _DXCAM_RETRY_S
+            return None
+        del _dxcam_parked[output_idx]
+        _dxcam_retry_at.pop(output_idx, None)
+        if not getattr(camera, "is_released", False):
+            # Recreating would not help: dxcam's registry returns this same
+            # instance while it is alive and unreleased.
+            _dxcam_timeout_counts[output_idx] = 0
+            _dxcam_cameras[output_idx] = camera
+            logger.info("DXcam monitor %d: blocked grabs returned, camera restored", output_idx)
+            return camera
+        logger.info("DXcam monitor %d: parked camera was released, recreating", output_idx)
+
+    import dxcam
+    try:
+        camera = dxcam.create(output_idx=output_idx, output_color="BGR")
+    except IndexError as exc:
+        logger.info(
+            "DXcam output_idx=%d unavailable (%s) — caching None, mss will handle",
+            output_idx, exc,
+        )
+        _dxcam_cameras[output_idx] = None
+        return None
+    except Exception as exc:  # noqa: BLE001 -- dxcam raises COMError, RuntimeError, OSError
+        if not _flush_after_failed_create(dxcam):
             logger.info(
                 "DXcam output_idx=%d unavailable (%s) — caching None, mss will handle",
                 output_idx, exc,
             )
             _dxcam_cameras[output_idx] = None
-    return _dxcam_cameras[output_idx]
+            return None
+        log = logger.debug if output_idx in _dxcam_retry_at else logger.info
+        log(
+            "DXcam output_idx=%d unavailable (%s) — mss until retry in %.0f s",
+            output_idx, exc, _DXCAM_RETRY_S,
+        )
+        _dxcam_retry_at[output_idx] = now + _DXCAM_RETRY_S
+        return None
+
+    _dxcam_retry_at.pop(output_idx, None)
+    try:
+        _install_recovery_flush(camera)
+    except Exception:  # noqa: BLE001 -- the guard must never cost us the camera
+        logger.warning(
+            "dxcam recovery-leak guard raised while installing; camera kept without it",
+            exc_info=True,
+        )
+    _dxcam_cameras[output_idx] = camera
+    return camera
 
 
 def _dxcam_to_pil(frame: np.ndarray) -> Image.Image:

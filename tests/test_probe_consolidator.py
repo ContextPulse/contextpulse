@@ -540,3 +540,53 @@ class TestOperatorVisibleLine:
         out = capsys.readouterr().out
         assert "OK: 1 events -> 1 new facts" in out
         assert "quiet window" not in out
+
+
+class _FakeCompleted:
+    returncode = 0
+    stdout = "[]"
+    stderr = ""
+
+
+class TestModelIsPinned:
+    """cp-consolidator-pin-model.
+
+    call_claude launched ["claude", "-p"] with no --model, so the nightly job
+    ran on whatever ~/.claude/settings.json named -- which /model set to Fable
+    from about 2026-09-20 until the key was removed on 2026-09-30. A product
+    job must name its own model, not inherit a person's chat preference.
+    """
+
+    def test_call_claude_passes_the_pinned_model(self, consolidator):
+        with patch.object(consolidator.subprocess, "run", return_value=_FakeCompleted()) as run:
+            consolidator.call_claude("prompt")
+
+        argv = run.call_args.args[0]
+        assert argv[:2] == ["claude", "-p"]
+        assert "--model" in argv
+        assert argv[argv.index("--model") + 1] == consolidator.CONSOLIDATOR_MODEL
+
+    def test_call_claude_honours_an_explicit_model(self, consolidator):
+        with patch.object(consolidator.subprocess, "run", return_value=_FakeCompleted()) as run:
+            consolidator.call_claude("prompt", model="sonnet")
+
+        argv = run.call_args.args[0]
+        assert argv[argv.index("--model") + 1] == "sonnet"
+
+    def test_the_default_is_a_named_model_not_empty(self, consolidator):
+        assert consolidator.CONSOLIDATOR_MODEL
+        assert consolidator.CONSOLIDATOR_MODEL.strip() == consolidator.CONSOLIDATOR_MODEL
+
+    @pytest.mark.parametrize(
+        ("extra_argv", "expected"),
+        [((), None), (("--model", "sonnet"), "sonnet")],
+    )
+    def test_main_hands_the_model_to_call_claude(
+        self, consolidator, activity_db, probe_db, extra_argv, expected
+    ):
+        with patch.object(consolidator, "call_claude", return_value=("[]", 42.0)) as call:
+            rc = _run(consolidator, activity_db, probe_db, extra_argv)
+
+        assert rc == 0
+        want = expected or consolidator.CONSOLIDATOR_MODEL
+        assert call.call_args.kwargs["model"] == want

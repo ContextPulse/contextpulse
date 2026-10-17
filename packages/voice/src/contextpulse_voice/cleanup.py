@@ -182,6 +182,9 @@ def clean_with_llm(text: str, profile_context: str = "") -> str:
 
         context_section = ""
         if profile_context:
+            # The context (recent window titles, known terms) is never pasted
+            # back, so unlike the dictation it can be redacted and still sent.
+            profile_context = redact_sensitive(profile_context)
             context_section = (
                 f"\n\nContext (use for proper noun spelling): {profile_context}"
             )

@@ -76,8 +76,20 @@ MIN_PLAUSIBLE_ELAPSED_S = 15.0
 # from latency alone and the run is taken at face value.
 MIN_PROMPT_CHARS_FOR_FLOOR = 50_000
 
+# The model the extractor runs on, named here rather than inherited
+# (cp-consolidator-pin-model). With no --model, `claude -p` runs whatever
+# ~/.claude/settings.json names, which is a person's /model choice for chat:
+# it pointed at Fable from about 2026-09-20 to 2026-09-30, so this nightly job
+# silently moved to the most expensive tier. Opus is what it ran on from the
+# Phase 0 start (settings "opus[1m]", 2026-07-02) until then, so pinning it
+# keeps the extractor unchanged for most of the knowledge graph's history
+# while the save gate is still being measured. Overridable with --model.
+CONSOLIDATOR_MODEL = "opus"
 
-def call_claude(prompt: str, timeout: int = 600) -> tuple[str, float]:
+
+def call_claude(
+    prompt: str, timeout: int = 600, model: str = CONSOLIDATOR_MODEL
+) -> tuple[str, float]:
     """Invoke the Claude CLI headlessly. Return (stdout, elapsed_seconds). Fail loud.
 
     The prompt is piped via STDIN (not passed as an argv) — it can be tens of KB
@@ -93,7 +105,7 @@ def call_claude(prompt: str, timeout: int = 600) -> tuple[str, float]:
     """
     start = time.monotonic()
     proc = subprocess.run(
-        ["claude", "-p"],
+        ["claude", "-p", "--model", model],
         input=prompt,
         capture_output=True,
         text=True,
@@ -148,6 +160,11 @@ def main(argv: list[str] | None = None) -> int:
             f"(default: {MIN_PROMPT_CHARS_FOR_FLOOR})."
         ),
     )
+    ap.add_argument(
+        "--model",
+        default=CONSOLIDATOR_MODEL,
+        help=f"Model passed to the Claude CLI (default: {CONSOLIDATOR_MODEL}).",
+    )
     ap.add_argument("--dry-run", action="store_true", help="Print prompt, no LLM call")
     args = ap.parse_args(argv)
 
@@ -187,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         try:
             logger.info("Calling Claude CLI for extraction...")
-            output, elapsed = call_claude(prompt, timeout=args.timeout)
+            output, elapsed = call_claude(prompt, timeout=args.timeout, model=args.model)
         except Exception as exc:  # noqa: BLE001 — record then fail loud
             probe.record_run(pconn, events=len(events), facts=0, error=str(exc)[:300])
             logger.exception("Claude CLI call failed")

@@ -391,11 +391,17 @@ class TestBoundedGrab:
     @pytest.fixture(autouse=True)
     def _reset_module_state(self):
         import contextpulse_sight.capture as cap
-        cap._dxcam_cameras = {}
-        cap._dxcam_timeout_counts = {}
+
+        def _reset() -> None:
+            cap._dxcam_cameras = {}
+            cap._dxcam_timeout_counts = {}
+            cap._dxcam_retry_at = {}
+            cap._dxcam_parked = {}
+            cap._dxcam_grab_workers = {}
+
+        _reset()
         yield
-        cap._dxcam_cameras = {}
-        cap._dxcam_timeout_counts = {}
+        _reset()
 
     def test_fast_grab_returns_frame_and_resets_counter(self):
         from unittest.mock import MagicMock
@@ -454,7 +460,8 @@ class TestBoundedGrab:
             assert cap._dxcam_cameras[0] is camera, "evicted before threshold reached"
 
         cap._dxcam_grab_bounded(camera, 0)
-        assert cap._dxcam_cameras[0] is None, "not evicted after threshold reached"
+        assert cap._dxcam_cameras.get(0) is None, "not evicted after threshold reached"
+        assert cap._dxcam_parked[0][0] is camera, "evicted camera not parked for restore"
 
     def test_genuine_exception_propagates_unchanged(self):
         """A real dxcam exception (not a hang) must still propagate through
