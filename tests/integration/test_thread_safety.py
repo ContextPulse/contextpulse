@@ -110,7 +110,15 @@ class TestTailBufferLocation:
             "VoiceModule must have _stop_and_transcribe method for "
             "background tail buffer + transcription"
         )
+        # Brief mode (2026-10-16) moved the body into _stop_and_transcribe_inner
+        # so a try/finally can always release the brief flag; the delay still
+        # runs on the background worker, which is the property this guards.
+        # The check names the call itself: the old "sleep" substring also
+        # matched comments, so deleting the delay left this test green.
         source = inspect.getsource(VoiceModule._stop_and_transcribe)
-        assert "sleep" in source or "_TAIL_BUFFER_MS" in source, (
+        inner = getattr(VoiceModule, "_stop_and_transcribe_inner", None)
+        if inner is not None:
+            source += inspect.getsource(inner)
+        assert "time.sleep(self._TAIL_BUFFER_MS" in source, (
             "_stop_and_transcribe must apply the tail buffer delay"
         )
