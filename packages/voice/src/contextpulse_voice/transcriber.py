@@ -13,6 +13,8 @@ import logging
 import sys
 from abc import ABC, abstractmethod
 
+from contextpulse_core.redact import redact_sensitive
+
 logger = logging.getLogger(__name__)
 
 
@@ -185,7 +187,8 @@ class LocalTranscriber(Transcriber):
                         logger.warning(
                             "Dropped degenerate segment (mlx) compression_ratio=%.1f "
                             "exceeds '%s' profile threshold %.1f -- discarded: %r",
-                            cr, self._model_size, compression_ratio_threshold, t[:120],
+                            cr, self._model_size, compression_ratio_threshold,
+                            redact_sensitive(t)[:120],
                         )
                         continue
                     if t and (not parts or t != parts[-1]):
@@ -222,9 +225,9 @@ class LocalTranscriber(Transcriber):
             for seg in segments:
                 t = seg.text.strip()
                 logger.info(
-                    "Segment [%.1f-%.1fs] logprob=%.2f no_speech=%.2f cr=%.1f %r",
+                    "Segment [%.1f-%.1fs] logprob=%.2f no_speech=%.2f cr=%.1f %d chars",
                     seg.start, seg.end, seg.avg_logprob,
-                    seg.no_speech_prob, seg.compression_ratio, t[:60],
+                    seg.no_speech_prob, seg.compression_ratio, len(t),
                 )
                 if _segment_is_degenerate(seg.compression_ratio, compression_ratio_threshold):
                     dropped_segments += 1
@@ -232,7 +235,8 @@ class LocalTranscriber(Transcriber):
                         "Dropped degenerate segment [%.1f-%.1fs] compression_ratio=%.1f "
                         "exceeds '%s' profile threshold %.1f -- discarded: %r",
                         seg.start, seg.end, seg.compression_ratio,
-                        self._model_size, compression_ratio_threshold, t[:120],
+                        self._model_size, compression_ratio_threshold,
+                        redact_sensitive(t)[:120],
                     )
                     continue
                 if t and (not parts or t != parts[-1]):
@@ -240,10 +244,10 @@ class LocalTranscriber(Transcriber):
             text = " ".join(parts)
             text = " ".join(text.split())
             logger.info(
-                "Local transcription (%.1fs audio, lang=%s): %s",
+                "Local transcription (%.1fs audio, lang=%s): %d chars",
                 info.duration,
                 info.language,
-                text[:80],
+                len(text),
             )
             if dropped_segments:
                 logger.warning(

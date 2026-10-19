@@ -20,6 +20,7 @@ from contextpulse_core.clipboard_lock import (
     clipboard_lock,
     write_breadcrumb,
 )
+from contextpulse_core.redact import redacted_text_digest
 
 # Disable pyautogui's failsafe — it raises FailSafeException if mouse is at
 # (0,0) during hotkey(), which can crash the dictation pipeline.
@@ -118,7 +119,13 @@ def _focused_is_terminal() -> bool:
 
 _paste_lock = threading.Lock()
 _last_paste_time = 0.0
+# The hash this module EXPOSES (logs, return value, drop notifier, status) is
+# the redacted digest: a sha256 prefix of raw dictation is a preimage oracle
+# for a spoken SSN or card number (contextpulse_core.redact.redacted_text_digest).
+# Duplicate detection keeps a private raw-text key, because two different
+# secrets redact to the same text and must not be mistaken for a duplicate.
 _last_paste_hash = ""
+_last_paste_key = ""
 
 # One retry, at a longer timeout, before a paste is given up on. The first
 # 2s window can be lost to a single slow clipboard owner (a poll reading a
@@ -190,7 +197,7 @@ def paste_text(text: str) -> tuple[float, str]:
     - write() is slow and doesn't handle unicode well
     - Ctrl+V works in virtually every app
     """
-    global _last_paste_time, _last_paste_hash
+    global _last_paste_time, _last_paste_hash, _last_paste_key
 
     text = text.strip()
     if not text:
@@ -207,12 +214,13 @@ def paste_text(text: str) -> tuple[float, str]:
             logger.warning("Paste too soon after last paste (%.2fs) — skipping", now - _last_paste_time)
             return (0.0, "")
 
-        text_hash = hashlib.sha256(text.encode()).hexdigest()[:16]
+        text_hash = redacted_text_digest(text)
+        dedup_key = hashlib.sha256(text.encode()).hexdigest()  # never logged or returned
 
         # Content dedup: reject pasting the exact same text twice in a row.
         # Protects against duplicate transcribe threads pasting the same
         # result even when they finish more than 1s apart.
-        if text_hash == _last_paste_hash and now - _last_paste_time < 10.0:
+        if dedup_key == _last_paste_key and now - _last_paste_time < 10.0:
             logger.warning(
                 "Duplicate paste content (hash=%s, %.1fs ago) — skipping",
                 text_hash, now - _last_paste_time,
@@ -265,6 +273,7 @@ def paste_text(text: str) -> tuple[float, str]:
             _phase("paste_hotkey_exit")
             _last_paste_time = time.time()
             _last_paste_hash = text_hash
+            _last_paste_key = dedup_key
             logger.info("Pasted %d characters (hash=%s)", len(text), text_hash)
 
             time.sleep(0.5)
