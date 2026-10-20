@@ -113,10 +113,10 @@ class TestModuleLifecycle:
         )
 
     def test_voice_start_sets_running(self):
-        """start() must set _running = True."""
+        """start() must set _running = True (its body lives in _start_inner)."""
         from contextpulse_voice.voice_module import VoiceModule
 
-        source = inspect.getsource(VoiceModule.start)
+        source = inspect.getsource(VoiceModule.start) + inspect.getsource(VoiceModule._start_inner)
         assert "_running = True" in source
 
     def test_voice_stop_clears_running(self):

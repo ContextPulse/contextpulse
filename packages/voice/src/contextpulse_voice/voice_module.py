@@ -69,6 +69,12 @@ class VoiceModule(ModalityModule):
     def __init__(self, model_size: str | None = None) -> None:
         self._callback: Callable[[ContextEvent], None] | None = None
         self._running = False
+        # True from the top of start() until it returns or raises. start()
+        # loads the Whisper model before _running goes True, which can take
+        # longer than the daemon watchdog's 15 s tick; is_starting() is how
+        # the watchdog tells "still loading" from "died".
+        self._starting = False
+        self._start_lock = threading.Lock()
         self._events_emitted = 0
         self._last_timestamp: float | None = None
         self._error: str | None = None
@@ -134,10 +140,21 @@ class VoiceModule(ModalityModule):
         self._callback = event_callback
 
     def start(self) -> None:
-        """Initialize recorder and transcriber, start hotkey listener."""
-        if self._running:
-            return
+        """Initialize recorder and transcriber, start hotkey listener.
 
+        A call that lands while another start() is still loading returns at
+        once, so one module never starts two keyboard listeners.
+        """
+        with self._start_lock:
+            if self._running or self._starting:
+                return
+            self._starting = True
+        try:
+            self._start_inner()
+        finally:
+            self._starting = False
+
+    def _start_inner(self) -> None:
         self._recorder = Recorder()
         # Warm up PortAudio device so the first hotkey press isn't delayed
         # by 100-500ms of WASAPI initialization (which would happen on the
@@ -206,6 +223,10 @@ class VoiceModule(ModalityModule):
         # voice=OFF tray status. _running is set True by start() and False only
         # by stop() or a genuine exception, so it is the reliable source of truth.
         return self._running
+
+    def is_starting(self) -> bool:
+        """True while start() is still running (model load in progress)."""
+        return self._starting
 
     def get_status(self) -> dict[str, Any]:
         return {

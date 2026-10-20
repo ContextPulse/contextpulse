@@ -623,7 +623,12 @@ class ContextPulseDaemon:
         heartbeat_path = OUTPUT_DIR / "heartbeat"
         logger.info("Daemon watchdog started (monitoring Voice + Touch + heartbeat + stuck-pause)")
 
+        # A first-run model download (frozen EXE) can take minutes; a normal
+        # load takes 6-50 s in the 10-2026 log.
+        VOICE_START_STALL_SECONDS = 600
         tick = 0
+        voice_starting_since: float | None = None
+        voice_stall_reported = False
         while not self.stop_event.is_set():
             self.stop_event.wait(15)  # check every 15 seconds
             if self.stop_event.is_set():
@@ -669,8 +674,32 @@ class ContextPulseDaemon:
             else:
                 self._pause_detected_at = None  # type: ignore[attr-defined]
 
-            # Voice watchdog
-            if self._voice_module and not self._voice_module.is_alive():
+            # Voice watchdog. A module still inside start() (loading Whisper)
+            # is not dead: replacing it left the first one running too, and
+            # both started a hotkey listener (2 of 29 starts in the 10-2026 log).
+            voice_starting = (
+                self._voice_module is not None
+                and getattr(self._voice_module, "is_starting", lambda: False)() is True
+            )
+            if not voice_starting:
+                voice_starting_since = None
+                voice_stall_reported = False
+            elif voice_starting_since is None:
+                voice_starting_since = time.time()
+                logger.info("Voice module still starting (model loading) — watchdog waiting")
+            elif (not voice_stall_reported
+                  and time.time() - voice_starting_since > VOICE_START_STALL_SECONDS):
+                # Not restarted: a second module would load beside the stuck
+                # one. Say so instead of waiting in silence.
+                voice_stall_reported = True
+                logger.error("Voice module still starting after %ds — start appears stuck; "
+                             "restart ContextPulse to recover dictation",
+                             VOICE_START_STALL_SECONDS)
+                self._notify_tray(
+                    "Voice is not starting",
+                    "Dictation has been loading for over 10 minutes. Restart ContextPulse."
+                )
+            if not voice_starting and self._voice_module and not self._voice_module.is_alive():
                 count = self._restart_counts.get("voice", 0)
                 if count < MAX_RESTARTS:
                     logger.warning("Voice module died — restarting (attempt %d/%d)",
