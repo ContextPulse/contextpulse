@@ -103,3 +103,26 @@ its own close comment. And `versioning-strategy: widen` is **not valid for pip**
 value makes Dependabot reject the *entire file*, silently disabling every other setting in it.
 
 **Archived:** 2026-09-19 (trim-lessons.py) — **VERIFIED encoded** in `developing-python` SKILL.md, marked at line 836 by its `<!-- lesson: -->` stamp.
+
+### [2026-07-07] A green conformance suite on a spec-built referee is not proof of correctness
+**Original lesson:** **Context:** The Phase 1 KG-spine's bi-temporal referee (`cp_core.py`) shipped with
+14 conformance vectors, all green.
+
+**Problem:** A held adversarial audit constructing inputs the vectors didn't cover
+found 3 CRITICAL + 5 MAJOR bugs the green suite was structurally blind to — the
+vectors were derived from the same spec that produced the code, so passing them only
+proved internal consistency with that spec, not correctness against unvectored
+inputs.
+
+**Fix/Pattern:** For any spec-built pure-logic core (a referee, a risk gate, a
+scoring/fusion engine), a green sampled-test suite is necessary but never sufficient.
+Run a separate adversarial pass constructing inputs the tests don't cover, trace by
+hand, and turn every confirmed repro into a permanent regression vector. See
+`feedback_conformance_green_not_correct` and `implementing-features`'s Phase 5c
+(Adversarial Review).
+
+<!-- Add lessons below this line -->
+
+---
+
+**Archived:** 2026-10-19 (trim-lessons.py) — **VERIFIED encoded** in `implementing-features` SKILL.md, marked at line 783 by its `<!-- lesson: -->` stamp.
