@@ -267,18 +267,34 @@ class TestUnaffectedPaths:
         assert error is not None and "boom" in error
 
 
-def _pad_to(activity_db, total: int) -> None:
-    """Grow the fixture DB to `total` events so len(events) matches the incident."""
+def _pad_to(activity_db, total: int, text: str = "") -> None:
+    """Grow the fixture DB to `total` events so len(events) matches the incident.
+
+    `text` is each padded event's OCR text. Empty gives a ~52-char prompt line
+    per event (1500 events ~ 78K chars); the incident's prompt was ~316KB, so
+    tests of the large-prompt floor pass _INCIDENT_TEXT.
+    """
+    payload = json.dumps({"ocr_text": text}) if text else "{}"
     conn = sqlite3.connect(str(activity_db))
     conn.executemany(
         "INSERT INTO events VALUES (?, ?, ?, ?, ?, ?, ?)",
         [
-            (f"e{i}", 9_999_999_999.0 - i, "sight", "screenshot", "App", "Win", "{}")
+            (f"e{i}", 9_999_999_999.0 - i, "sight", "screenshot", "App", "Win", payload)
             for i in range(1, total)
         ],
     )
     conn.commit()
     conn.close()
+
+
+# ~150 chars of ordinary screen text per event: 1500 events build a ~300K-char
+# prompt, the size of the 2026-09-19 incident (316KB) the 15s floor was
+# measured on.
+_INCIDENT_TEXT = "Inbox (12) - Mail - Calendar - Today 3 meetings - Project status review " * 2
+
+
+def _pad_to_incident(activity_db) -> None:
+    _pad_to(activity_db, 1500, text=_INCIDENT_TEXT)
 
 
 class _PromptRecorder:
@@ -336,7 +352,7 @@ class TestFastEmptyIsAFault:
         with error=None — a silent zero-fact run reported as success. That is
         what makes this test worth writing.
         """
-        _pad_to(activity_db, 1500)
+        _pad_to_incident(activity_db)
         recorder = _PromptRecorder("[]", 6.4)
 
         with patch.object(consolidator, "call_claude", recorder):
@@ -346,7 +362,7 @@ class TestFastEmptyIsAFault:
             "the fixture must build a prompt big enough for the floor to apply, "
             f"got {recorder.prompt_chars} chars"
         )
-        assert rc == 1, "a 78KB prompt answered [] in 6.4s was never read"
+        assert rc == 1, "an incident-sized (~300K) prompt answered [] in 6.4s was never read"
         [(events, facts, error, elapsed_s)] = _probe_runs_rows(probe_db)
         assert events == 1500
         assert facts == 0
@@ -357,7 +373,7 @@ class TestFastEmptyIsAFault:
     def test_raw_output_is_logged_at_error(self, consolidator, activity_db, probe_db, caplog):
         import logging
 
-        _pad_to(activity_db, 1500)
+        _pad_to_incident(activity_db)
 
         with caplog.at_level(logging.ERROR, logger="probe.consolidator"):
             with patch.object(consolidator, "call_claude", return_value=("[]", 6.4)):
@@ -369,14 +385,15 @@ class TestFastEmptyIsAFault:
         message = errors[0].getMessage()
         assert "6.4" in message
         assert "15.0" in message  # the floor it was measured against
-        assert "50000" in message  # and the prompt size that made it apply
+        # and the prompt-size threshold that made it apply
+        assert str(consolidator.MIN_PROMPT_CHARS_FOR_FLOOR) in message
         assert "'[]'" in message  # the raw output, so the next failure names itself
 
     def test_slow_empty_array_is_still_a_quiet_window(
         self, consolidator, activity_db, probe_db
     ):
         """The guard must not cry wolf on the case it was built to protect."""
-        _pad_to(activity_db, 1500)
+        _pad_to_incident(activity_db)
 
         with patch.object(consolidator, "call_claude", return_value=("[]", 45.0)):
             rc = _run(consolidator, activity_db, probe_db, extra_argv=["--limit", "1500"])
@@ -407,7 +424,7 @@ class TestFastEmptyIsAFault:
     def test_floor_is_inclusive_at_or_above(
         self, consolidator, activity_db, probe_db, elapsed, expected_exit
     ):
-        _pad_to(activity_db, 1500)
+        _pad_to_incident(activity_db)
 
         with patch.object(consolidator, "call_claude", return_value=("[]", elapsed)):
             rc = _run(consolidator, activity_db, probe_db, extra_argv=["--limit", "1500"])
@@ -416,7 +433,7 @@ class TestFastEmptyIsAFault:
 
     def test_floor_is_overridable(self, consolidator, activity_db, probe_db):
         """The floor is a property of THIS prompt size and model; both change."""
-        _pad_to(activity_db, 1500)
+        _pad_to_incident(activity_db)
 
         with patch.object(consolidator, "call_claude", return_value=("[]", 6.4)):
             rc = _run(
@@ -428,7 +445,7 @@ class TestFastEmptyIsAFault:
         assert rc == 0
 
     def test_floor_can_be_disabled(self, consolidator, activity_db, probe_db):
-        _pad_to(activity_db, 1500)
+        _pad_to_incident(activity_db)
 
         with patch.object(consolidator, "call_claude", return_value=("[]", 0.1)):
             rc = _run(
@@ -506,6 +523,86 @@ class TestSmallPromptIsExemptFromTheFloor:
         assert rc == 1
         [(_events, _facts, error, _elapsed)] = _probe_runs_rows(probe_db)
         assert error is not None and "implausibly fast" in error
+
+
+def _pad_to_prompt_chars(activity_db, n_events: int, target_chars: int) -> None:
+    """Pad to `n_events` with OCR text sized so the prompt is ~target_chars."""
+    header = len(probe.build_extraction_prompt([])) - len("(no events in window)")
+    line_prefix = len("[e1] ts=9999999998.0 sight app='App' win='Win' :: ") + 1  # + newline
+    per_event = (target_chars - header) // n_events
+    text_len = per_event - line_prefix
+    _pad_to(activity_db, n_events, text=("screen text " * (text_len // 12 + 1))[:text_len].strip())
+
+
+class TestMidSizePromptQuietWindowIsNotAFault:
+    """The three faults probe_runs recorded on 2026-10-19 and 2026-10-20.
+
+    Runs 409, 410 and 414 each read a 6 h window of screen OCR only, built a
+    56-86K-char prompt (above the old 50,000-char gate) and got `[]` back in
+    9-12 s, so each was recorded as "empty result returned implausibly fast"
+    and exited 1. Replaying runs 409 and 414 with the identical prompt
+    (Cooper, 2026-10-21) returned `[]` again (409 once, in 9.1 s; 414 twice,
+    in 11.8 s and 10.4 s), while
+    a fact-rich 305K-char window replayed in the same session returned 13 facts
+    in 72 s. They were quiet windows. The 15 s floor was measured on ~316KB
+    prompts; it does not describe a prompt a quarter of that size.
+    """
+
+    @pytest.mark.parametrize(
+        ("n_events", "prompt_chars", "elapsed"),
+        [(194, 85_847, 8.9), (190, 84_982, 11.9), (128, 56_530, 11.3)],
+        ids=["run-409", "run-410", "run-414"],
+    )
+    def test_the_recorded_false_faults_are_quiet_windows(
+        self, consolidator, activity_db, probe_db, n_events, prompt_chars, elapsed
+    ):
+        _pad_to_prompt_chars(activity_db, n_events, prompt_chars)
+        recorder = _PromptRecorder("[]", elapsed)
+
+        with patch.object(consolidator, "call_claude", recorder):
+            rc = _run(consolidator, activity_db, probe_db)
+
+        assert recorder.prompt_chars == pytest.approx(prompt_chars, rel=0.03), (
+            "the fixture must reproduce the recorded prompt size"
+        )
+        assert rc == 0
+        [(events, facts, error, _elapsed)] = _probe_runs_rows(probe_db)
+        assert (events, facts, error) == (n_events, 0, None)
+
+    @pytest.mark.parametrize(
+        ("prompt_chars", "expected_exit"),
+        [(140_000, 0), (160_000, 1)],
+        ids=["just-below-150K-exempt", "just-above-150K-fault"],
+    )
+    def test_the_gate_sits_at_150k(
+        self, consolidator, activity_db, probe_db, prompt_chars, expected_exit
+    ):
+        """Pins the measured threshold: the mid-size tests pass for any value above 86K."""
+        _pad_to_prompt_chars(activity_db, 1000, prompt_chars)
+        recorder = _PromptRecorder("[]", 9.0)
+
+        with patch.object(consolidator, "call_claude", recorder):
+            rc = _run(consolidator, activity_db, probe_db, extra_argv=["--limit", "1500"])
+
+        assert recorder.prompt_chars == pytest.approx(prompt_chars, rel=0.03)
+        assert rc == expected_exit
+
+    def test_the_log_names_the_prompt_size_of_every_run(
+        self, consolidator, activity_db, probe_db, caplog
+    ):
+        """probe_runs does not store prompt size, so calibrating this floor
+        meant rebuilding 100+ past prompts from activity.db. The log line
+        makes the next calibration a grep."""
+        import logging
+
+        recorder = _PromptRecorder("[]", 4.2)
+        with caplog.at_level(logging.INFO, logger="probe.consolidator"):
+            with patch.object(consolidator, "call_claude", recorder):
+                assert _run(consolidator, activity_db, probe_db) == 0
+
+        assert any(
+            f"{recorder.prompt_chars}-char prompt" in r.getMessage() for r in caplog.records
+        )
 
 
 class TestOperatorVisibleLine:

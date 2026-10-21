@@ -46,12 +46,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger("probe.consolidator")
 
-# Below this many seconds, an events>0 run did not read its prompt, whatever
-# its output looked like. Measured over every run in
-# logs/probe_consolidator.log: the eleven zero-fact runs on non-empty windows
-# cluster at 5.1-7.7s, and every fact-producing run at 31.8-63.7s -- disjoint
-# bands, >4x apart, with no sample between them. 15s sits in the empty middle
-# (~1.9x above the fast band's ceiling, ~2.1x below the slow band's floor).
+# Below this many seconds, an events>0 run on a LARGE prompt did not read it,
+# whatever its output looked like. Measured 2026-09-19 over the ~316KB
+# (1500-event) runs in logs/probe_consolidator.log: the eleven zero-fact runs
+# clustered at 5.1-7.7s and the fact-producing ones at 31.8-63.7s. That was a
+# property of prompts that size only. Across every timed run to 2026-10-21,
+# fact-producing runs on smaller prompts finished in as little as 10.8s and
+# quiet windows in 6.6-22.5s, so the 15s floor is only meaningful above
+# MIN_PROMPT_CHARS_FOR_FLOOR below.
 #
 # This closes the one case the ParseOutcome work could not: a usage-limit or
 # quota reply that happens to be a well-formed empty array parses as EMPTY,
@@ -70,11 +72,25 @@ MIN_PLAUSIBLE_ELAPSED_S = 15.0
 # the defect this whole change exists to fix, and the fastest way to train the
 # signal to be ignored. So gate on the thing the 15s was measured against.
 #
-# 50,000 chars is ~1/6th of the 316KB prompt whose answer took 42-64s. A
-# prompt at or above it is large enough that a single-digit-second reply
-# cannot have involved reading it; below it, no honest inference is available
-# from latency alone and the run is taken at face value.
-MIN_PROMPT_CHARS_FOR_FLOOR = 50_000
+# 150,000 chars, MEASURED 2026-10-21 (it was 50,000, chosen by ratio). Every
+# timed run's prompt was rebuilt from activity.db and set beside its latency:
+# - Quiet windows of 49-86K chars answered [] in 8.9-22.5s. Three of them
+#   (runs 409, 410, 414: 56-86K, 8.9-11.9s) were recorded as faults under the
+#   old gate. Replaying 409 and 414 with the identical prompt returned [] in
+#   9.1-11.8s, while a fact-rich 305K window replayed alongside returned 13
+#   facts in 72s, so they were quiet windows, not failures.
+# - No run above 86K has ever returned [], and the fastest real read above
+#   150K took 16.6s (245K chars), still above the 15s floor.
+# - The real faults the floor exists for were 1500-event / ~316KB prompts
+#   answered in 5.1-7.7s.
+# 150K is ~1.7x the largest quiet window seen and ~2x below the incident
+# size. The log names every run's prompt size so this can be re-measured with
+# a grep instead of a rebuild.
+# The cost, stated: a genuine fast non-answer on a 50-150K prompt is now
+# taken as a quiet window, as one on a <50K prompt always was. The margin
+# above is also thin (16.6s against 15s), and there is no quiet-window sample
+# above 86K, so a false fault above 150K remains possible.
+MIN_PROMPT_CHARS_FOR_FLOOR = 150_000
 
 # The model the extractor runs on, named here rather than inherited
 # (cp-consolidator-pin-model). With no --model, `claude -p` runs whatever
@@ -190,6 +206,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     prompt = probe.build_extraction_prompt(events)
+    logger.info("Built a %d-char prompt from %d events", len(prompt), len(events))
 
     if args.dry_run:
         print(prompt)
