@@ -108,10 +108,19 @@ def facts_about(entity: str) -> str:
     try:
         hits = probe.query_facts_about(conn, entity)
         _record_usage_safe(conn, "facts_about", entity, len(hits))
+        total = 0 if hits else probe.count_facts(conn)
     finally:
         conn.close()
     if not hits:
-        return f"No probe facts about '{entity}' yet. (Phase 0 probe DB may be empty until the nightly consolidator has run.)"
+        if total == 0:
+            return (
+                f"No probe facts about '{entity}': the probe store holds no facts yet "
+                "(the consolidator has not written any)."
+            )
+        return (
+            f"No probe facts about '{entity}': none of the {total} consolidated facts "
+            "names it as an entity or mentions it in its text."
+        )
     return f"Facts about '{entity}':\n{_fmt_facts(hits)}"
 
 

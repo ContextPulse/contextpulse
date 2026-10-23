@@ -319,13 +319,28 @@ def _row_to_fact(row: sqlite3.Row) -> dict[str, Any]:
 def query_facts_about(
     conn: sqlite3.Connection, entity: str, limit: int = 50
 ) -> list[dict[str, Any]]:
-    """Entity recall: facts whose entity contains ``entity`` (case-insensitive)."""
+    """Entity recall: facts whose entity, or failing that whose text, contains ``entity``.
+
+    Case-insensitive substring match. Facts whose ENTITY matches come first
+    (newest, then most confident); facts that only mention the subject in their
+    text follow in the same order. ``limit`` caps the combined list. The text
+    half exists because the consolidator files a fact under whatever entity the
+    window was about, so a subject a person asks about is often a word inside a
+    fact filed elsewhere (live miss, 2026-10-22: a subject found only in another entity's fact text).
+    """
+    pattern = f"%{entity}%"
     rows = conn.execute(
-        "SELECT * FROM facts WHERE entity LIKE ? COLLATE NOCASE"
-        " ORDER BY valid_from DESC, confidence DESC LIMIT ?",
-        (f"%{entity}%", limit),
+        "SELECT * FROM facts WHERE entity LIKE ? COLLATE NOCASE OR fact LIKE ? COLLATE NOCASE"
+        " ORDER BY CASE WHEN entity LIKE ? COLLATE NOCASE THEN 0 ELSE 1 END,"
+        " valid_from DESC, confidence DESC LIMIT ?",
+        (pattern, pattern, pattern, limit),
     ).fetchall()
     return [_row_to_fact(r) for r in rows]
+
+
+def count_facts(conn: sqlite3.Connection) -> int:
+    """Total facts in probe.db, so a miss can say how much was searched."""
+    return int(conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0])
 
 
 def query_context_at(

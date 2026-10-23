@@ -75,6 +75,49 @@ def test_query_facts_about_empty_when_no_match(tmp_path):
     assert probe.query_facts_about(conn, "Nonexistent") == []
 
 
+# The live miss this covers (probe.db tool_usage, 2026-10-22): facts_about("solar")
+# returned nothing while the store held a fact that mentioned solar under a
+# different entity. The subject a person asks about is often a word inside a fact filed
+# under a different entity.
+
+
+def test_query_facts_about_matches_fact_text_when_entity_does_not(tmp_path):
+    conn = probe.connect_probe(tmp_path / "probe.db")
+    probe.write_facts(conn, [_fact("Home projects", "rooftop solar quote expired", 1.0)])
+    hits = probe.query_facts_about(conn, "Solar")
+    assert [h["entity"] for h in hits] == ["Home projects"]
+
+
+def test_query_facts_about_ranks_entity_matches_before_text_matches(tmp_path):
+    conn = probe.connect_probe(tmp_path / "probe.db")
+    probe.write_facts(
+        conn,
+        [
+            _fact("Notes", "mentions Solar in passing", 900.0),  # newer, text-only
+            _fact("Solar panels", "quote received", 100.0),  # older, entity match
+        ],
+    )
+    hits = probe.query_facts_about(conn, "solar")
+    assert [h["entity"] for h in hits] == ["Solar panels", "Notes"]
+
+
+def test_query_facts_about_returns_a_fact_once_when_entity_and_text_both_match(tmp_path):
+    conn = probe.connect_probe(tmp_path / "probe.db")
+    probe.write_facts(conn, [_fact("Solar", "solar quote received", 1.0)])
+    assert len(probe.query_facts_about(conn, "solar")) == 1
+
+
+def test_query_facts_about_limit_counts_both_kinds(tmp_path):
+    conn = probe.connect_probe(tmp_path / "probe.db")
+    probe.write_facts(
+        conn,
+        [_fact("Solar", f"entity fact {i}", float(i)) for i in range(3)]
+        + [_fact("Other", f"solar text fact {i}", float(i)) for i in range(3)],
+    )
+    hits = probe.query_facts_about(conn, "solar", limit=4)
+    assert [h["entity"] for h in hits] == ["Solar", "Solar", "Solar", "Other"]
+
+
 # ── temporal recall (context_at) ────────────────────────────────────
 
 
