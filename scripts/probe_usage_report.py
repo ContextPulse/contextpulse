@@ -102,6 +102,8 @@ def format_report(
     probe_db: Path,
     since: str | None = None,
     since_ts: float | None = None,
+    min_calls: int = 20,
+    min_saves: int = 3,
 ) -> str:
     if since is None:
         window = "  Window:                all time (no --since)"
@@ -129,15 +131,37 @@ def format_report(
     else:
         lines.append(f"  Confirmed saves (journal, category=phase0-save): {saves}")
     lines.append("")
-    if summary["total_calls"] == 0:
+    calls = summary["total_calls"]
+    if calls == 0:
         lines.append(
             "  READ: zero tool calls recorded -- a 0 save count here means "
             "'nothing was watching', not 'no value'. The tools have never been used."
         )
-    elif saves == 0:
+    elif calls < min_calls:
+        # Stage 1 of the 2026-09-19 gate is a PRECONDITION: below it the
+        # routing is still broken, so no save count says anything about the
+        # knowledge graph. Calling this zero "meaningful" is the error the gate
+        # was rebuilt to stop.
         lines.append(
-            f"  READ: {summary['total_calls']} real tool call(s) recorded, 0 confirmed "
-            "saves -- this 0 is now meaningful: the instrument WAS watching."
+            f"  READ: STAGE 1 NOT MET -- {calls} of {min_calls} tool calls in the window. "
+            "The tools are still not being reached; fix routing. The save count is "
+            "no verdict on the knowledge graph."
+        )
+    elif saves is None:
+        lines.append(
+            f"  READ: STAGE 1 MET ({calls} tool calls). STAGE 2 COULD NOT BE READ: "
+            "the journal was unreachable."
+        )
+    elif saves >= min_saves:
+        lines.append(
+            f"  READ: STAGE 1 MET ({calls} tool calls) and STAGE 2 MET "
+            f"({saves} of {min_saves} confirmed saves)."
+        )
+    else:
+        lines.append(
+            f"  READ: STAGE 1 MET ({calls} tool calls), {saves} of {min_saves} confirmed "
+            "saves -- this count is meaningful: the tools were used and the "
+            "instrument WAS watching."
         )
     return "\n".join(lines)
 
@@ -148,6 +172,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--since", default="2026-07-07",
                 help="Inclusive UTC date filtering BOTH halves: confirmed saves and tool calls")
     ap.add_argument("--project", default="ContextPulse")
+    ap.add_argument("--min-calls", type=int, default=20,
+                    help="Stage 1 precondition: tool calls the window needs (2026-09-19 gate)")
+    ap.add_argument("--min-saves", type=int, default=3,
+                    help="Stage 2: confirmed saves the window needs (2026-09-19 gate)")
     args = ap.parse_args(argv)
 
     db_path = Path(args.probe_db) if args.probe_db else probe.default_probe_db()
@@ -166,7 +194,8 @@ def main(argv: list[str] | None = None) -> int:
         conn.close()
 
     saves = confirmed_save_count(project=args.project, since=args.since)
-    print(format_report(summary, saves, db_path, since=args.since, since_ts=since_ts))
+    print(format_report(summary, saves, db_path, since=args.since, since_ts=since_ts,
+                        min_calls=args.min_calls, min_saves=args.min_saves))
     return 0
 
 

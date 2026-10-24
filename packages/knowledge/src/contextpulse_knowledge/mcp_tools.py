@@ -19,10 +19,12 @@ opens the store read-side and closes it — Phase-1 dogfood scale, mirrors probe
 
 from __future__ import annotations
 
+import logging
 import os
 import time as _time
 from datetime import datetime
 
+from contextpulse_core import probe
 from contextpulse_core.redact import redact_sensitive
 from mcp.server.fastmcp import FastMCP
 
@@ -31,6 +33,28 @@ from contextpulse_knowledge.cp_core import Fact
 from contextpulse_knowledge.store_sqlite import KnowledgeStore
 
 mcp_app = FastMCP("ContextPulse Knowledge")
+
+logger = logging.getLogger(__name__)
+
+
+def _record_usage(tool: str, query: str, hit_count: int) -> None:
+    """Count one real recall call in probe.db's ``tool_usage`` table.
+
+    These tools replace the probe's ``facts_about`` / ``context_at`` when
+    ``knowledge_enabled`` is on, and the Phase 0 gate (``probe_usage_report.py``)
+    reads only that table. Without this the counter reads 0 from the day the
+    switch flips and the report blames routing for calls that did happen.
+    Same contract as ``probe_mcp._record_usage_safe``: instrumentation never
+    breaks the tool it observes, so a failure is logged and swallowed.
+    """
+    try:
+        conn = probe.connect_probe(probe.default_probe_db())
+        try:
+            probe.record_usage(conn, tool, query, hit_count)
+        finally:
+            conn.close()
+    except Exception:
+        logger.exception("knowledge usage logging failed for tool=%s (recall unaffected)", tool)
 
 
 # ── formatting helpers (store works in ms; humans read dates) ────────
@@ -128,11 +152,13 @@ def facts_about(subject: str) -> str:
     """
     store = _open_store()
     if store is None:
+        _record_usage("facts_about", subject, 0)
         return _NOT_BUILT
     try:
         facts = store.facts_about(subject)
     finally:
         store.close()
+    _record_usage("facts_about", subject, len(facts))
     if not facts:
         return f"No knowledge-graph facts about '{subject}'."
     body = "\n".join(_fmt_fact(f) for f in facts)
@@ -155,8 +181,10 @@ def context_at(when: str, window_minutes: int = 15) -> str:
     t = _parse_when_ms(when)
     if t is None:
         return f"Could not parse time '{when}'. Use 'now', a unix timestamp, or 'YYYY-MM-DD HH:MM'."
+    usage_query = f"{when} +/-{window_minutes}min"
     store = _open_store()
     if store is None:
+        _record_usage("context_at", usage_query, 0)
         return _NOT_BUILT
     try:
         ctx = store.context_at(t, window_ms=window_minutes * 60_000)
@@ -164,6 +192,7 @@ def context_at(when: str, window_minutes: int = 15) -> str:
         store.close()
 
     facts = ctx.get("facts") or []
+    _record_usage("context_at", usage_query, len(facts))
     if not facts:
         return f"No knowledge-graph context around {_fmt_ms(t)}."
 

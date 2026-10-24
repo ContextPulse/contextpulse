@@ -62,7 +62,7 @@ updates:
       - dependency-name: "mcp[cli]"
         versions: [">=2.0.0"]
       - dependency-name: "anthropic"
-        versions: [">=1.0.0"]
+        versions: [">=2.0.0"]
     groups:
       # One PR per batch instead of one per manifest. Without this, a shared
       # dependency bumped across the workspace opens a near-identical PR for

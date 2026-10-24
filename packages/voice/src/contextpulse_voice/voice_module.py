@@ -25,8 +25,9 @@ from contextpulse_core.spine import (
 )
 from pynput import keyboard as kb
 
+from contextpulse_voice.brief import BriefOutcome, make_brief
 from contextpulse_voice.cleanup import clean
-from contextpulse_voice.config import get_voice_config, has_api_key
+from contextpulse_voice.config import get_api_key, get_voice_config, has_api_key
 from contextpulse_voice.paster import paste_text, set_drop_notifier
 from contextpulse_voice.recorder import Recorder
 from contextpulse_voice.vocabulary import apply_punctuation, apply_vocabulary
@@ -68,6 +69,12 @@ class VoiceModule(ModalityModule):
     def __init__(self, model_size: str | None = None) -> None:
         self._callback: Callable[[ContextEvent], None] | None = None
         self._running = False
+        # True from the top of start() until it returns or raises. start()
+        # loads the Whisper model before _running goes True, which can take
+        # longer than the daemon watchdog's 15 s tick; is_starting() is how
+        # the watchdog tells "still loading" from "died".
+        self._starting = False
+        self._start_lock = threading.Lock()
         self._events_emitted = 0
         self._last_timestamp: float | None = None
         self._error: str | None = None
@@ -96,6 +103,15 @@ class VoiceModule(ModalityModule):
         # independently; this flag is what prevents it from ever having to.
         self._recorder_busy = False
         self._fixing = False
+        # Brief mode. True from the brief hotkey press until the brief is
+        # pasted (or the attempt is abandoned). While it is set, no dictation,
+        # Fix-last or second brief may start: a brief takes 11-16 s, and a
+        # dictation pasted in that window would interleave with it.
+        self._briefing = False
+        # Which hotkey the current recording belongs to, so its release is
+        # judged against the right key set: "dictation" or "brief".
+        self._record_mode = "dictation"
+        self._last_brief: dict[str, Any] | None = None
         self._pressed_keys: set = set()
         self._last_wav_bytes: bytes | None = None
 
@@ -104,6 +120,11 @@ class VoiceModule(ModalityModule):
         self._model_size = model_size or cfg["whisper_model"]
         self._hotkey_keys = _parse_hotkey(cfg["hotkey"])
         self._fix_hotkey_keys = _parse_hotkey(cfg["fix_hotkey"])
+        # An empty or absent brief hotkey switches brief mode off. .get() is
+        # deliberate: the key is optional, and "off" is the correct reading of
+        # its absence, not a silent zero.
+        brief_hotkey = cfg.get("brief_hotkey") or ""
+        self._brief_hotkey_keys = _parse_hotkey(brief_hotkey) if brief_hotkey.strip() else set()
         # always_use_llm is deliberately NOT cached here. Unlike the model
         # (loaded from disk) and the hotkeys (bound into a pynput listener),
         # it is a per-dictation branch, so caching it at construction made the
@@ -119,10 +140,21 @@ class VoiceModule(ModalityModule):
         self._callback = event_callback
 
     def start(self) -> None:
-        """Initialize recorder and transcriber, start hotkey listener."""
-        if self._running:
-            return
+        """Initialize recorder and transcriber, start hotkey listener.
 
+        A call that lands while another start() is still loading returns at
+        once, so one module never starts two keyboard listeners.
+        """
+        with self._start_lock:
+            if self._running or self._starting:
+                return
+            self._starting = True
+        try:
+            self._start_inner()
+        finally:
+            self._starting = False
+
+    def _start_inner(self) -> None:
         self._recorder = Recorder()
         # Warm up PortAudio device so the first hotkey press isn't delayed
         # by 100-500ms of WASAPI initialization (which would happen on the
@@ -192,6 +224,10 @@ class VoiceModule(ModalityModule):
         # by stop() or a genuine exception, so it is the reliable source of truth.
         return self._running
 
+    def is_starting(self) -> bool:
+        """True while start() is still running (model load in progress)."""
+        return self._starting
+
     def get_status(self) -> dict[str, Any]:
         return {
             "modality": "voice",
@@ -199,6 +235,7 @@ class VoiceModule(ModalityModule):
             "events_emitted": self._events_emitted,
             "last_event_timestamp": self._last_timestamp,
             "error": self._error,
+            "last_brief": self._last_brief,
         }
 
     def _emit(self, event: ContextEvent) -> None:
@@ -248,9 +285,29 @@ class VoiceModule(ModalityModule):
             self._fix_hotkey_keys.issubset(self._pressed_keys)
             and not self._recording
             and not self._fixing
+            and not self._briefing
         ):
             self._fixing = True
             threading.Thread(target=self._fix_last, daemon=True).start()
+            return
+
+        # Brief hotkey (hold). Checked BEFORE dictation: ctrl+alt+space
+        # contains ctrl+space, and hotkeys match by subset, so the dictation
+        # branch below would also fire on it.
+        brief_held = bool(self._brief_hotkey_keys) and self._brief_hotkey_keys.issubset(
+            self._pressed_keys
+        )
+        if brief_held:
+            if not self._recording and not self._recorder_busy and not self._briefing:
+                self._start_recording("brief")
+            elif self._recording and self._record_mode == "dictation" and not self._briefing:
+                # Pressed in the other order (ctrl, space, then alt): the
+                # dictation hotkey matched first and a dictation recording is
+                # already running. The audio is the same either way, so the
+                # recording becomes a brief rather than ignoring the hotkey.
+                self._record_mode = "brief"
+                self._briefing = True
+                logger.info("Recording upgraded to a brief")
             return
 
         # Main dictation hotkey (hold)
@@ -259,29 +316,39 @@ class VoiceModule(ModalityModule):
             and not self._fix_hotkey_keys.issubset(self._pressed_keys)
             and not self._recording
             and not self._recorder_busy
+            and not self._briefing
         ):
-            self._recording = True
-            self._recorder_busy = True
-            app_name, window_title = self._get_foreground_info()
-            try:
-                self._recorder.start()
-            except Exception:
-                # Roll back both flags so a start() failure (e.g. audio
-                # device disconnected) doesn't permanently lock out future
-                # dictation attempts.
-                self._recording = False
-                self._recorder_busy = False
-                logger.exception("Recorder.start() failed — aborting recording")
-                return
-            if self._overlay:
-                self._overlay.show_recording()
-            self._emit(ContextEvent(
-                modality=Modality.VOICE,
-                event_type=EventType.SPEECH_START,
-                app_name=app_name,
-                window_title=window_title,
-            ))
-            logger.info("Recording...")
+            self._start_recording("dictation")
+
+    def _start_recording(self, mode: str) -> None:
+        """Open the recorder for a dictation or a brief. Runs on the listener thread."""
+        self._recording = True
+        self._recorder_busy = True
+        self._record_mode = mode
+        if mode == "brief":
+            self._briefing = True
+        app_name, window_title = self._get_foreground_info()
+        try:
+            self._recorder.start()
+        except Exception:
+            # Roll back every flag so a start() failure (e.g. audio
+            # device disconnected) doesn't permanently lock out future
+            # dictation attempts.
+            self._recording = False
+            self._recorder_busy = False
+            self._briefing = False
+            self._record_mode = "dictation"
+            logger.exception("Recorder.start() failed — aborting recording")
+            return
+        if self._overlay:
+            self._overlay.show_recording()
+        self._emit(ContextEvent(
+            modality=Modality.VOICE,
+            event_type=EventType.SPEECH_START,
+            app_name=app_name,
+            window_title=window_title,
+        ))
+        logger.info("Recording...")
 
     def _on_release(self, key: kb.Key | kb.KeyCode | None) -> None:
         try:
@@ -301,7 +368,10 @@ class VoiceModule(ModalityModule):
         if self._fixing and not self._fix_hotkey_keys.issubset(self._pressed_keys):
             self._fixing = False
 
-        if self._recording and not self._hotkey_keys.issubset(self._pressed_keys):
+        active_keys = (
+            self._brief_hotkey_keys if self._record_mode == "brief" else self._hotkey_keys
+        )
+        if self._recording and not active_keys.issubset(self._pressed_keys):
             # A duplicate delivery of the SAME physical key-up (a documented
             # Windows/pynput low-level-hook quirk) is naturally absorbed by
             # this `if self._recording` check alone: pynput serializes calls
@@ -324,31 +394,40 @@ class VoiceModule(ModalityModule):
             # during stream teardown) is a precise signal: a 1-second wall
             # clock was an imprecise proxy for it.
             self._recording = False
-            if self._overlay:
-                self._overlay.show_transcribing()
-            app_name, window_title = self._get_foreground_info()
-            self._emit(ContextEvent(
-                modality=Modality.VOICE,
-                event_type=EventType.SPEECH_END,
-                app_name=app_name,
-                window_title=window_title,
-            ))
+            # Nothing between here and the thread spawn below may raise past
+            # it: the spawned thread is what releases _recorder_busy and
+            # _briefing, so an exception here (an overlay call failing, say)
+            # would refuse every hotkey until the daemon restarted.
+            app_name, window_title = "", ""
+            try:
+                if self._overlay:
+                    self._overlay.show_transcribing()
+                app_name, window_title = self._get_foreground_info()
+                self._emit(ContextEvent(
+                    modality=Modality.VOICE,
+                    event_type=EventType.SPEECH_END,
+                    app_name=app_name,
+                    window_title=window_title,
+                ))
+            except Exception:
+                logger.exception("Release bookkeeping failed — still stopping the recorder")
 
             # Stop recording and transcribe in a background thread.
             # The thread adds a brief tail delay before stopping the
             # stream so trailing speech is captured — this MUST NOT
             # happen on the pynput listener thread or it blocks key
             # event processing and causes runaway recording loops.
+            mode = self._record_mode
             try:
                 threading.Thread(
                     target=self._stop_and_transcribe,
-                    args=(app_name, window_title),
+                    args=(app_name, window_title, mode),
                     daemon=True,
                 ).start()
             except Exception:
                 # _stop_and_transcribe is the only thing that clears
-                # _recorder_busy and closes the stream. If the thread
-                # itself never started, do both directly here so a
+                # _recorder_busy (and _briefing) and closes the stream. If
+                # the thread itself never started, do it directly here so a
                 # failure to spawn can't strand the recorder open and
                 # lock out every future hotkey press.
                 logger.exception(
@@ -356,6 +435,7 @@ class VoiceModule(ModalityModule):
                     "recorder directly"
                 )
                 self._recorder_busy = False
+                self._briefing = False
                 try:
                     self._recorder.stop()
                 except Exception:
@@ -369,14 +449,27 @@ class VoiceModule(ModalityModule):
     _TAIL_BUFFER_MS = 700  # minimum tail before silence detection kicks in
 
     def _stop_and_transcribe(
-        self, app_name: str, window_title: str
+        self, app_name: str, window_title: str, mode: str = "dictation"
     ) -> None:
         """Stop recorder with energy-based tail extension.
 
         Called in a background thread so the tail delay doesn't block
         the pynput listener.  Records until silence is detected (up to
         2s) so trailing words are never cut off.
+
+        For a brief, this is also the ONE place _briefing is released once the
+        recording has started: every path below -- no audio, empty text, the
+        brief pasted, any exception -- passes through the finally.
         """
+        try:
+            self._stop_and_transcribe_inner(app_name, window_title, mode)
+        finally:
+            if mode == "brief":
+                self._briefing = False
+
+    def _stop_and_transcribe_inner(
+        self, app_name: str, window_title: str, mode: str
+    ) -> None:
         try:
             # Brief minimum delay, then let silence detection decide when to stop
             if self._TAIL_BUFFER_MS > 0:
@@ -399,7 +492,10 @@ class VoiceModule(ModalityModule):
                     self._overlay.hide()
                 return
 
-            self._transcribe_and_paste(wav_bytes, app_name, window_title)
+            if mode == "brief":
+                self._transcribe_and_brief(wav_bytes, app_name, window_title)
+            else:
+                self._transcribe_and_paste(wav_bytes, app_name, window_title)
         except Exception:
             logger.exception("stop_and_transcribe failed")
             if self._overlay:
@@ -520,6 +616,103 @@ class VoiceModule(ModalityModule):
             logger.exception("Transcription failed")
             if self._overlay:
                 self._overlay.hide()
+
+    def _transcribe_and_brief(
+        self, wav_bytes: bytes, app_name: str, window_title: str
+    ) -> None:
+        """Brief mode: transcribe, store the dictation, turn it into a brief, paste.
+
+        The dictation is stored in the event store BEFORE the model call, so a
+        timeout, crash or kill during the 11-16 s call cannot lose what was
+        said. The stored event carries no paste hash: what gets pasted is
+        model-written, and the Touch correction detector must not learn
+        vocabulary from it. _last_wav_bytes is left alone, so Fix-last still
+        re-does the last ordinary dictation rather than overwriting a brief --
+        except when transcription itself fails, when the audio is kept there
+        because nothing else holds it.
+        """
+        try:
+            raw_text = self._transcriber.transcribe(
+                wav_bytes, initial_prompt=self._build_whisper_prompt(),
+            )
+        except Exception:
+            # Nothing was stored yet, so keep the audio where Fix-last can
+            # retry it; otherwise what was said exists nowhere.
+            self._last_wav_bytes = wav_bytes
+            raise
+        if not raw_text or len(raw_text.strip()) < 2:
+            logger.warning("Brief: empty or too-short transcription — skipping")
+            if self._overlay:
+                self._overlay.hide()
+            return
+        raw_text = apply_punctuation(raw_text)
+        text = apply_vocabulary(clean(raw_text, use_llm=False))
+        if not text:
+            if self._overlay:
+                self._overlay.hide()
+            return
+
+        cfg = get_voice_config()
+        template = cfg["brief_template"]
+        self._emit(ContextEvent(
+            modality=Modality.VOICE,
+            event_type=EventType.TRANSCRIPTION,
+            app_name=app_name,
+            window_title=window_title,
+            payload=redact_payload({
+                "transcript": text,
+                "raw_transcript": raw_text,
+                "confidence": 0.85,
+                "language": "en",
+                "duration_seconds": len(wav_bytes) / (16000 * 2),
+                "cleanup_applied": False,
+                "brief_template": template,
+            }),
+        ))
+
+        if self._overlay and template != "verbatim":
+            self._overlay.show_briefing()
+        try:
+            outcome = make_brief(
+                text, template,
+                backend=cfg["llm_backend"], model="haiku", timeout=30.0,
+                api_key=get_api_key(),
+            )
+        except Exception as exc:
+            # make_brief is written never to raise; if it does, that is a bug,
+            # and the user still gets what they said.
+            logger.exception("Brief crashed — pasting the dictation")
+            outcome = BriefOutcome(text=text, template=template, llm_ok=False,
+                                   reason=f"brief crashed: {type(exc).__name__}")
+        self._last_brief = {
+            "template": outcome.template,
+            "llm_ok": outcome.llm_ok,
+            "not_ready": outcome.not_ready,
+            "reason": outcome.reason,
+            "timestamp": time.time(),
+        }
+        # Lengths and flags, not content: this lands in a rotating log file.
+        logger.info(
+            "Brief: template=%s llm_ok=%s not_ready=%s reason=%s chars=%d->%d",
+            outcome.template, outcome.llm_ok, outcome.not_ready, outcome.reason or "-",
+            len(text), len(outcome.text),
+        )
+        paste_text(outcome.text)
+        if self._overlay:
+            self._overlay.show_ready()
+
+    def _build_whisper_prompt(self) -> str:
+        """Whisper initial_prompt from screen OCR hot-words; empty on any failure."""
+        try:
+            from contextpulse_voice.context_vocab import get_known_proper_nouns
+            from contextpulse_voice.hot_words import (
+                build_whisper_prompt,
+                extract_hot_words,
+            )
+            return build_whisper_prompt(extract_hot_words(), get_known_proper_nouns())
+        except Exception:
+            logger.debug("Hot-word extraction failed (non-fatal)", exc_info=True)
+            return ""
 
     def _fix_last(self) -> None:
         """Re-transcribe last audio with higher quality and LLM cleanup."""

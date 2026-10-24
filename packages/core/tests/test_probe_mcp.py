@@ -81,6 +81,52 @@ class TestContextAtRecordsUsage:
         assert not db.exists()
 
 
+class TestFactsAboutMissMessage:
+    """A miss must say what was searched, not guess that the store is empty.
+
+    Live, 2026-10-22: every zero-hit call answered "Phase 0 probe DB may be empty
+    until the nightly consolidator has run" while probe.db held 1,543 facts, which
+    tells the calling agent the tool is not working yet rather than that the
+    subject is not in it.
+    """
+
+    def test_miss_on_populated_store_states_how_many_facts_were_searched(self, tmp_path, monkeypatch):
+        db = tmp_path / "probe.db"
+        monkeypatch.setenv("CONTEXTPULSE_PROBE_DB", str(db))
+        conn = probe.connect_probe(db)
+        probe.write_facts(
+            conn,
+            [
+                {"entity": "A", "fact": "one", "valid_from": 1.0, "source_event_ids": []},
+                {"entity": "B", "fact": "two", "valid_from": 2.0, "source_event_ids": []},
+            ],
+        )
+        conn.close()
+        result = probe_mcp.facts_about("Nobody in store")
+        assert result.startswith("No probe facts about 'Nobody in store'")
+        assert "2 consolidated facts" in result
+        assert "may be empty" not in result
+
+    def test_miss_on_empty_store_says_the_consolidator_has_not_run(self, tmp_path, monkeypatch):
+        db = tmp_path / "probe.db"
+        monkeypatch.setenv("CONTEXTPULSE_PROBE_DB", str(db))
+        result = probe_mcp.facts_about("Anything")
+        assert "holds no facts yet" in result
+
+    def test_text_match_is_returned_and_counted(self, tmp_path, monkeypatch):
+        db = tmp_path / "probe.db"
+        monkeypatch.setenv("CONTEXTPULSE_PROBE_DB", str(db))
+        conn = probe.connect_probe(db)
+        probe.write_facts(
+            conn,
+            [{"entity": "Home projects", "fact": "rooftop solar quote expired", "valid_from": 1.0, "source_event_ids": []}],
+        )
+        conn.close()
+        result = probe_mcp.facts_about("solar")
+        assert "Home projects: rooftop solar quote expired" in result
+        assert _usage_rows(db) == [("facts_about", "solar", 1)]
+
+
 class TestUsageLoggingNeverBreaksRecall:
     def test_facts_about_still_returns_when_usage_logging_raises(self, tmp_path, monkeypatch):
         db = tmp_path / "probe.db"

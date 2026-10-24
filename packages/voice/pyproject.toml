@@ -29,7 +29,9 @@ dependencies = [
     "numpy>=1.24,<3",
     "pyperclip>=1.8,<2",
     "pyautogui>=0.9,<1",
-    "anthropic>=0.39,<1",
+    # <2, not <1: 1.4.0 has run live since 2026-09-07 and 2.0.0 (2026-10-21) has
+    # breaking changes. tests/test_anthropic_sdk_bounds.py holds every manifest to this.
+    "anthropic>=0.39,<2",
     "python-dotenv>=1.0,<2",
 ]
 

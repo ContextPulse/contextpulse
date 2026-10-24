@@ -68,7 +68,11 @@ class TestFormatReport:
         text = mod.format_report(summary, saves=0, probe_db=Path("x.db"))
         assert "nothing was watching" in text
 
-    def test_calls_with_zero_saves_reads_as_meaningful_zero(self):
+    def test_too_few_calls_reads_as_routing_defect_not_a_verdict(self):
+        # The 2026-09-19 gate: below 20 calls in the window the routing is still
+        # broken, and a save count is no verdict on the knowledge graph. The
+        # checkpoint on 2026-10-17 read 3 calls and this line used to call that
+        # "a meaningful zero".
         mod = _load_report_module()
         summary = {
             "total_calls": 5,
@@ -76,8 +80,38 @@ class TestFormatReport:
             "by_tool": {"facts_about": {"calls": 5, "with_hits": 2}},
         }
         text = mod.format_report(summary, saves=0, probe_db=Path("x.db"))
-        assert "this 0 is now meaningful" in text
-        assert "5 real tool call(s)" in text
+        assert "STAGE 1 NOT MET" in text
+        assert "5 of 20" in text
+        assert "meaningful" not in text
+
+    def test_enough_calls_with_zero_saves_reads_as_meaningful_zero(self):
+        mod = _load_report_module()
+        summary = {"total_calls": 20, "calls_with_hits": 9, "by_tool": {}}
+        text = mod.format_report(summary, saves=0, probe_db=Path("x.db"))
+        assert "STAGE 1 MET" in text
+        assert "0 of 3 confirmed saves" in text
+        assert "meaningful" in text
+
+    def test_enough_calls_and_saves_reads_as_both_stages_met(self):
+        mod = _load_report_module()
+        summary = {"total_calls": 25, "calls_with_hits": 9, "by_tool": {}}
+        text = mod.format_report(summary, saves=3, probe_db=Path("x.db"))
+        assert "STAGE 1 MET" in text
+        assert "STAGE 2 MET" in text
+
+    def test_thresholds_are_parameters(self):
+        mod = _load_report_module()
+        summary = {"total_calls": 5, "calls_with_hits": 0, "by_tool": {}}
+        text = mod.format_report(summary, saves=1, probe_db=Path("x.db"), min_calls=5, min_saves=1)
+        assert "STAGE 1 MET" in text
+        assert "STAGE 2 MET" in text
+
+    def test_unverifiable_saves_with_enough_calls_claims_no_stage_2(self):
+        mod = _load_report_module()
+        summary = {"total_calls": 30, "calls_with_hits": 1, "by_tool": {}}
+        text = mod.format_report(summary, saves=None, probe_db=Path("x.db"))
+        assert "STAGE 1 MET" in text
+        assert "STAGE 2" not in text.replace("STAGE 2 COULD NOT BE READ", "")
 
     def test_unverifiable_saves_never_prints_a_zero(self):
         mod = _load_report_module()
@@ -112,6 +146,22 @@ class TestMainEndToEnd:
         assert "facts_about: 1 calls, 1 with hits" in out
         assert "context_at: 1 calls, 0 with hits" in out
         assert "Confirmed saves (journal, category=phase0-save): 0" in out
+        assert "STAGE 1 NOT MET -- 2 of 20" in out
+
+        with patch("subprocess.run", return_value=_FakeCompleted(0, "[]")):
+            assert mod.main(["--probe-db", str(db), "--min-calls", "2", "--min-saves", "1"]) == 0
+        out = capsys.readouterr().out
+        assert "STAGE 1 MET (2 tool calls), 0 of 1 confirmed saves" in out
+
+
+class TestStageOneBoundary:
+    def test_nineteen_calls_is_not_met_and_twenty_is(self):
+        mod = _load_report_module()
+        for calls, expect in ((19, "STAGE 1 NOT MET -- 19 of 20"), (20, "STAGE 1 MET (20 tool calls)")):
+            summary = {"total_calls": calls, "calls_with_hits": 0, "by_tool": {}}
+            text = mod.format_report(summary, saves=2, probe_db=Path("x.db"))
+            assert expect in text, (calls, text)
+            assert ("2 of 3 confirmed saves" in text) is (calls == 20)
 
 
 class TestSinceAppliesToBothHalves:

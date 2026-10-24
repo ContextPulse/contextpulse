@@ -26,7 +26,7 @@ USER_PROFILE_FILE = VOICE_DATA_DIR / "user_profile.json"
 def get_voice_config() -> dict:
     """Load voice-specific settings from shared ContextPulse config.
 
-    A pure rename of five keys out of the merged config -- no defaults, no
+    A pure rename of eight keys out of the merged config -- no defaults, no
     env reads. `load_config()` already applies CONTEXTPULSE_VOICE_HOTKEY,
     _FIX_HOTKEY, _MODEL and _ALWAYS_LLM (they are in `_ENV_MAP`) and already
     fills every key, so the fallbacks this used to carry could only ever be
@@ -40,6 +40,9 @@ def get_voice_config() -> dict:
         "whisper_model": cfg["voice_whisper_model"],
         "always_use_llm": cfg["voice_always_use_llm"],
         "anthropic_api_key": cfg["voice_anthropic_api_key"],
+        "brief_hotkey": cfg["voice_brief_hotkey"],
+        "brief_template": cfg["voice_brief_template"],
+        "llm_backend": cfg["voice_llm_backend"],
     }
 
 
