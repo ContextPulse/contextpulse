@@ -641,7 +641,7 @@ class TestOperatorVisibleLine:
 
 class _FakeCompleted:
     returncode = 0
-    stdout = "[]"
+    stdout = json.dumps({"type": "result", "is_error": False, "result": "[]"})
     stderr = ""
 
 
@@ -687,3 +687,145 @@ class TestModelIsPinned:
         assert rc == 0
         want = expected or consolidator.CONSOLIDATOR_MODEL
         assert call.call_args.kwargs["model"] == want
+
+
+def _envelope(result: str = "[]", **extra) -> str:
+    """What `claude -p --output-format json` prints (2.1.310), trimmed."""
+    payload = {
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "num_turns": 1,
+        "result": result,
+        "permission_denials": [],
+        "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 768,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 4,
+        },
+        "modelUsage": {"claude-opus-5-5": {}},
+    }
+    payload.update(extra)
+    return json.dumps(payload)
+
+
+class _RecordingRun:
+    """Stand-in for subprocess.run that records what the child would have seen."""
+
+    def __init__(self, stdout: str | None = None, returncode: int = 0):
+        self.stdout = _envelope() if stdout is None else stdout
+        self.returncode = returncode
+        self.calls: list[dict] = []
+
+    def __call__(self, cmd, **kwargs):
+        cwd = kwargs.get("cwd")
+        self.calls.append(
+            {
+                "cmd": list(cmd),
+                "cwd": cwd,
+                "cwd_entries": sorted(p.name for p in Path(cwd).iterdir()) if cwd else None,
+                **kwargs,
+            }
+        )
+
+        class _Done:
+            pass
+
+        done = _Done()
+        done.returncode, done.stdout, done.stderr = self.returncode, self.stdout, ""
+        return done
+
+
+class TestDistillerIsLockedDown:
+    """cp-distiller-bare-call (usefulness review 2026-10, section 4, rec. 3).
+
+    The prompt is screen OCR, so any page or email on screen can carry
+    instructions. The old call was `claude -p --model opus` started from
+    the System32 folder: every built-in tool, every MCP server, the user's
+    settings (defaultMode bypassPermissions) and ~70K tokens of estate context.
+    """
+
+    def _argv_and_call(self, consolidator, monkeypatch, run=None):
+        run = run or _RecordingRun()
+        monkeypatch.setattr(consolidator.subprocess, "run", run)
+        consolidator.call_claude("PROMPT BODY")
+        return run.calls[0]["cmd"], run.calls[0]
+
+    def test_no_built_in_tools(self, consolidator, monkeypatch):
+        argv, _ = self._argv_and_call(consolidator, monkeypatch)
+        assert argv[argv.index("--tools") + 1] == ""
+
+    def test_no_mcp_servers(self, consolidator, monkeypatch):
+        argv, _ = self._argv_and_call(consolidator, monkeypatch)
+        assert "--strict-mcp-config" in argv
+        assert "--mcp-config" not in argv
+
+    def test_no_claude_md_hooks_or_user_settings(self, consolidator, monkeypatch):
+        argv, _ = self._argv_and_call(consolidator, monkeypatch)
+        assert "--safe-mode" in argv
+        assert argv[argv.index("--setting-sources") + 1] == "project"
+
+    def test_permission_mode_is_not_bypass(self, consolidator, monkeypatch):
+        argv, _ = self._argv_and_call(consolidator, monkeypatch)
+        assert "--permission-mode" in argv
+        assert argv[argv.index("--permission-mode") + 1] not in {"bypassPermissions", "auto"}
+        assert "--dangerously-skip-permissions" not in argv
+        assert "--allow-dangerously-skip-permissions" not in argv
+
+    def test_not_bare_so_it_stays_on_the_signed_in_plan(self, consolidator, monkeypatch):
+        argv, call = self._argv_and_call(consolidator, monkeypatch)
+        assert "--bare" not in argv
+        assert "ANTHROPIC_API_KEY" not in call["env"]
+        assert "ANTHROPIC_AUTH_TOKEN" not in call["env"]
+
+    def test_own_system_prompt_names_ocr_as_data(self, consolidator, monkeypatch):
+        argv, _ = self._argv_and_call(consolidator, monkeypatch)
+        system_prompt = argv[argv.index("--system-prompt") + 1]
+        assert system_prompt == consolidator.DISTILLER_SYSTEM_PROMPT
+        assert "data" in system_prompt.lower()
+
+    def test_runs_from_an_empty_temp_folder_removed_after(self, consolidator, monkeypatch):
+        _, call = self._argv_and_call(consolidator, monkeypatch)
+        assert call["cwd"] is not None
+        assert call["cwd_entries"] == []
+        assert Path(call["cwd"]).resolve() != (Path(__file__).resolve().parents[1])
+        assert not Path(call["cwd"]).exists()
+
+    def test_prompt_still_travels_on_stdin_not_argv(self, consolidator, monkeypatch):
+        argv, call = self._argv_and_call(consolidator, monkeypatch)
+        assert call["input"] == "PROMPT BODY"
+        assert "PROMPT BODY" not in argv
+
+    def test_opus_pin_survives(self, consolidator, monkeypatch):
+        argv, _ = self._argv_and_call(consolidator, monkeypatch)
+        assert argv[argv.index("--model") + 1] == "opus"
+
+    def test_returns_the_result_text_from_the_envelope(self, consolidator, monkeypatch):
+        run = _RecordingRun(stdout=_envelope('[{"entity": "x", "fact": "y"}]'))
+        monkeypatch.setattr(consolidator.subprocess, "run", run)
+        text, _ = consolidator.call_claude("p")
+        assert text == '[{"entity": "x", "fact": "y"}]'
+
+    @pytest.mark.parametrize(
+        "stdout",
+        ["not json", "[]", _envelope("usage limit reached", is_error=True)],
+        ids=["not-json", "not-an-object", "is-error"],
+    )
+    def test_a_bad_envelope_raises(self, consolidator, monkeypatch, stdout):
+        monkeypatch.setattr(consolidator.subprocess, "run", _RecordingRun(stdout=stdout))
+        with pytest.raises(RuntimeError):
+            consolidator.call_claude("p")
+
+    def test_usage_is_logged(self, consolidator, monkeypatch, caplog):
+        monkeypatch.setattr(consolidator.subprocess, "run", _RecordingRun())
+        with caplog.at_level("INFO"):
+            consolidator.call_claude("p")
+        assert "cache_write=768" in caplog.text
+
+    def test_a_denied_tool_attempt_is_logged_loudly(self, consolidator, monkeypatch, caplog):
+        stdout = _envelope("[]", permission_denials=[{"tool_name": "Bash"}], num_turns=2)
+        monkeypatch.setattr(consolidator.subprocess, "run", _RecordingRun(stdout=stdout))
+        with caplog.at_level("WARNING"):
+            consolidator.call_claude("p")
+        assert "Bash" in caplog.text

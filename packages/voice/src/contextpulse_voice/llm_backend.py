@@ -72,18 +72,45 @@ def child_env() -> dict[str, str]:
     return env
 
 
-def build_cli_command(exe: str, system_prompt: str, user_text: str, model: str) -> list[str]:
+def locked_cli_flags(model: str, system_prompt: str) -> list[str]:
+    """The ``claude -p`` flags that make a call text-in, text-out and nothing else.
+
+    Shared by every product route that hands untrusted text to the CLI (dictation
+    here, screen OCR in scripts/probe_consolidator.py), so there is one
+    definition of the lock. Each flag, as documented by ``claude --help``
+    (2.1.310):
+
+    - ``--safe-mode``: no CLAUDE.md, skills, plugins, hooks, MCP servers or
+      custom agents; auth and model selection work normally. Without it the
+      user's ~/.claude/CLAUDE.md still loaded (measured 2026-10-24: 8,293 cache
+      tokens on a one-line prompt, 768 with it).
+    - ``--setting-sources project``: never read the user's settings, whose
+      ``defaultMode`` skips permission prompts.
+    - ``--permission-mode dontAsk``: anything not pre-approved is denied, never
+      bypassed.
+    - ``--tools ""`` and ``--strict-mcp-config``: no built-in tools, no MCP servers.
+    - ``--system-prompt``: replaces the Claude Code agent prompt.
+    - ``--no-session-persistence``: no transcript of the untrusted text on disk.
+
+    Not ``--bare``: it reads only ANTHROPIC_API_KEY, so it would bill the API
+    instead of running on the signed-in plan.
+    """
     return [
-        exe, "-p", user_text,
         "--model", model,
         "--output-format", "json",
         "--no-session-persistence",
+        "--safe-mode",
         "--setting-sources", "project",
+        "--permission-mode", "dontAsk",
         "--system-prompt", system_prompt,
         "--tools", "",
         "--strict-mcp-config",
         "--exclude-dynamic-system-prompt-sections",
     ]
+
+
+def build_cli_command(exe: str, system_prompt: str, user_text: str, model: str) -> list[str]:
+    return [exe, "-p", user_text, *locked_cli_flags(model, system_prompt)]
 
 
 def run_claude_cli(
