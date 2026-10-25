@@ -495,6 +495,14 @@ is a fact even when it rests on that single line. Phrase it as a standalone
 fact about the person, not as "the user told the assistant". Requests and
 instructions for the task at hand are not durable; skip them.
 
+DECISION WORDING
+Say "decided" or "ruled" only when the person states a decision ("we will",
+"do X", "yes, go ahead"). A suggestion or thought aloud ("we should", "maybe",
+"I think") is recorded as "suggested" or "raised", never as a decision, and an
+assistant offering something is not the person deciding. Keep every condition
+the person attached ("if we don't know the OS", "after the trial"); a fact that
+drops a condition is wrong.
+
 ENTITIES
 - "entity" is the short canonical name the person would later type into
   facts_about(): a project, person, product, file, trip, ticket, or topic.
