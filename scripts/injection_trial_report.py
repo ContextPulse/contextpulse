@@ -49,7 +49,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packages" / "core"
 from contextpulse_core import recall_inject as ri  # noqa: E402
 
 HOME = Path.home()
-TRIAL_START = datetime(2026, 10, 25, 0, 0, tzinfo=timezone.utc)  # set when the hooks were armed
+# Armed 2026-10-25T01:07Z (~/.claude ce0b5a05); the window opens after the live
+# checks (forced `claude -p` runs) so they are not graded as trial sessions.
+TRIAL_START = datetime(2026, 10, 25, 1, 30, tzinfo=timezone.utc)
 TRIAL_END = TRIAL_START + timedelta(days=14)
 BASELINE_DAYS = 14
 
@@ -242,7 +244,10 @@ def main(argv: list[str] | None = None) -> int:
     ms = sorted(float(r.get("ms") or 0) for r in rows if r["outcome"] not in ("off", "skip:estate", "skip:headless"))
     if ms:
         p95 = ms[min(len(ms) - 1, int(round(0.95 * (len(ms) - 1))))]
-        print(f"   latency over {len(ms)} evaluations: p50={statistics.median(ms):.0f}ms p95={p95:.0f}ms max={ms[-1]:.0f}ms")
+        print(f"   in-hook work over {len(ms)} evaluations: p50={statistics.median(ms):.0f}ms p95={p95:.0f}ms max={ms[-1]:.0f}ms")
+        print("   (excludes python start-up; Claude Code's own hook timings are in `claude --debug-file` output)")
+    late = sum(r["outcome"] in ("late", "timeout") for r in rows)
+    print(f"   late or timed out (nothing injected): {late}")
 
     conn = sqlite3.connect(f"file:{args.probe_db.as_posix()}?mode=ro", uri=True)
     try:
