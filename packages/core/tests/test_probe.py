@@ -298,6 +298,15 @@ def test_build_extraction_prompt_mentions_json_and_events():
     assert "Code" in prompt  # event content is embedded
 
 
+def test_build_extraction_prompt_separates_suggestions_from_decisions():
+    # cp#1550 turned a spoken "we should make sure" into "David ruled" and
+    # dropped his condition; the prompt must forbid both.
+    prompt = probe.build_extraction_prompt([])
+    assert "DECISION WORDING" in prompt
+    assert '"suggested"' in prompt
+    assert "drops a condition is wrong" in prompt
+
+
 def test_build_extraction_prompt_empty_events_is_safe():
     prompt = probe.build_extraction_prompt([])
     assert isinstance(prompt, str) and len(prompt) > 0
