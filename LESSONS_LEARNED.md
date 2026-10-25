@@ -199,3 +199,47 @@ all of which can drift from what is served. And audit specific claims first: a v
 slogan ages badly, but a falsifiable one ("N tools", "feature X redacts before
 storage") is what a reader can check and what a reporter will check for you.
 
+
+---
+
+### [2026-10-24] A distiller turns a suggestion into a ruling unless told not to
+
+**Context:** The two-week fact-injection trial put fact cp#1550 into a session: "David ruled
+that anything ActiveFounder gives a client must work on both Windows and Mac."
+
+**Problem:** Its two source events were dictation: "we should make sure that whatever we
+provide... either there's two versions, Windows and Mac, or it will work for either." David's
+actual rule was conditional (find out the client's OS first; both only when unknown). The
+model upgraded a thought aloud to "ruled" at confidence 0.95 and dropped the condition.
+Injection made it worse: a confident wrong fact reached David, who had to correct it.
+
+**Fix/Pattern:** The extraction prompt now reserves "decided/ruled" for stated decisions and
+calls a fact that drops a condition wrong (b462edf). Grade facts on decision wording and kept
+conditions, not only topic accuracy. Trace any surprising fact through `source_event_ids`
+into activity.db before believing it.
+
+---
+
+### [2026-10-24] Screen OCR runs about 2 characters per token, not 4
+
+**Context:** The locked distiller logged cache_write=80115 for a 157,578-char prompt, which
+looked like leftover estate context.
+
+**Fix/Pattern:** Re-sending the identical prompt through the same locked call reproduced
+80115; a 19-char prompt cost 702. So the prompt alone is ~79K tokens. Budget screen-text
+prompts at ~2 chars/token. Measure by replaying the exact prompt, never by dividing by 4.
+
+---
+
+### [2026-10-24] Capture coverage comes before recall quality
+
+**Context:** Ivy mined 30 days of transcripts (1,165 David prompts) for friction ContextPulse
+could remove.
+
+**Problem:** In the 10 minutes before each PC prompt, capture recorded any event only 58% of
+the time and screen text 39%; `paste_detected` had never fired. Typing events store counts
+only, so nothing David types to agents reached the store until transcript ingest (ea72bfd).
+
+**Fix/Pattern:** Measure coverage at the moments that matter (prompt times) before tuning
+extraction or retrieval. In Claude Code transcripts, `origin.kind == "human"` is the clean
+marker for prompts a person typed or dictated (cleaner than promptSource/entrypoint).
