@@ -298,8 +298,10 @@ def main(argv: list[str] | None = None) -> int:
     tx.add_argument(
         "--transcripts-max-chars",
         type=int,
-        default=60_000,
-        help="Prompt text taken from transcripts per run; the rest waits (default: 60000).",
+        # 35,000, measured 2026-10-24: a 99.5K-char batch (461 prompts) hit the
+        # header's 25-fact cap, while 35K batches returned 25, 21 and 22.
+        default=35_000,
+        help="Prompt text taken from transcripts per run; the rest waits (default: 35000).",
     )
     tx.add_argument(
         "--transcripts-only",
