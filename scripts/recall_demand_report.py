@@ -35,6 +35,10 @@ RECALL_SHAPED = re.compile(
 )
 RECALL_TOOLS = ("mcp__contextpulse__facts_about", "mcp__contextpulse__context_at")
 JOURNAL = "Bash:query-journal"
+# First line of probe._PROMPT_HEADER. The consolidator's own `claude -p` runs left transcripts
+# until 2026-10-24 (--no-session-persistence since); their prompt is captured screen text full
+# of "last week" and "we discussed", which is not anyone asking for recall.
+DISTILLER_MARKER = "You are the nightly memory consolidator for a personal activity-capture system."
 
 
 @dataclass
@@ -43,6 +47,7 @@ class SessionTally:
     prompts: int = 0
     recall_prompts: list[str] = field(default_factory=list)
     tools: list[str] = field(default_factory=list)
+    is_distiller: bool = False
 
     @property
     def recall_calls(self) -> int:
@@ -51,7 +56,7 @@ class SessionTally:
 
 def human_prompts(rec: dict) -> list[str]:
     """Typed prompt text in a user record; tool results, meta and command echoes excluded."""
-    if rec.get("type") != "user" or rec.get("isMeta"):
+    if rec.get("type") != "user" or rec.get("isMeta") or rec.get("isCompactSummary"):
         return []
     content = (rec.get("message") or {}).get("content")
     if isinstance(content, str):
@@ -95,6 +100,8 @@ def tally_file(path: Path, after: str) -> SessionTally:
             if not isinstance(rec, dict) or str(rec.get("timestamp", "")) < after:
                 continue
             for text in human_prompts(rec):
+                if tally.prompts == 0 and text.startswith(DISTILLER_MARKER):
+                    tally.is_distiller = True
                 tally.prompts += 1
                 if RECALL_SHAPED.search(text):
                     tally.recall_prompts.append(text)
@@ -125,7 +132,9 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
-    tallies = [tally_file(p, args.after) for p in files]
+    all_tallies = [tally_file(p, args.after) for p in files]
+    tallies = [t for t in all_tallies if not t.is_distiller]
+    distiller = len(all_tallies) - len(tallies)
     prompts = sum(t.prompts for t in tallies)
     recall_prompts = sum(len(t.recall_prompts) for t in tallies)
     recall_calls = sum(t.recall_calls for t in tallies)
@@ -138,15 +147,19 @@ def main(argv: list[str] | None = None) -> int:
                 f"  {t.path.stem[:8]} recall_calls={t.recall_calls} journal={t.tools.count(JOURNAL)} "
                 f"> {text[:100]!r}"
             )
-    print(f"window after {args.after}: transcripts={len(files)} prompts={prompts}")
+    print(f"window after {args.after}: transcripts={len(tallies)} prompts={prompts}")
+    print(f"distiller transcripts excluded: {distiller}")
     print(f"recall-shaped prompts: {recall_prompts}")
     print(
         f"recall calls (facts_about/context_at): {recall_calls}   other contextpulse calls: {cp_calls - recall_calls}"
     )
     print(f"journal queries: {journal}")
-    if recall_prompts:
+    asked = [t for t in tallies if t.recall_prompts]
+    if asked:
+        reached = sum(1 for t in asked if t.recall_calls)
         print(
-            f"routing ratio: {recall_calls}/{recall_prompts} recall-shaped prompts reached a recall tool"
+            f"sessions reaching a recall tool: {reached} of {len(asked)} "
+            f"({reached / len(asked):.0%}) sessions with a recall-shaped prompt"
         )
     else:
         print(
