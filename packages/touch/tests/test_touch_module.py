@@ -96,6 +96,37 @@ class TestTouchModuleEvents:
             m._running = True
             yield m, received
 
+    def test_paste_emits_paste_detected_with_counts_not_text(self, module_with_callback):
+        """paste_detected was declared in spine/events.py and never emitted: Ctrl+V went
+        only to the CorrectionDetector (cp-paste-detected-never-emitted, 0 rows lifetime)."""
+        module, received = module_with_callback
+        secret = "hunter2 my bank password\nsecond line"
+        with patch("contextpulse_touch.touch_module._get_foreground_info",
+                   return_value=("WindowsTerminal.exe", "claude")), \
+             patch.object(module._correction_detector, "on_paste_detected") as det:
+            module._keyboard_listener._on_paste(secret)
+        assert len(received) == 1
+        ev = received[0]
+        assert (ev.modality, ev.event_type) == (Modality.KEYS, EventType.PASTE_DETECTED)
+        assert (ev.app_name, ev.window_title) == ("WindowsTerminal.exe", "claude")
+        assert ev.payload == {"char_count": len(secret), "word_count": 6, "line_count": 2}
+        assert "hunter2" not in repr(ev)  # clipboard text never enters the event
+        det.assert_called_once_with(secret)  # correction detection still runs
+
+    def test_paste_with_empty_clipboard_emits_nothing(self, module_with_callback):
+        module, received = module_with_callback
+        module._on_paste("")
+        assert received == []
+
+    def test_paste_event_failure_does_not_block_correction_detection(self, module_with_callback):
+        module, received = module_with_callback
+        with patch("contextpulse_touch.touch_module._get_foreground_info",
+                   side_effect=RuntimeError("no window")), \
+             patch.object(module._correction_detector, "on_paste_detected") as det:
+            module._on_paste("hello world")
+        det.assert_called_once_with("hello world")
+        assert received[0].app_name == ""
+
     def test_on_burst_emits_typing_burst(self, module_with_callback):
         module, received = module_with_callback
         module._on_burst({

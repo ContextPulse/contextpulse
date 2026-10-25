@@ -26,7 +26,7 @@ from contextpulse_core.spine import (
 from contextpulse_touch.burst_tracker import BurstTracker
 from contextpulse_touch.config import get_touch_config
 from contextpulse_touch.correction_detector import CorrectionDetector
-from contextpulse_touch.listeners import KeyboardListener, MouseListener
+from contextpulse_touch.listeners import KeyboardListener, MouseListener, _get_foreground_info
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ class TouchModule(ModalityModule):
         # Listeners
         self._keyboard_listener = KeyboardListener(
             on_char=self._on_keyboard_char,
-            on_paste=self._correction_detector.on_paste_detected,
+            on_paste=self._on_paste,
             on_key_event=self._correction_detector.on_key_event,
         )
         self._mouse_listener = MouseListener(
@@ -138,6 +138,35 @@ class TouchModule(ModalityModule):
                           is_selection: bool) -> None:
         """Feed keystrokes to BurstTracker."""
         self._burst_tracker.on_key_press(key_char, is_backspace, is_selection)
+
+    def _on_paste(self, clipboard_text: str) -> None:
+        """Emit PASTE_DETECTED, then hand the paste to the CorrectionDetector.
+
+        Until 2026-10-24 Ctrl+V went only to the detector, so the event type
+        declared in spine/events.py had 0 rows ever (cp-paste-detected-never-emitted).
+        The payload is counts only, like TYPING_BURST: the clipboard text is
+        already captured (redacted) by the clipboard monitor, and a paste is
+        often a password, so neither the text nor a hash of it is stored here.
+        """
+        if not clipboard_text:
+            return
+        try:
+            app_name, title = _get_foreground_info()
+        except Exception:  # listener thread must keep running; the paste still counts
+            logger.debug("Foreground lookup failed for paste", exc_info=True)
+            app_name, title = "", ""
+        self._emit(ContextEvent(
+            modality=Modality.KEYS,
+            event_type=EventType.PASTE_DETECTED,
+            app_name=app_name,
+            window_title=title,
+            payload={
+                "char_count": len(clipboard_text),
+                "word_count": len(clipboard_text.split()),
+                "line_count": len(clipboard_text.splitlines()),
+            },
+        ))
+        self._correction_detector.on_paste_detected(clipboard_text)
 
     def _on_burst(self, burst_data: dict) -> None:
         """Emit TYPING_BURST event from BurstTracker.
