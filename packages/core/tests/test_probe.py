@@ -62,11 +62,46 @@ def test_source_event_ids_roundtrip_as_json(tmp_path):
     assert hits[0]["source_event_ids"] == ["a", "b", "c"]
 
 
-def test_query_facts_about_is_case_insensitive_partial(tmp_path):
+def test_query_facts_about_is_case_insensitive_whole_word(tmp_path):
+    # Changed 2026-10-24: a partial-substring match ("Pulse" -> "ContextPulse") is
+    # what made "CLEAR" return facts about things being "cleared". Whole words only.
     conn = probe.connect_probe(tmp_path / "probe.db")
     probe.write_facts(conn, [_fact("ContextPulse", "Phase 0 started", 5.0)])
     assert probe.query_facts_about(conn, "contextpulse")
-    assert probe.query_facts_about(conn, "Pulse")  # partial substring
+    assert probe.query_facts_about(conn, "Pulse") == []
+
+
+def test_query_facts_about_clear_does_not_match_cleared(tmp_path):
+    """The recorded miss: "CLEAR" (the renewal) returned 29 "cleared" facts."""
+    conn = probe.connect_probe(tmp_path / "probe.db")
+    probe.write_facts(
+        conn,
+        [
+            _fact("Browser", "cleared the cache and cookies", 3.0),
+            _fact("Inbox", "Cleared 40 old notifications", 2.0),
+            _fact("Travel", "CLEAR membership renewal is due in November", 1.0),
+        ],
+    )
+    hits = probe.query_facts_about(conn, "CLEAR")
+    assert [h["entity"] for h in hits] == ["Travel"]
+
+
+def test_query_facts_about_multiword_needs_contiguous_words(tmp_path):
+    conn = probe.connect_probe(tmp_path / "probe.db")
+    probe.write_facts(
+        conn,
+        [
+            _fact("Notes", "brief mode was turned on for the wiki", 2.0),
+            _fact("Other", "the brief said mode two", 1.0),
+        ],
+    )
+    assert [h["entity"] for h in probe.query_facts_about(conn, "brief mode")] == ["Notes"]
+
+
+def test_query_facts_about_blank_query_returns_nothing(tmp_path):
+    conn = probe.connect_probe(tmp_path / "probe.db")
+    probe.write_facts(conn, [_fact("A", "b", 1.0)])
+    assert probe.query_facts_about(conn, "  ") == []
 
 
 def test_query_facts_about_empty_when_no_match(tmp_path):

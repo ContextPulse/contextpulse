@@ -34,8 +34,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--tool",
         required=True,
-        choices=["facts_about", "context_at"],
-        help="Which probe tool answered",
+        choices=["facts_about", "context_at", "inject"],
+        help="Which probe tool answered ('inject' = a fact the session hook put in context)",
+    )
+    ap.add_argument(
+        "--fact-id",
+        type=int,
+        action="append",
+        default=[],
+        help="The cp# id of the fact that answered (repeatable); required with --tool inject",
     )
     ap.add_argument("--query", required=True, help="The question you asked, verbatim")
     ap.add_argument("--note", default="", help="Why plain FTS/memory couldn't answer it")
@@ -56,9 +63,18 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    if args.tool == "inject" and not args.fact_id:
+        print(
+            "REFUSED: an injection save must name the fact that answered (--fact-id <cp# id>),\n"
+            "so the trial report can tie the save to an injection it logged.",
+            file=sys.stderr,
+        )
+        return 2
+
+    facts = f" | facts={','.join(str(i) for i in args.fact_id)}" if args.fact_id else ""
     content = (
         f"PHASE0-SAVE | tool={args.tool} | query={args.query!r} "
-        f"| counterfactual=confirmed-novel" + (f" | note={args.note}" if args.note else "")
+        f"| counterfactual=confirmed-novel{facts}" + (f" | note={args.note}" if args.note else "")
     )
 
     cmd = [

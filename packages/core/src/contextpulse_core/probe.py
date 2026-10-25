@@ -319,23 +319,34 @@ def _row_to_fact(row: sqlite3.Row) -> dict[str, Any]:
 def query_facts_about(
     conn: sqlite3.Connection, entity: str, limit: int = 50
 ) -> list[dict[str, Any]]:
-    """Entity recall: facts whose entity, or failing that whose text, contains ``entity``.
+    """Entity recall: facts whose entity, or failing that whose text, names ``entity``.
 
-    Case-insensitive substring match. Facts whose ENTITY matches come first
+    Case-insensitive WHOLE-WORD match: "CLEAR" finds the CLEAR renewal and not
+    the 29 facts about something being "cleared", which is what the substring
+    match returned (usefulness review, 2026-10-24). A multi-word query must
+    appear as a contiguous run of words. Facts whose ENTITY matches come first
     (newest, then most confident); facts that only mention the subject in their
     text follow in the same order. ``limit`` caps the combined list. The text
     half exists because the consolidator files a fact under whatever entity the
     window was about, so a subject a person asks about is often a word inside a
     fact filed elsewhere (live miss, 2026-10-22: a subject found only in another entity's fact text).
+
+    SQL LIKE is kept as a cheap superset prefilter; the word test runs in Python.
     """
+    from contextpulse_core.recall_inject import tokens, word_in
+
+    if not tokens(entity):
+        return []
     pattern = f"%{entity}%"
     rows = conn.execute(
         "SELECT * FROM facts WHERE entity LIKE ? COLLATE NOCASE OR fact LIKE ? COLLATE NOCASE"
-        " ORDER BY CASE WHEN entity LIKE ? COLLATE NOCASE THEN 0 ELSE 1 END,"
-        " valid_from DESC, confidence DESC LIMIT ?",
-        (pattern, pattern, pattern, limit),
+        " ORDER BY valid_from DESC, confidence DESC",
+        (pattern, pattern),
     ).fetchall()
-    return [_row_to_fact(r) for r in rows]
+    by_entity = [r for r in rows if word_in(entity, r["entity"] or "")]
+    seen = {r["id"] for r in by_entity}
+    by_text = [r for r in rows if r["id"] not in seen and word_in(entity, r["fact"] or "")]
+    return [_row_to_fact(r) for r in (by_entity + by_text)[:limit]]
 
 
 def count_facts(conn: sqlite3.Connection) -> int:
