@@ -31,8 +31,9 @@ import subprocess
 import sys
 import tempfile
 import time
+from pathlib import Path
 
-from contextpulse_core import probe
+from contextpulse_core import probe, transcripts
 from contextpulse_voice.llm_backend import locked_cli_flags
 
 # Captured OCR text is full Unicode (emoji, CJK, etc.); the Windows console
@@ -104,6 +105,13 @@ MIN_PROMPT_CHARS_FOR_FLOOR = 150_000
 # keeps the extractor unchanged for most of the knowledge graph's history
 # while the save gate is still being measured. Overridable with --model.
 CONSOLIDATOR_MODEL = "opus"
+
+# Claude Code transcripts (cp-transcript-event-source, ruling 2026-10-24).
+# The personal estate's root; ActiveFounder keeps its own store and is refused.
+DEFAULT_TRANSCRIPTS_ROOT = Path.home() / ".claude" / "projects"
+# Per-prompt cap. A person's own message carries more than one OCR frame, so it
+# gets more than the screen's 600 chars.
+TRANSCRIPT_MAX_CHARS = transcripts.DEFAULT_MAX_CHARS
 
 
 # The distiller's own system prompt (cp-distiller-bare-call). It replaces the
@@ -212,6 +220,22 @@ def call_claude(
     return str(payload.get("result") or ""), elapsed
 
 
+def select_transcript_batch(args: argparse.Namespace) -> list[transcripts.TranscriptPrompt]:
+    """Unseen human prompts from the transcripts root, oldest first, within budget."""
+    since_ts = time.time() - args.transcripts_since_days * 86400
+    prompts = transcripts.iter_prompts(Path(args.transcripts_root), since_ts=since_ts)
+    pconn = probe.connect_probe(args.probe_db)
+    try:
+        return transcripts.select_unseen(
+            pconn,
+            prompts,
+            max_total_chars=args.transcripts_max_chars,
+            max_chars=TRANSCRIPT_MAX_CHARS,
+        )
+    finally:
+        pconn.close()
+
+
 def open_events_ro(activity_db) -> sqlite3.Connection:
     """Open the live activity.db read-only (WAL-safe, no writer lock)."""
     conn = sqlite3.connect(f"file:{activity_db}?mode=ro", uri=True)
@@ -252,19 +276,86 @@ def main(argv: list[str] | None = None) -> int:
         help=f"Model passed to the Claude CLI (default: {CONSOLIDATOR_MODEL}).",
     )
     ap.add_argument("--dry-run", action="store_true", help="Print prompt, no LLM call")
+    tx = ap.add_argument_group(
+        "Claude Code transcripts (cp-transcript-event-source; personal estate only)"
+    )
+    tx.add_argument(
+        "--transcripts",
+        action="store_true",
+        help="Also distil what the person typed or dictated to Claude Code. Off unless given.",
+    )
+    tx.add_argument(
+        "--transcripts-root",
+        default=str(DEFAULT_TRANSCRIPTS_ROOT),
+        help=f"Claude Code projects folder (default: {DEFAULT_TRANSCRIPTS_ROOT}).",
+    )
+    tx.add_argument(
+        "--transcripts-since-days",
+        type=float,
+        default=30.0,
+        help="Oldest prompt considered; unseen prompts drain oldest first (default: 30).",
+    )
+    tx.add_argument(
+        "--transcripts-max-chars",
+        type=int,
+        default=60_000,
+        help="Prompt text taken from transcripts per run; the rest waits (default: 60000).",
+    )
+    tx.add_argument(
+        "--transcripts-only",
+        action="store_true",
+        help="Skip screen events this run (backfill); implies --transcripts.",
+    )
     args = ap.parse_args(argv)
+    if args.transcripts_only:
+        args.transcripts = True
+    if args.transcripts:
+        try:
+            transcripts.check_personal_root(Path(args.transcripts_root))
+        except ValueError as exc:
+            ap.error(str(exc))
 
     since = time.time() - args.hours * 3600
-    logger.info("Reading events since %.0f (%.1fh) from %s", since, args.hours, args.activity_db)
+    events: list[dict] = []
+    if not args.transcripts_only:
+        logger.info(
+            "Reading events since %.0f (%.1fh) from %s", since, args.hours, args.activity_db
+        )
+        src = open_events_ro(args.activity_db)
+        try:
+            events = probe.read_recent_events(src, since_ts=since, limit=args.limit)
+        finally:
+            src.close()
+        logger.info("Read %d events", len(events))
 
-    src = open_events_ro(args.activity_db)
-    try:
-        events = probe.read_recent_events(src, since_ts=since, limit=args.limit)
-    finally:
-        src.close()
+    batch: list[transcripts.TranscriptPrompt] = []
+    if args.transcripts:
+        try:
+            batch = select_transcript_batch(args)
+        except (OSError, sqlite3.Error) as exc:
+            pconn = probe.connect_probe(args.probe_db)
+            try:
+                probe.record_run(pconn, events=len(events), facts=0, error=str(exc)[:300])
+            finally:
+                pconn.close()
+            logger.exception("Reading Claude Code transcripts failed")
+            return 1
+        logger.info(
+            "Took %d unseen transcript prompt(s), %d chars, from %s",
+            len(batch),
+            sum(min(len(p.text), TRANSCRIPT_MAX_CHARS) for p in batch),
+            args.transcripts_root,
+        )
+        if args.transcripts_only and not batch:
+            logger.info("No unseen transcript prompts -- nothing to distil.")
+            print("OK (transcripts): 0 unseen prompts")
+            return 0
+        events = sorted(
+            events + transcripts.to_events(batch, max_chars=TRANSCRIPT_MAX_CHARS),
+            key=lambda e: e["timestamp"],
+        )
 
-    logger.info("Read %d events", len(events))
-    if len(events) >= args.limit:
+    if not args.transcripts_only and len(events) - len(batch) >= args.limit:
         # A real day exceeds the cap (measured ~1900 events/24h), so a single
         # --hours 24 pass only sees the most recent ~1.75h (red-team C2). Run
         # this every 6h with --hours 6 to cover the full day under the cap.
@@ -370,9 +461,23 @@ def main(argv: list[str] | None = None) -> int:
                 len(events),
                 elapsed,
             )
+        # The model is told never to repeat a secret; this does not rely on it.
+        facts = [
+            {
+                **f,
+                "entity": transcripts.redact_transcript_text(str(f["entity"])),
+                "fact": transcripts.redact_transcript_text(str(f["fact"])),
+            }
+            for f in facts
+        ]
         n = probe.write_facts(pconn, facts)
         probe.record_run(pconn, events=len(events), facts=n, error=None, elapsed_s=elapsed)
         logger.info("Wrote %d new facts to %s", n, args.probe_db)
+        if batch:
+            # Only now: a faulted or failed run above returned before this
+            # line, so its prompts stay unseen and the next run sends them.
+            marked = transcripts.mark_ingested(pconn, batch)
+            logger.info("Marked %d transcript prompt(s) ingested", marked)
         # The operator-visible line must distinguish the two zero-fact
         # outcomes, not just report a count. "OK: 0 new facts" is what let this
         # defect hide for eight days.
