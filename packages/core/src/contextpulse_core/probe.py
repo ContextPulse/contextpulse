@@ -455,8 +455,10 @@ Input: a chronological, timestamped log of ONE person's computer activity over
 roughly the last 24 hours. Each line:
   [<event_id>] ts=<unix_ts> <modality> app='<app>' win='<window title>' :: <text>
 Modalities: sight = screen OCR (noisy), voice = speech transcript, touch =
-typed text, clipboard = copied text. Voice and touch are the person's own
-words and are the strongest evidence of intent and decisions.
+typed text, clipboard = copied text, agent = a message the person typed or
+dictated to an AI assistant (Claude Code; win names the project). Voice,
+touch and agent lines are the person's own words and are the strongest
+evidence of intent and decisions.
 
 YOUR JOB
 Distill durable FACTS to be recalled later via two tools: facts_about(entity)
@@ -486,6 +488,12 @@ NEVER emit restatements — anything answerable by grepping a single event:
      BAD: "tax.py defines apply_tax()."               (visible code)
 Apply this test to every candidate fact: "would a keyword search of the raw
 log for this entity surface this same answer?" If yes, drop the fact.
+EXCEPTION: agent lines are NOT in the searchable log. A durable statement the
+person makes in one agent line -- about their accounts, tools, preferences,
+plans, what they already did, or what an assistant can or cannot do for them --
+is a fact even when it rests on that single line. Phrase it as a standalone
+fact about the person, not as "the user told the assistant". Requests and
+instructions for the task at hand are not durable; skip them.
 
 ENTITIES
 - "entity" is the short canonical name the person would later type into
@@ -577,12 +585,15 @@ def build_extraction_prompt(events: list[dict[str, Any]]) -> str:
 
     Redact BEFORE the _MAX_TEXT_CHARS truncation, never after: a token the cut
     halves matches nothing and its leading half would be transmitted verbatim.
+    An event may carry its own ``max_chars`` (transcript prompts do: a person's
+    own message to an agent is worth more of the budget than one OCR frame).
     """
     lines: list[str] = []
     for e in events:
         text = redact_sensitive((e.get("text") or "").strip().replace("\n", " "))
-        if len(text) > _MAX_TEXT_CHARS:
-            text = text[:_MAX_TEXT_CHARS] + "..."
+        cap = int(e.get("max_chars") or _MAX_TEXT_CHARS)
+        if len(text) > cap:
+            text = text[:cap] + "..."
         lines.append(
             f"[{e.get('event_id')}] ts={e.get('timestamp')} "
             f"{e.get('modality')} app={e.get('app_name')!r} "
