@@ -115,6 +115,14 @@ where = [
 # [tool.setuptools.packages.find] above, not a build of that file.
 contextpulse_knowledge = ["schema.sql"]
 
+[tool.uv]
+# `uv run` must never lock or sync this project. The dev venv is built from
+# per-package editable installs that no lock of this root distribution
+# describes; on 2026-10-25 a `uv run pytest` wrote a fresh uv.lock and
+# exact-synced the live venv to it, uninstalling numpy, mcp, python-dotenv and
+# more from under the running daemon. See tests/test_uv_not_managed.py.
+managed = false
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"
