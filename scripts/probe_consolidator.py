@@ -107,7 +107,8 @@ MIN_PROMPT_CHARS_FOR_FLOOR = 150_000
 CONSOLIDATOR_MODEL = "opus"
 
 # Claude Code transcripts (cp-transcript-event-source, ruling 2026-10-24).
-# The personal estate's root; OtherEstate keeps its own store and is refused.
+# The personal estate's root. Other estates keep their own stores; their names
+# are configured (transcripts.configured_excludes), never written here.
 DEFAULT_TRANSCRIPTS_ROOT = Path.home() / ".claude" / "projects"
 # Per-prompt cap. A person's own message carries more than one OCR frame, so it
 # gets more than the screen's 600 chars.
@@ -312,10 +313,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.transcripts_only:
         args.transcripts = True
     if args.transcripts:
+        excludes = transcripts.configured_excludes()
         try:
-            transcripts.check_personal_root(Path(args.transcripts_root))
+            transcripts.check_personal_root(Path(args.transcripts_root), excludes)
         except ValueError as exc:
             ap.error(str(exc))
+        if excludes:
+            logger.info("transcript excludes: %d configured", len(excludes))
+        else:
+            logger.warning(
+                "transcript excludes: none configured (%s or %s); every project folder is read",
+                transcripts.EXCLUDES_ENV,
+                transcripts.EXCLUDES_FILENAME,
+            )
 
     since = time.time() - args.hours * 3600
     events: list[dict] = []
