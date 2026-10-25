@@ -205,7 +205,7 @@ storage") is what a reader can check and what a reporter will check for you.
 ### [2026-10-24] A distiller turns a suggestion into a ruling unless told not to
 
 **Context:** The two-week fact-injection trial put fact cp#1550 into a session: "David ruled
-that anything ActiveFounder gives a client must work on both Windows and Mac."
+that anything one of his ventures gives a client must work on both Windows and Mac."
 
 **Problem:** Its two source events were dictation: "we should make sure that whatever we
 provide... either there's two versions, Windows and Mac, or it will work for either." David's

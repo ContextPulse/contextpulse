@@ -8,7 +8,7 @@ FILTER    only what a person typed or dictated reaches the store: no tool
           results, meta records, command echoes, compaction summaries,
           interrupted markers, sidechains, subagent files, headless or
           scheduled runs, System32/Temp working folders, the distiller's own
-          runs, or anything from the ActiveFounder estate.
+          runs, or anything from an excluded estate.
 REDACT    a planted credential, token, one-time code, card or account number
           never survives into what the reader hands out.
 ONCE      each prompt is ingested exactly once, including a prompt that a
@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import builtins
 import json
-import os
 import time
 from pathlib import Path
 
@@ -35,6 +34,13 @@ NOW = time.time()
 def _keep_short_fixture_prompts(monkeypatch):
     """Fixtures use short texts; the length floor has its own test below."""
     monkeypatch.setattr(transcripts, "_MIN_PROMPT_CHARS", 1)
+
+
+@pytest.fixture(autouse=True)
+def _excluded_estate(monkeypatch, tmp_path):
+    """One synthetic excluded estate, and never the machine's own excludes file."""
+    monkeypatch.setenv(transcripts.EXCLUDES_ENV, "estatex")
+    monkeypatch.setattr(transcripts, "default_excludes_file", lambda: tmp_path / "absent.txt")
 
 
 def test_short_replies_are_dropped(tmp_path, monkeypatch):
@@ -210,8 +216,8 @@ class TestFilter:
             r"C:\Windows\System32",
             r"C:\Users\david\AppData\Local\Temp\cp-probe-abc123",
             r"C:\Users\david\AppData\Local\Temp\claude\work",
-            r"C:\Users\david\Projects\ActiveFounder",
-            r"C:\Users\david\.claude-activefounder\runs\fix1-p5",
+            r"C:\Users\pat\Projects\EstateX",
+            r"C:\Users\pat\.claude-estatex\runs\r1",
         ],
     )
     def test_excluded_working_folders(self, tmp_path, cwd):
@@ -220,18 +226,18 @@ class TestFilter:
         )
         assert _texts(tmp_path) == []
 
-    def test_activefounder_project_folders_are_never_opened(self, tmp_path, monkeypatch):
-        """Ruling 'Give ActiveFounder Its Own Estate' (2026-10-03): not filtered after
-        reading -- never opened. ~/.claude/projects really holds such folders."""
+    def test_excluded_estate_project_folders_are_never_opened(self, tmp_path, monkeypatch):
+        """An excluded estate's folders are not filtered after reading -- never opened.
+        A real projects folder does hold such folders."""
         _write(
             tmp_path,
-            "C--Users-david--claude-activefounder-runs-fix1-p5",
+            "C--Users-pat--claude-estatex-runs-r1",
             "a",
             [_user("zqaf", uuid="u1", cwd=r"C:\Users\david\Projects")],
         )
         _write(
             tmp_path,
-            "C--Users-david-Projects-ActiveFounder",
+            "C--Users-pat-Projects-EstateX",
             "b",
             [_user("zqaf2", uuid="u2", cwd=r"C:\Users\david\Projects")],
         )
@@ -247,7 +253,7 @@ class TestFilter:
         assert _texts(tmp_path) == ["ok"]
         rel = [o[len(str(tmp_path)) :] for o in opened if o.startswith(str(tmp_path))]
         assert rel, "the spy saw no reads at all"
-        assert not [r for r in rel if "activefounder" in r.lower()], rel
+        assert not [r for r in rel if "estatex" in r.lower()], rel
 
     def test_single_prompt_headless_run_is_dropped(self, tmp_path):
         _write(
@@ -498,9 +504,41 @@ class TestEventsAndLedger:
         assert [p.key for p in batch] == ["u1"]
 
 
-def test_real_activefounder_estate_root_is_refused():
-    with pytest.raises(ValueError, match="ActiveFounder"):
-        transcripts.check_personal_root(
-            Path(os.path.expanduser("~")) / ".claude-activefounder" / "projects"
-        )
-    transcripts.check_personal_root(Path(os.path.expanduser("~")) / ".claude" / "projects")
+def test_excluded_estate_root_is_refused():
+    with pytest.raises(ValueError, match="estatex"):
+        transcripts.check_personal_root(Path("C:/Users/pat/.claude-estatex/projects"))
+    transcripts.check_personal_root(Path("C:/Users/pat/.claude/projects"))
+
+
+# -- CONFIGURED EXCLUDES ------------------------------------------------
+
+
+def test_no_estate_name_is_written_in_the_module():
+    """Estate names are private to whoever runs the store; the code is public."""
+    assert not hasattr(transcripts, "DEFAULT_EXCLUDES")
+    assert transcripts.configured_excludes({}, Path("absent-file.txt")) == ()
+
+
+def test_excludes_merge_env_and_file(tmp_path):
+    f = tmp_path / "x.txt"
+    f.write_text("# private estates\nEstateY  # trailing note\n\nestatex\n", encoding="utf-8")
+    env = {transcripts.EXCLUDES_ENV: " EstateX, ,estateZ "}
+    assert transcripts.configured_excludes(env, f) == ("estatex", "estatez", "estatey")
+
+
+def test_unreadable_excludes_file_fails_loud(tmp_path):
+    """Reading nothing would ingest the very estates the file names."""
+    d = tmp_path / "is-a-dir.txt"
+    d.mkdir()
+    with pytest.raises(OSError):
+        transcripts.configured_excludes({}, d)
+
+
+def test_file_excludes_apply_by_default(tmp_path, monkeypatch):
+    monkeypatch.delenv(transcripts.EXCLUDES_ENV)
+    f = tmp_path / "excl.txt"
+    f.write_text("estatew\n", encoding="utf-8")
+    monkeypatch.setattr(transcripts, "default_excludes_file", lambda: f)
+    _write(tmp_path / "root", "C--Users-pat-Projects-EstateW", "a", [_user("zqw", uuid="u1")])
+    _write(tmp_path / "root", "C--Users-pat-Projects", "b", [_user("ok", uuid="u2")])
+    assert _texts(tmp_path / "root") == ["ok"]

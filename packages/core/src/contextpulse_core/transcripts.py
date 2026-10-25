@@ -18,10 +18,12 @@ handoff briefs, and sessions whose working folder is System32, a Temp folder
 (the distiller's own runs used one) or an excluded estate.
 
 The root is a parameter so another estate can run its own store from its own
-transcripts. ``DEFAULT_EXCLUDES`` keeps ActiveFounder out of the personal
-store (ruling "Give ActiveFounder Its Own Estate", 2026-10-03): a project
-folder whose name matches is never opened, and a record whose working folder
-matches is dropped.
+transcripts. Excluded estates are configured, never named in code: lower-cased
+substrings from the ``CONTEXTPULSE_TRANSCRIPT_EXCLUDES`` environment variable
+(comma-separated) and from ``transcript_excludes.txt`` in the ContextPulse app
+data folder (one per line, ``#`` comments). A project folder whose name matches
+is never opened, a record whose working folder matches is dropped, and a root
+whose path matches is refused.
 
 Redaction happens here, before any truncation: the product redactor, then the
 prose patterns below that the screen redactor has no reason to carry (one-time
@@ -47,9 +49,10 @@ from contextpulse_core.redact import redact_sensitive
 
 logger = logging.getLogger(__name__)
 
-# Lower-cased substrings. A project folder whose name contains one is never
-# opened; a session whose working folder contains one is dropped.
-DEFAULT_EXCLUDES: tuple[str, ...] = ("activefounder",)
+# Excluded estates come from configuration, not code (see the module docstring):
+# the names are private to whoever runs the store.
+EXCLUDES_ENV = "CONTEXTPULSE_TRANSCRIPT_EXCLUDES"
+EXCLUDES_FILENAME = "transcript_excludes.txt"
 # Working folders that are never a person at a keyboard.
 _EXCLUDED_CWD = (
     "\\windows\\system32",
@@ -200,12 +203,44 @@ def redact_transcript_text(text: str) -> str:
 # ── reading ─────────────────────────────────────────────────────────
 
 
-def check_personal_root(root: Path) -> None:
-    """Refuse an ActiveFounder estate root for the personal store."""
-    if any(x in str(root).lower() for x in DEFAULT_EXCLUDES):
+def default_excludes_file() -> Path:
+    """``transcript_excludes.txt`` in the ContextPulse app data folder."""
+    from contextpulse_core.config import APPDATA_DIR
+
+    return APPDATA_DIR / EXCLUDES_FILENAME
+
+
+def configured_excludes(
+    environ: dict[str, str] | None = None, path: Path | None = None
+) -> tuple[str, ...]:
+    """Lower-cased exclusion substrings from the environment and the excludes file.
+
+    A missing file contributes nothing. A file that exists but cannot be read
+    raises OSError: silently reading nothing would ingest the very estates it
+    names.
+    """
+    env = os.environ if environ is None else environ
+    items = env.get(EXCLUDES_ENV, "").split(",")
+    file = default_excludes_file() if path is None else path
+    if file.exists():
+        for line in file.read_text(encoding="utf-8").splitlines():
+            items.append(line.split("#", 1)[0])
+    seen: list[str] = []
+    for item in items:
+        x = item.strip().lower()
+        if x and x not in seen:
+            seen.append(x)
+    return tuple(seen)
+
+
+def check_personal_root(root: Path, excludes: tuple[str, ...] | None = None) -> None:
+    """Refuse a root that belongs to an excluded estate."""
+    excludes = configured_excludes() if excludes is None else excludes
+    hit = next((x for x in excludes if x in str(root).lower()), None)
+    if hit is not None:
         raise ValueError(
-            f"refusing transcript root {root}: it is in the ActiveFounder estate, which "
-            "keeps its own store (ruling 'Give ActiveFounder Its Own Estate', 2026-10-03)"
+            f"refusing transcript root {root}: it matches the excluded estate {hit!r} "
+            f"({EXCLUDES_ENV} or {EXCLUDES_FILENAME}), which keeps its own store"
         )
 
 
@@ -308,7 +343,7 @@ def iter_prompts(
     root: Path | str,
     *,
     since_ts: float,
-    excludes: tuple[str, ...] = DEFAULT_EXCLUDES,
+    excludes: tuple[str, ...] | None = None,
 ) -> Iterator[TranscriptPrompt]:
     """Yield human prompts at or after ``since_ts`` from ``root``'s top-level transcripts.
 
@@ -321,6 +356,7 @@ def iter_prompts(
     root = Path(root)
     if not root.is_dir():
         raise FileNotFoundError(f"transcript root not found: {root}")
+    excludes = configured_excludes() if excludes is None else excludes
     for d in sorted(os.scandir(root), key=lambda e: e.name):
         if not d.is_dir() or any(x in d.name.lower() for x in excludes):
             continue

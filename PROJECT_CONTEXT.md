@@ -194,9 +194,9 @@ paid cloud tier under active evaluation.
      = 3+ confirmed saves of injected facts (`scripts/injection_trial_report.py`). Action
      `cp-injection-trial-grade`. First injected fact (cp#1550) was an overclaim, counted wrong.
    - Transcript ingest (David's yes, 2026-10-24, journal 28699): `contextpulse_core/transcripts.py`,
-     scheduled run passes `--transcripts` (b448550). Personal estate only; ActiveFounder gets
-     its own store in its own estate, planned after the trial. Exclusion must move to private
-     config before any public push.
+     scheduled run passes `--transcripts` (b448550). Personal estate only; other estates get
+     their own stores, planned after the trial. Excluded estates are configured, not coded
+     (`CONTEXTPULSE_TRANSCRIPT_EXCLUDES` or `%APPDATA%/ContextPulse/transcript_excludes.txt`).
    - Extraction prompt now separates suggestions from decisions (b462edf).
    - Open: capture coverage (58% at prompt moments), `paste_detected` never fires, idle-window
      skip, local-model replay test (after the trial).

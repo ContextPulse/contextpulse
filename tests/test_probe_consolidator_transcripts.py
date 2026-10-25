@@ -206,9 +206,10 @@ def test_budget_drains_over_runs(cons, tmp_path):
         assert _ledger(pdb) == expected_total
 
 
-def test_activefounder_root_refused(cons, tmp_path):
+def test_excluded_estate_root_refused(cons, tmp_path, monkeypatch):
+    monkeypatch.setenv("CONTEXTPULSE_TRANSCRIPT_EXCLUDES", "estatex")
     act, pdb = _activity(tmp_path), tmp_path / "probe.db"
-    bad = tmp_path / ".claude-activefounder" / "projects"
+    bad = tmp_path / ".claude-estatex" / "projects"
     bad.mkdir(parents=True)
     with patch.object(cons, "call_claude", side_effect=AssertionError("called")):
         with pytest.raises(SystemExit) as ei:
