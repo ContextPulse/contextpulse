@@ -402,13 +402,13 @@ class TestEventsAndLedger:
     def test_to_events_shape(self, tmp_path):
         _write(
             tmp_path,
-            "C--Users-david-Projects-Voiceasy",
+            "C--Users-david-Projects-Invoicer",
             "a",
             [
                 _user(
                     "ship it",
                     uuid="0e45974d-74f0-4a93-87aa-340c26d5ecce",
-                    cwd=r"C:\Users\david\Projects\Voiceasy",
+                    cwd=r"C:\Users\david\Projects\Invoicer",
                 )
             ],
         )
@@ -416,7 +416,7 @@ class TestEventsAndLedger:
         assert e["event_id"] == "cc-0e45974d"
         assert e["modality"] == "agent"
         assert e["app_name"] == "Claude Code"
-        assert e["window_title"] == "Voiceasy"
+        assert e["window_title"] == "Invoicer"
         assert e["text"] == "ship it"
 
     def test_long_prompt_keeps_more_than_screen_cap(self, tmp_path):
