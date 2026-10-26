@@ -65,19 +65,19 @@ class TestQueryRawMentions:
         assert result is not None and result.count == 0
 
     def test_secret_token_is_not_an_oracle(self, tmp_path):
-        key = "AKIAIOSFODNN7EXAMPLE"
+        key = "AKIAZQRAWFALLBACK012"
         db = _activity_db(tmp_path / "activity.db", [("Console", f"access key {key} shown", 60)])
         result = probe.query_raw_mentions(db, key)
         assert result is not None and result.count == 0
 
     def test_secret_in_window_title_is_not_an_oracle(self, tmp_path):
-        key = "AKIAIOSFODNN7EXAMPLE"
+        key = "AKIAZQRAWFALLBACK012"
         db = _activity_db(tmp_path / "activity.db", [(f"key {key}", "nothing", 60)])
         result = probe.query_raw_mentions(db, key)
         assert result is not None and result.count == 0
 
     def test_snippet_is_redacted(self, tmp_path):
-        key = "AKIAIOSFODNN7EXAMPLE"
+        key = "AKIAZQRAWFALLBACK012"
         db = _activity_db(tmp_path / "activity.db", [("Console", f"Ananth pasted {key} here", 60)])
         result = probe.query_raw_mentions(db, "Ananth")
         assert result is not None and result.count == 1
