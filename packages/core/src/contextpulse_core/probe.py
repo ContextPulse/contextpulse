@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import sqlite3
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -352,6 +353,98 @@ def query_facts_about(
 def count_facts(conn: sqlite3.Connection) -> int:
     """Total facts in probe.db, so a miss can say how much was searched."""
     return int(conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0])
+
+
+# How many FTS candidates the raw fallback examines. The count it reports is a
+# floor when this many candidates come back, and the caller is told so.
+_RAW_CANDIDATES = 200
+
+
+@dataclass
+class RawMentions:
+    """Raw capture events that name a subject, decided on REDACTED text.
+
+    ``count`` is how many of the ``examined`` candidates name the subject as a
+    whole word; ``capped`` is True when the candidate page was full, so the
+    count is a lower bound. ``samples`` are the newest matches, newest first.
+    """
+
+    count: int
+    examined: int
+    capped: bool
+    samples: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _snippet(text: str, entity: str, width: int = 160) -> str:
+    """A window of ``text`` around the first occurrence of ``entity``."""
+    flat = " ".join(text.split())
+    i = flat.lower().find(entity.strip().lower())
+    if i < 0:
+        return flat[:width]
+    start = max(0, i - width // 3)
+    out = flat[start : start + width]
+    return ("..." if start else "") + out + ("..." if start + width < len(flat) else "")
+
+
+def query_raw_mentions(
+    activity_db: Path | str, entity: str, samples: int = 5
+) -> RawMentions | None:
+    """Fallback for a facts_about miss: does the raw capture log name ``entity``?
+
+    Returns None when the capture DB cannot be opened (the caller says the raw
+    log was not searched). Opens activity.db read-only.
+
+    FTS5 supplies candidates (the subject as a quoted phrase, newest first);
+    the decision is then made on the REDACTED text of each candidate with the
+    same whole-word test facts_about uses. A count computed on raw text would be
+    a query oracle for pre-fix secrets (see search_filter.py), so a token that
+    redaction removes can never match here.
+    """
+    from contextpulse_core.recall_inject import tokens, word_in
+
+    if not tokens(entity):
+        return RawMentions(count=0, examined=0, capped=False)
+    path = Path(activity_db)
+    if not path.exists():
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=5)
+    except sqlite3.Error:
+        logger.warning("raw fallback: cannot open %s read-only", path)
+        return None
+    conn.row_factory = sqlite3.Row
+    phrase = '"' + " ".join(tokens(entity)).replace('"', '""') + '"'
+    try:
+        rows = conn.execute(
+            "SELECT e.timestamp, e.modality, e.app_name, e.window_title, e.payload"
+            " FROM events_fts f JOIN events e ON e.rowid = f.rowid"
+            " WHERE events_fts MATCH ? ORDER BY e.timestamp DESC LIMIT ?",
+            (phrase, _RAW_CANDIDATES),
+        ).fetchall()
+    except sqlite3.Error:
+        logger.warning("raw fallback: FTS query failed for %r", entity, exc_info=True)
+        return None
+    finally:
+        conn.close()
+
+    matches: list[dict[str, Any]] = []
+    for r in rows:
+        text = redact_sensitive(" ".join([str(r["window_title"] or ""), _extract_text(r["payload"])]))
+        if word_in(entity, text):
+            matches.append(
+                {
+                    "timestamp": r["timestamp"],
+                    "modality": r["modality"],
+                    "app_name": redact_sensitive(str(r["app_name"] or "")),
+                    "snippet": _snippet(text, entity),
+                }
+            )
+    return RawMentions(
+        count=len(matches),
+        examined=len(rows),
+        capped=len(rows) >= _RAW_CANDIDATES,
+        samples=matches[:samples],
+    )
 
 
 def query_context_at(
