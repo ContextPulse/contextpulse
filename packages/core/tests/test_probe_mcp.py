@@ -19,7 +19,14 @@ import sqlite3
 import time
 from unittest.mock import patch
 
+import pytest
 from contextpulse_core import probe, probe_mcp
+
+
+@pytest.fixture(autouse=True)
+def _no_live_activity_db(tmp_path, monkeypatch):
+    """A facts_about miss now searches activity.db; never let it read the live one."""
+    monkeypatch.setenv("CONTEXTPULSE_ACTIVITY_DB", str(tmp_path / "no-activity.db"))
 
 
 def _usage_rows(db_path):
