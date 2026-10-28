@@ -274,12 +274,21 @@ def _pad_to(activity_db, total: int, text: str = "") -> None:
     per event (1500 events ~ 78K chars); the incident's prompt was ~316KB, so
     tests of the large-prompt floor pass _INCIDENT_TEXT.
     """
-    payload = json.dumps({"ocr_text": text}) if text else "{}"
+    # Each padded frame differs in its first six characters, length unchanged:
+    # the consolidator sends only OCR lines that are new since the previous
+    # frame of the same window (probe.condense_events), so identical padding
+    # would collapse to one line and no longer build a prompt of the size the
+    # floor tests need. Real consecutive frames differ too.
+    def payload(i: int) -> str:
+        if not text:
+            return "{}"
+        return json.dumps({"ocr_text": f"{i:05d} {text[6:]}" if len(text) >= 6 else text})
+
     conn = sqlite3.connect(str(activity_db))
     conn.executemany(
         "INSERT INTO events VALUES (?, ?, ?, ?, ?, ?, ?)",
         [
-            (f"e{i}", 9_999_999_999.0 - i, "sight", "screenshot", "App", "Win", payload)
+            (f"e{i}", 9_999_999_999.0 - i, "sight", "screenshot", "App", "Win", payload(i))
             for i in range(1, total)
         ],
     )
@@ -829,3 +838,27 @@ class TestDistillerIsLockedDown:
         with caplog.at_level("WARNING"):
             consolidator.call_claude("p")
         assert "Bash" in caplog.text
+
+
+class TestPromptIsCondensed:
+    """main() sends condensed events (cp-extraction-input-chrome-not-content).
+
+    Fifty textless frames in one window reach the model as ONE activity line,
+    while probe_runs still records the raw event count.
+    """
+
+    def test_textless_frames_fold_and_raw_count_is_recorded(
+        self, consolidator, activity_db, probe_db
+    ):
+        _pad_to(activity_db, 51)  # 50 textless sight frames + the fixture's text row
+        recorder = _PromptRecorder('[{"entity":"x","fact":"y","valid_from":1,"source_event_ids":["e1"],"confidence":0.9}]', 30.0)
+
+        with patch.object(consolidator, "call_claude", recorder):
+            assert _run(consolidator, activity_db, probe_db) == 0
+
+        body = recorder.prompt.split("Activity log (chronological):", 1)[1]
+        assert body.count(" activity app='App' win='Win' :: 50 events with no text") == 1
+        assert " sight app='App'" not in body
+        assert "shipped the fix" in body  # the person's own text survives
+        [(events, _facts, _error, _elapsed)] = _probe_runs_rows(probe_db)
+        assert events == 51
