@@ -526,11 +526,108 @@ def read_recent_events(
                 "event_id": d["event_id"],
                 "timestamp": d["timestamp"],
                 "modality": d["modality"],
+                "event_type": d["event_type"] or "",
                 "app_name": d["app_name"] or "",
                 "window_title": d["window_title"] or "",
                 "text": _extract_text(d["payload"]),
             }
         )
+    return out
+
+
+# ── input shaping ───────────────────────────────────────────────────
+
+
+# A window's activity summary closes after this much silence in that window, so
+# "worked in X from 09:10 to 09:40, again from 14:00" is not read as one span.
+_FOLD_GAP_S = 900.0
+
+
+def _fold_label(e: dict[str, Any]) -> str:
+    if e.get("event_type"):
+        return f"{e.get('modality')}:{e['event_type']}"
+    return str(e.get("modality"))
+
+
+@dataclass
+class _Fold:
+    summary: dict[str, Any]
+    first_ts: float
+    last_ts: float
+    kinds: dict[str, int]
+
+    def finish(self) -> None:
+        n = sum(self.kinds.values())
+        minutes = max(0, round((self.last_ts - self.first_ts) / 60))
+        parts = ", ".join(
+            f"{k} x{v}" for k, v in sorted(self.kinds.items(), key=lambda kv: (-kv[1], kv[0]))
+        )
+        self.summary["text"] = f"{n} events with no text over {minutes}m ({parts})"
+
+
+def condense_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Shape a chronological event list for the extraction prompt.
+
+    Action cp-extraction-input-chrome-not-content: on real 6 h windows most
+    prompt lines carried no text and the 600-char OCR cap kept each frame's tab
+    strip and URL bar instead of its content.
+
+    - A ``sight`` frame keeps only the lines that were not in the previous frame
+      of the same app and window; a frame with no new line counts as textless.
+    - Textless events of one app and window fold into a single ``activity``
+      line, placed where the first of them was and carrying its id and
+      timestamp, a count by kind and the span in minutes. Captures alternate
+      between windows (two monitors), so a window's fold stays open across
+      other windows' events and the window's own text lines (each OCR frame
+      is a textless capture followed by its text), and closes only when the
+      window falls silent for ``_FOLD_GAP_S``.
+    - Every other event with text (voice, clipboard, agent, typed text) passes
+      through unchanged.
+
+    Pure: the input list and its dicts are not modified.
+    """
+    out: list[dict[str, Any]] = []
+    last_lines: dict[tuple[str, str], set[str]] = {}
+    folds: dict[tuple[str, str], _Fold] = {}
+
+    for src in events:
+        e = dict(src)
+        key = (str(e.get("app_name") or ""), str(e.get("window_title") or ""))
+        ts = float(e.get("timestamp") or 0.0)
+        text = (e.get("text") or "").strip()
+        label = _fold_label(e)
+        if e.get("modality") == "sight" and text:
+            lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+            prev = last_lines.get(key, set())
+            new = [ln for ln in lines if ln not in prev]
+            last_lines[key] = set(lines)
+            if new:
+                e["text"] = "\n".join(new)
+            else:
+                text = ""
+                label = f"{label} unchanged"
+        if text:
+            out.append(e)
+            continue
+        fold = folds.get(key)
+        if fold is not None and ts - fold.last_ts > _FOLD_GAP_S:
+            fold.finish()
+            fold = None
+        if fold is None:
+            summary = {
+                "event_id": e.get("event_id"),
+                "timestamp": e.get("timestamp"),
+                "modality": "activity",
+                "app_name": key[0],
+                "window_title": key[1],
+                "text": "",
+            }
+            out.append(summary)
+            fold = folds[key] = _Fold(summary, ts, ts, {})
+        fold.last_ts = ts
+        fold.kinds[label] = fold.kinds.get(label, 0) + 1
+    for fold in folds.values():
+        fold.finish()
     return out
 
 
@@ -547,11 +644,16 @@ You are the nightly memory consolidator for a personal activity-capture system.
 Input: a chronological, timestamped log of ONE person's computer activity over
 roughly the last 24 hours. Each line:
   [<event_id>] ts=<unix_ts> <modality> app='<app>' win='<window title>' :: <text>
-Modalities: sight = screen OCR (noisy), voice = speech transcript, touch =
-typed text, clipboard = copied text, agent = a message the person typed or
-dictated to an AI assistant (Claude Code; win names the project). Voice,
-touch and agent lines are the person's own words and are the strongest
-evidence of intent and decisions.
+Modalities: sight = screen OCR (noisy; each line holds only the text that is
+new since the previous capture of the same window), voice = speech
+transcript, clipboard = copied text, agent = a message the person typed or
+dictated to an AI assistant (Claude Code; win names the project), activity =
+a summary of events that carry no text (keys = typing counts, flow = clicks
+and scrolls, unchanged screen frames): how many, of which kinds, over how
+many minutes. Typing events record counts only, never the words typed; use
+activity lines for when work in a window began and ended, never as evidence
+of content. Voice and agent lines are the person's own words and are the
+strongest evidence of intent and decisions.
 
 YOUR JOB
 Distill durable FACTS to be recalled later via two tools: facts_about(entity)

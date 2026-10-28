@@ -378,8 +378,16 @@ def main(argv: list[str] | None = None) -> int:
             args.limit,
         )
 
-    prompt = probe.build_extraction_prompt(events)
-    logger.info("Built a %d-char prompt from %d events", len(prompt), len(events))
+    # Fold textless events and send only new OCR lines (cp-extraction-input-
+    # chrome-not-content); `events` keeps the raw count for probe_runs.
+    shaped = probe.condense_events(events)
+    prompt = probe.build_extraction_prompt(shaped)
+    logger.info(
+        "Built a %d-char prompt from %d events (%d prompt lines after condensing)",
+        len(prompt),
+        len(events),
+        len(shaped),
+    )
 
     if args.dry_run:
         print(prompt)
