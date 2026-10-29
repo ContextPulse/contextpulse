@@ -42,6 +42,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Iterable, Sequence
 
 from contextpulse_core.redact import redact_sensitive
@@ -73,12 +74,34 @@ STOPWORDS = frozenset(
     """.split()
 )
 
-DEFAULT_HEADER = (
+BASE_HEADER = (
     "CONTEXTPULSE MEMORY -- auto-injected for a two-week trial. These are UNVERIFIED facts "
     "a model distilled from David's screen and voice capture; they may be stale or wrong "
     "(1 in 8 was wrong in a hand-graded sample). Check one against the journal or its "
     "source before acting on it. If a fact below helps, name it by its cp# id."
 )
+
+# The trial passes on saves logged with this script (scripts/injection_trial_report.py).
+# Only the session that used a fact can log one, so the header has to say how; the
+# path is resolved from this checkout rather than written into source.
+SAVE_SCRIPT = Path(__file__).resolve().parents[4] / "scripts" / "probe_save.py"
+
+
+def save_hint(script: Path = SAVE_SCRIPT) -> str:
+    """The sentence telling a session how to log a save; empty when the script is absent."""
+    if not script.is_file():
+        return ""
+    return (
+        " If one told you something the journal, memory files and CLAUDE.md did not, and you"
+        f" used it, log the save once: python {script.as_posix()} --tool inject --fact-id N"
+        ' --query "<the prompt>" --confirmed-novel --note "<what it changed>"'
+    )
+
+
+DEFAULT_HEADER = BASE_HEADER
+# Once per session is enough, and the hint costs about 95 tokens: on the 600-token
+# prompt block that would be one fewer fact on every prompt.
+SESSION_HEADER = BASE_HEADER + save_hint()
 
 
 def tokens(text: str) -> list[str]:
