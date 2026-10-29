@@ -77,3 +77,49 @@ def test_inject_save_without_a_fact_id_is_refused(capsys):
 
 def test_inject_save_without_confirmed_novel_is_refused():
     assert probe_save.main(["--tool", "inject", "--query", "q", "--fact-id", "7"]) == 2
+
+
+# -- the header must let a session log the save the trial is graded on ------
+#
+# The pass mark is 3 saves logged with probe_save.py --tool inject. Until
+# 2026-10-29 the injected header never named that script, so 21 used facts
+# produced 0 saves: nothing could produce a 1.
+
+
+def _save_command(header: str) -> list[str]:
+    import re
+    import shlex
+
+    m = re.search(r"python (\S*probe_save\.py.*)$", header)
+    assert m, "the header does not show a probe_save.py command"
+    args = shlex.split(m.group(1))[1:]
+    return [{"N": "7", "<the prompt>": "q", "<what it changed>": "n"}.get(a, a) for a in args]
+
+
+def test_the_session_header_tells_the_session_how_to_log_a_save():
+    header = ri.SESSION_HEADER
+    for token in ("probe_save.py", "--tool inject", "--fact-id", "--confirmed-novel"):
+        assert token in header, token
+
+
+def test_the_save_command_in_the_header_names_a_script_that_exists():
+    import re
+
+    path = re.search(r"python (\S*probe_save\.py)", ri.SESSION_HEADER).group(1)
+    assert Path(path).is_file(), path
+
+
+def test_the_save_command_in_the_header_is_accepted_by_probe_save(capsys):
+    rc = probe_save.main(_save_command(ri.SESSION_HEADER) + ["--dry-run"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "PHASE0-SAVE | tool=inject" in out and "facts=7" in out
+
+
+def test_no_save_hint_when_the_script_is_absent(tmp_path):
+    assert ri.save_hint(tmp_path / "probe_save.py") == ""
+
+
+def test_prompt_blocks_do_not_carry_the_save_hint():
+    """The hint is ~95 tokens; on the 600-token prompt block it would cost a fact per prompt."""
+    assert "probe_save" not in ri.DEFAULT_HEADER
