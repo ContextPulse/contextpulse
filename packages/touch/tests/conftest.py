@@ -51,6 +51,13 @@ sys.modules["pyperclip"] = mock_pyperclip
 mock_anthropic = MagicMock()
 sys.modules["anthropic"] = mock_anthropic
 
+# Own attributes, so pytest 9.2's monkeypatch undo restores rather than deletes them;
+# see the same block in packages/voice/tests/conftest.py.
+mock_sounddevice.InputStream = MagicMock()
+mock_pyperclip.copy = MagicMock()
+mock_pyperclip.paste = MagicMock()
+mock_pyautogui.hotkey = MagicMock()
+
 import ctypes
 
 if not hasattr(ctypes, "windll"):

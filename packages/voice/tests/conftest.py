@@ -42,6 +42,16 @@ sys.modules["pystray"] = mock_pystray
 mock_anthropic = MagicMock()
 sys.modules["anthropic"] = mock_anthropic
 
+# Tests monkeypatch these on the shared mocks. pytest 9.2.0 (#10644) undoes a patch of
+# an attribute the instance did not own by deleting it, and a MagicMock's auto-created
+# child is not owned, so the second test to patch it got "has no attribute". Assigning
+# each one makes it an own attribute that undo restores. Mirrored in touch's conftest,
+# because whichever conftest imports first is the mock the voice modules bind to.
+mock_sounddevice.InputStream = MagicMock()
+mock_pyperclip.copy = MagicMock()
+mock_pyperclip.paste = MagicMock()
+mock_pyautogui.hotkey = MagicMock()
+
 # Mock ctypes.windll for non-Windows
 import ctypes
 
