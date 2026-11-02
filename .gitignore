@@ -155,3 +155,6 @@ infra/
 .cursor/
 .claude.json
 *.contextpulse-bak
+
+*.credentials
+credentials*.json
