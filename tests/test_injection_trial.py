@@ -109,11 +109,19 @@ def test_the_save_command_in_the_header_names_a_script_that_exists():
     assert Path(path).is_file(), path
 
 
-def test_the_save_command_in_the_header_is_accepted_by_probe_save(capsys):
+def test_the_save_command_in_the_header_is_accepted_by_probe_save(capsys, tmp_path, monkeypatch):
+    # probe_save hands the entry to the journal's log-entry.py, which lives in the
+    # developer's ~/.claude and does not exist on a CI runner (run 41430728679 exited 2
+    # there). A stand-in that echoes its argv keeps this test about probe_save's own
+    # argument gates, on every platform.
+    fake = tmp_path / "log-entry.py"
+    fake.write_text("import sys\nprint(' '.join(sys.argv[1:]))\n", encoding="utf-8")
+    monkeypatch.setattr(probe_save, "_LOG_ENTRY", fake)
     rc = probe_save.main(_save_command(ri.SESSION_HEADER) + ["--dry-run"])
     out = capsys.readouterr().out
     assert rc == 0, out
     assert "PHASE0-SAVE | tool=inject" in out and "facts=7" in out
+    assert "--dry-run" in out
 
 
 def test_no_save_hint_when_the_script_is_absent(tmp_path):
