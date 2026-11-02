@@ -113,15 +113,44 @@ def facts_about(entity: str) -> str:
         conn.close()
     if not hits:
         if total == 0:
-            return (
+            miss = (
                 f"No probe facts about '{entity}': the probe store holds no facts yet "
                 "(the consolidator has not written any)."
             )
-        return (
-            f"No probe facts about '{entity}': none of the {total} consolidated facts "
-            "names it as an entity or mentions it in its text."
-        )
+        else:
+            miss = (
+                f"No probe facts about '{entity}': none of the {total} consolidated facts "
+                "names it as an entity or mentions it in its text."
+            )
+        return miss + "\n" + _raw_fallback(entity)
     return f"Facts about '{entity}':\n{_fmt_facts(hits)}"
+
+
+def _raw_fallback(entity: str) -> str:
+    """Say whether the raw capture log names ``entity``, labelled as raw.
+
+    Action cp-facts-about-raw-fallback-word-match: half the real misses had the
+    subject in the raw log. These rows are NOT counted as hits in tool_usage,
+    which measures distilled facts; a raw mention is weaker evidence and the
+    output says so.
+    """
+    try:
+        raw = probe.query_raw_mentions(probe.default_activity_db(), entity)
+    except Exception:
+        logger.exception("raw fallback failed for %r (facts answer unaffected)", entity)
+        raw = None
+    if raw is None:
+        return "Raw capture log not searched (activity.db unavailable)."
+    if raw.count == 0:
+        return f"Raw capture has no mention of '{entity}' either ({raw.examined} candidate events checked)."
+    floor = " at least" if raw.capped else ""
+    lines = [
+        f"Raw capture mentions '{entity}' in{floor} {raw.count} events. These are raw "
+        "screen/voice/clipboard records, not distilled facts; newest first:"
+    ]
+    for s in raw.samples:
+        lines.append(f"- ({_fmt_ts(s['timestamp'])}, {s['modality']}, {s['app_name']}) {s['snippet']}")
+    return "\n".join(lines)
 
 
 @mcp_app.tool()

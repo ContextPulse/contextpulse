@@ -108,6 +108,11 @@ ENV_READ_ALLOWLIST: dict[str, set[str]] = {
         "CONTEXTPULSE_KNOWLEDGE_DB",
     },
     "packages/knowledge/src/contextpulse_knowledge/mcp_tools.py": {"CONTEXTPULSE_KNOWLEDGE_DB"},
+    # A privacy fence, not a tunable: the names of estates whose transcripts
+    # must never enter this store. They are private to whoever runs it, so
+    # they cannot be a _DEFAULTS value in public code; env var or the
+    # transcript_excludes.txt file beside config.json, no Settings control.
+    "packages/core/src/contextpulse_core/transcripts.py": {"CONTEXTPULSE_TRANSCRIPT_EXCLUDES"},
     # A store location, not a tunable: no config.json key, no Settings
     # control, same class as CONTEXTPULSE_KNOWLEDGE_DB above. This entry was
     # keyed to mcp_server.py until the startup secret sweep landed on main,

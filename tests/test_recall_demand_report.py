@@ -137,5 +137,57 @@ def test_cli_reports_the_ratio_when_demand_exists(tmp_path: Path, capsys) -> Non
     )
     assert rdr.main(["--root", str(tmp_path), "--after", "2026-10-03"]) == 0
     out = capsys.readouterr().out
-    assert "routing ratio: 0/1" in out
+    assert "sessions reaching a recall tool: 0 of 1 (0%)" in out
     assert "journal queries: 1" in out
+
+
+_DISTILLER_PROMPT = (
+    "You are the nightly memory consolidator for a personal activity-capture system.\r\n"
+    "Input: a chronological log... remember when the user said last week ..."
+)
+
+
+def test_distiller_transcripts_are_excluded_and_counted(tmp_path: Path, capsys) -> None:
+    """The consolidator's own `claude -p` runs carry captured screen text, which is full of
+    'last week' and 'we discussed'. Those are not David asking for recall."""
+    _write(tmp_path / "C--Users-x-ContextPulse" / "d.jsonl", [_user(_DISTILLER_PROMPT, "2026-10-04T00:00:00Z")])
+    _write(tmp_path / "p" / "h.jsonl", [_user("did we already backfill the wiki?", "2026-10-04T00:00:00Z")])
+    assert rdr.main(["--root", str(tmp_path), "--after", "2026-10-03"]) == 0
+    out = capsys.readouterr().out
+    assert "distiller transcripts excluded: 1" in out
+    assert "recall-shaped prompts: 1" in out
+    assert "sessions reaching a recall tool: 0 of 1 (0%)" in out
+
+
+def test_tally_flags_a_distiller_transcript(tmp_path: Path) -> None:
+    f = _write(tmp_path / "p" / "d.jsonl", [_user(_DISTILLER_PROMPT, "2026-10-04T00:00:00Z")])
+    assert rdr.tally_file(f, "2026-10-03").is_distiller is True
+    g = _write(tmp_path / "p" / "g.jsonl", [_user("run the tests", "2026-10-04T00:00:00Z")])
+    assert rdr.tally_file(g, "2026-10-03").is_distiller is False
+
+
+def test_compaction_summaries_are_not_prompts() -> None:
+    summary = _user(
+        "This session is being continued from a previous conversation that ran out of context. "
+        "Last week we discussed ...",
+        "t",
+        isCompactSummary=True,
+    )
+    assert rdr.human_prompts(summary) == []
+
+
+def test_sessions_reached_counts_sessions_not_calls(tmp_path: Path, capsys) -> None:
+    """Two recall calls in one session and none in another is 1 of 2 sessions, not 2/2."""
+    _write(
+        tmp_path / "p" / "a.jsonl",
+        [
+            _user("why did you forget the renewal", "2026-10-04T00:00:00Z"),
+            _tool("mcp__contextpulse__facts_about", "2026-10-04T00:00:01Z"),
+            _tool("mcp__contextpulse__context_at", "2026-10-04T00:00:02Z"),
+        ],
+    )
+    _write(tmp_path / "p" / "b.jsonl", [_user("we already did this last week", "2026-10-04T00:00:00Z")])
+    assert rdr.main(["--root", str(tmp_path), "--after", "2026-10-03"]) == 0
+    out = capsys.readouterr().out
+    assert "sessions reaching a recall tool: 1 of 2 (50%)" in out
+    assert "recall calls (facts_about/context_at): 2" in out

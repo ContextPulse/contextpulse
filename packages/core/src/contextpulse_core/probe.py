@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import sqlite3
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -319,28 +320,131 @@ def _row_to_fact(row: sqlite3.Row) -> dict[str, Any]:
 def query_facts_about(
     conn: sqlite3.Connection, entity: str, limit: int = 50
 ) -> list[dict[str, Any]]:
-    """Entity recall: facts whose entity, or failing that whose text, contains ``entity``.
+    """Entity recall: facts whose entity, or failing that whose text, names ``entity``.
 
-    Case-insensitive substring match. Facts whose ENTITY matches come first
+    Case-insensitive WHOLE-WORD match: "CLEAR" finds the CLEAR renewal and not
+    the 29 facts about something being "cleared", which is what the substring
+    match returned (usefulness review, 2026-10-24). A multi-word query must
+    appear as a contiguous run of words. Facts whose ENTITY matches come first
     (newest, then most confident); facts that only mention the subject in their
     text follow in the same order. ``limit`` caps the combined list. The text
     half exists because the consolidator files a fact under whatever entity the
     window was about, so a subject a person asks about is often a word inside a
     fact filed elsewhere (live miss, 2026-10-22: a subject found only in another entity's fact text).
+
+    SQL LIKE is kept as a cheap superset prefilter; the word test runs in Python.
     """
+    from contextpulse_core.recall_inject import tokens, word_in
+
+    if not tokens(entity):
+        return []
     pattern = f"%{entity}%"
     rows = conn.execute(
         "SELECT * FROM facts WHERE entity LIKE ? COLLATE NOCASE OR fact LIKE ? COLLATE NOCASE"
-        " ORDER BY CASE WHEN entity LIKE ? COLLATE NOCASE THEN 0 ELSE 1 END,"
-        " valid_from DESC, confidence DESC LIMIT ?",
-        (pattern, pattern, pattern, limit),
+        " ORDER BY valid_from DESC, confidence DESC",
+        (pattern, pattern),
     ).fetchall()
-    return [_row_to_fact(r) for r in rows]
+    by_entity = [r for r in rows if word_in(entity, r["entity"] or "")]
+    seen = {r["id"] for r in by_entity}
+    by_text = [r for r in rows if r["id"] not in seen and word_in(entity, r["fact"] or "")]
+    return [_row_to_fact(r) for r in (by_entity + by_text)[:limit]]
 
 
 def count_facts(conn: sqlite3.Connection) -> int:
     """Total facts in probe.db, so a miss can say how much was searched."""
     return int(conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0])
+
+
+# How many FTS candidates the raw fallback examines. The count it reports is a
+# floor when this many candidates come back, and the caller is told so.
+_RAW_CANDIDATES = 200
+
+
+@dataclass
+class RawMentions:
+    """Raw capture events that name a subject, decided on REDACTED text.
+
+    ``count`` is how many of the ``examined`` candidates name the subject as a
+    whole word; ``capped`` is True when the candidate page was full, so the
+    count is a lower bound. ``samples`` are the newest matches, newest first.
+    """
+
+    count: int
+    examined: int
+    capped: bool
+    samples: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _snippet(text: str, entity: str, width: int = 160) -> str:
+    """A window of ``text`` around the first occurrence of ``entity``."""
+    flat = " ".join(text.split())
+    i = flat.lower().find(entity.strip().lower())
+    if i < 0:
+        return flat[:width]
+    start = max(0, i - width // 3)
+    out = flat[start : start + width]
+    return ("..." if start else "") + out + ("..." if start + width < len(flat) else "")
+
+
+def query_raw_mentions(
+    activity_db: Path | str, entity: str, samples: int = 5
+) -> RawMentions | None:
+    """Fallback for a facts_about miss: does the raw capture log name ``entity``?
+
+    Returns None when the capture DB cannot be opened (the caller says the raw
+    log was not searched). Opens activity.db read-only.
+
+    FTS5 supplies candidates (the subject as a quoted phrase, newest first);
+    the decision is then made on the REDACTED text of each candidate with the
+    same whole-word test facts_about uses. A count computed on raw text would be
+    a query oracle for pre-fix secrets (see search_filter.py), so a token that
+    redaction removes can never match here.
+    """
+    from contextpulse_core.recall_inject import tokens, word_in
+
+    if not tokens(entity):
+        return RawMentions(count=0, examined=0, capped=False)
+    path = Path(activity_db)
+    if not path.exists():
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=5)
+    except sqlite3.Error:
+        logger.warning("raw fallback: cannot open %s read-only", path)
+        return None
+    conn.row_factory = sqlite3.Row
+    phrase = '"' + " ".join(tokens(entity)).replace('"', '""') + '"'
+    try:
+        rows = conn.execute(
+            "SELECT e.timestamp, e.modality, e.app_name, e.window_title, e.payload"
+            " FROM events_fts f JOIN events e ON e.rowid = f.rowid"
+            " WHERE events_fts MATCH ? ORDER BY e.timestamp DESC LIMIT ?",
+            (phrase, _RAW_CANDIDATES),
+        ).fetchall()
+    except sqlite3.Error:
+        logger.warning("raw fallback: FTS query failed for %r", entity, exc_info=True)
+        return None
+    finally:
+        conn.close()
+
+    matches: list[dict[str, Any]] = []
+    for r in rows:
+        text = redact_sensitive(" ".join([str(r["window_title"] or ""), _extract_text(r["payload"])]))
+        if word_in(entity, text):
+            matches.append(
+                {
+                    "timestamp": r["timestamp"],
+                    "modality": r["modality"],
+                    "app_name": redact_sensitive(str(r["app_name"] or "")),
+                    "snippet": _snippet(text, entity),
+                }
+            )
+    return RawMentions(
+        count=len(matches),
+        examined=len(rows),
+        capped=len(rows) >= _RAW_CANDIDATES,
+        samples=matches[:samples],
+    )
 
 
 def query_context_at(
@@ -422,11 +526,108 @@ def read_recent_events(
                 "event_id": d["event_id"],
                 "timestamp": d["timestamp"],
                 "modality": d["modality"],
+                "event_type": d["event_type"] or "",
                 "app_name": d["app_name"] or "",
                 "window_title": d["window_title"] or "",
                 "text": _extract_text(d["payload"]),
             }
         )
+    return out
+
+
+# ── input shaping ───────────────────────────────────────────────────
+
+
+# A window's activity summary closes after this much silence in that window, so
+# "worked in X from 09:10 to 09:40, again from 14:00" is not read as one span.
+_FOLD_GAP_S = 900.0
+
+
+def _fold_label(e: dict[str, Any]) -> str:
+    if e.get("event_type"):
+        return f"{e.get('modality')}:{e['event_type']}"
+    return str(e.get("modality"))
+
+
+@dataclass
+class _Fold:
+    summary: dict[str, Any]
+    first_ts: float
+    last_ts: float
+    kinds: dict[str, int]
+
+    def finish(self) -> None:
+        n = sum(self.kinds.values())
+        minutes = max(0, round((self.last_ts - self.first_ts) / 60))
+        parts = ", ".join(
+            f"{k} x{v}" for k, v in sorted(self.kinds.items(), key=lambda kv: (-kv[1], kv[0]))
+        )
+        self.summary["text"] = f"{n} events with no text over {minutes}m ({parts})"
+
+
+def condense_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Shape a chronological event list for the extraction prompt.
+
+    Action cp-extraction-input-chrome-not-content: on real 6 h windows most
+    prompt lines carried no text and the 600-char OCR cap kept each frame's tab
+    strip and URL bar instead of its content.
+
+    - A ``sight`` frame keeps only the lines that were not in the previous frame
+      of the same app and window; a frame with no new line counts as textless.
+    - Textless events of one app and window fold into a single ``activity``
+      line, placed where the first of them was and carrying its id and
+      timestamp, a count by kind and the span in minutes. Captures alternate
+      between windows (two monitors), so a window's fold stays open across
+      other windows' events and the window's own text lines (each OCR frame
+      is a textless capture followed by its text), and closes only when the
+      window falls silent for ``_FOLD_GAP_S``.
+    - Every other event with text (voice, clipboard, agent, typed text) passes
+      through unchanged.
+
+    Pure: the input list and its dicts are not modified.
+    """
+    out: list[dict[str, Any]] = []
+    last_lines: dict[tuple[str, str], set[str]] = {}
+    folds: dict[tuple[str, str], _Fold] = {}
+
+    for src in events:
+        e = dict(src)
+        key = (str(e.get("app_name") or ""), str(e.get("window_title") or ""))
+        ts = float(e.get("timestamp") or 0.0)
+        text = (e.get("text") or "").strip()
+        label = _fold_label(e)
+        if e.get("modality") == "sight" and text:
+            lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+            prev = last_lines.get(key, set())
+            new = [ln for ln in lines if ln not in prev]
+            last_lines[key] = set(lines)
+            if new:
+                e["text"] = "\n".join(new)
+            else:
+                text = ""
+                label = f"{label} unchanged"
+        if text:
+            out.append(e)
+            continue
+        fold = folds.get(key)
+        if fold is not None and ts - fold.last_ts > _FOLD_GAP_S:
+            fold.finish()
+            fold = None
+        if fold is None:
+            summary = {
+                "event_id": e.get("event_id"),
+                "timestamp": e.get("timestamp"),
+                "modality": "activity",
+                "app_name": key[0],
+                "window_title": key[1],
+                "text": "",
+            }
+            out.append(summary)
+            fold = folds[key] = _Fold(summary, ts, ts, {})
+        fold.last_ts = ts
+        fold.kinds[label] = fold.kinds.get(label, 0) + 1
+    for fold in folds.values():
+        fold.finish()
     return out
 
 
@@ -443,9 +644,16 @@ You are the nightly memory consolidator for a personal activity-capture system.
 Input: a chronological, timestamped log of ONE person's computer activity over
 roughly the last 24 hours. Each line:
   [<event_id>] ts=<unix_ts> <modality> app='<app>' win='<window title>' :: <text>
-Modalities: sight = screen OCR (noisy), voice = speech transcript, touch =
-typed text, clipboard = copied text. Voice and touch are the person's own
-words and are the strongest evidence of intent and decisions.
+Modalities: sight = screen OCR (noisy; each line holds only the text that is
+new since the previous capture of the same window), voice = speech
+transcript, clipboard = copied text, agent = a message the person typed or
+dictated to an AI assistant (Claude Code; win names the project), activity =
+a summary of events that carry no text (keys = typing counts, flow = clicks
+and scrolls, unchanged screen frames): how many, of which kinds, over how
+many minutes. Typing events record counts only, never the words typed; use
+activity lines for when work in a window began and ended, never as evidence
+of content. Voice and agent lines are the person's own words and are the
+strongest evidence of intent and decisions.
 
 YOUR JOB
 Distill durable FACTS to be recalled later via two tools: facts_about(entity)
@@ -475,6 +683,20 @@ NEVER emit restatements — anything answerable by grepping a single event:
      BAD: "tax.py defines apply_tax()."               (visible code)
 Apply this test to every candidate fact: "would a keyword search of the raw
 log for this entity surface this same answer?" If yes, drop the fact.
+EXCEPTION: agent lines are NOT in the searchable log. A durable statement the
+person makes in one agent line -- about their accounts, tools, preferences,
+plans, what they already did, or what an assistant can or cannot do for them --
+is a fact even when it rests on that single line. Phrase it as a standalone
+fact about the person, not as "the user told the assistant". Requests and
+instructions for the task at hand are not durable; skip them.
+
+DECISION WORDING
+Say "decided" or "ruled" only when the person states a decision ("we will",
+"do X", "yes, go ahead"). A suggestion or thought aloud ("we should", "maybe",
+"I think") is recorded as "suggested" or "raised", never as a decision, and an
+assistant offering something is not the person deciding. Keep every condition
+the person attached ("if we don't know the OS", "after the trial"); a fact that
+drops a condition is wrong.
 
 ENTITIES
 - "entity" is the short canonical name the person would later type into
@@ -566,12 +788,15 @@ def build_extraction_prompt(events: list[dict[str, Any]]) -> str:
 
     Redact BEFORE the _MAX_TEXT_CHARS truncation, never after: a token the cut
     halves matches nothing and its leading half would be transmitted verbatim.
+    An event may carry its own ``max_chars`` (transcript prompts do: a person's
+    own message to an agent is worth more of the budget than one OCR frame).
     """
     lines: list[str] = []
     for e in events:
         text = redact_sensitive((e.get("text") or "").strip().replace("\n", " "))
-        if len(text) > _MAX_TEXT_CHARS:
-            text = text[:_MAX_TEXT_CHARS] + "..."
+        cap = int(e.get("max_chars") or _MAX_TEXT_CHARS)
+        if len(text) > cap:
+            text = text[:cap] + "..."
         lines.append(
             f"[{e.get('event_id')}] ts={e.get('timestamp')} "
             f"{e.get('modality')} app={e.get('app_name')!r} "

@@ -182,6 +182,25 @@ paid cloud tier under active evaluation.
 
 ## Next Steps
 
+0. **2026-10-24 usefulness push (all on private `backup`, branch `feat/transcript-event-source`,
+   which contains `fix/distiller-bare-call` and `feat/recall-injection-trial`; merge to main and
+   public only after validation):**
+   - Reviews in `.internal/usefulness-review-2026-10/`, `market-value-review-2026-10/`,
+     `session-friction-review-2026-10/` (findings.md each).
+   - Distiller locked to a bare call (6567d18): no tools/MCP, dontAsk, temp cwd. ~80K
+     cache_write per run is the prompt itself (screen text ~2 chars/token).
+   - Fact-injection trial (SessionStart + UserPromptSubmit hook
+     `~/.claude/hooks/contextpulse-inject.py`, off: `--off`) runs to **2026-11-07**; pass bar
+     = 3+ confirmed saves of injected facts (`scripts/injection_trial_report.py`). Action
+     `cp-injection-trial-grade`. First injected fact (cp#1550) was an overclaim, counted wrong.
+   - Transcript ingest (David's yes, 2026-10-24, journal 28699): `contextpulse_core/transcripts.py`,
+     scheduled run passes `--transcripts` (b448550). Personal estate only; other estates get
+     their own stores, planned after the trial. Excluded estates are configured, not coded
+     (`CONTEXTPULSE_TRANSCRIPT_EXCLUDES` or `%APPDATA%/ContextPulse/transcript_excludes.txt`).
+   - Extraction prompt now separates suggestions from decisions (b462edf).
+   - Open: capture coverage (58% at prompt moments), `paste_detected` never fires, idle-window
+     skip, local-model replay test (after the trial).
+
 1. **Phase 0 is RUNNING again as of 2026-09-19** (David's call; decision row
    `cp-phase0-restart-20260919`). The 2026-08-20 STOP at "0 of 3 attributed saves"
    is **void as evidence** — `tool_usage` held one row for all time, so the

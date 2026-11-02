@@ -25,6 +25,7 @@ tree's conftest replaces ``anthropic`` with a MagicMock for every test in it.
 
 import re
 import socket
+import sys
 from importlib import metadata
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -110,7 +111,15 @@ def test_run_api_builds_a_request_the_installed_sdk_accepts(monkeypatch):
     ``APITimeoutError``, which is what Windows gives for a closed localhost
     port); a signature break reports ``api TypeError`` or similar. Nothing leaves the machine and no
     key is used. Run it against a candidate SDK before lifting the bound.
+
+    The voice and touch conftests put a MagicMock in sys.modules["anthropic"] at
+    import, and pytest imports every conftest before the first test, so in a
+    full-suite run the mock is live here. Lift it for this test only
+    (monkeypatch puts it back); run_api imports anthropic lazily, so it then
+    gets the real SDK. cp-suite-four-preexisting-failures.
     """
+    for name in [m for m in sys.modules if m == "anthropic" or m.startswith("anthropic.")]:
+        monkeypatch.delitem(sys.modules, name)
     import anthropic
     from contextpulse_voice.llm_backend import run_api
 
