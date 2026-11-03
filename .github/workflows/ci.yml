@@ -37,7 +37,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install ruff
-        run: pip install ruff
+        run: pip install -r requirements-ci.txt
 
       - name: Lint all packages
         run: |
@@ -67,7 +67,7 @@ jobs:
         # collection time even though their own test suites don't run here.
         run: |
           pip install ${{ env.WORKSPACE_PACKAGES }}
-          pip install pytest pytest-timeout
+          pip install -r requirements-ci.txt
 
       - name: Run cross-platform tests
         # The root tests/ directory ran on NO job: test-windows and test-macos
@@ -109,7 +109,7 @@ jobs:
       - name: Install all packages
         run: |
           pip install ${{ env.WORKSPACE_PACKAGES }}
-          pip install pytest pytest-timeout
+          pip install -r requirements-ci.txt
 
       - name: Run all tests
         run: |
@@ -132,7 +132,7 @@ jobs:
       - name: Install all packages + test deps
         run: |
           pip install ${{ env.WORKSPACE_PACKAGES }}
-          pip install pytest pytest-cov pytest-timeout pytest-threadleak hypothesis
+          pip install -r requirements-ci.txt
 
       - name: Run integration tests
         run: |
@@ -168,7 +168,7 @@ jobs:
       - name: Install packages with macOS extras
         run: |
           pip install -e "packages/core[macos]" ${{ env.WORKSPACE_PACKAGES_NO_CORE }}
-          pip install pytest pytest-timeout
+          pip install -r requirements-ci.txt
 
       - name: Run tests (skip Windows-only)
         run: |
