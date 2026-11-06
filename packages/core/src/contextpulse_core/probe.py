@@ -837,6 +837,14 @@ NOISE AND HONESTY
 - Skip UI chrome, menus, ads, promotions, notifications, cookie banners,
   boilerplate, autocomplete suggestions, code merely scrolled past, and
   articles merely glimpsed.
+- Agents and scheduled jobs operate this computer while the person is away, so
+  a window on screen does not show the person was there. Say the person worked
+  on, spent time on, reviewed, read or researched something only when the same
+  period has activity lines with typing or clicks, or the person's voice or
+  agent lines. A period with sight lines alone is what the screen showed, not
+  what the person did: omit it, or word it as "the screen showed X" with no
+  claim about the person. Never infer attention or time spent from how long a
+  window stayed open.
 - Passive reading becomes a fact only at session level ("spent ~40 minutes
   researching Rust WASM toolchains"), never per headline or per page.
 - Every fact must be traceable to its cited events — no hallucination, no
