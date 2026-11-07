@@ -158,3 +158,6 @@ infra/
 
 *.credentials
 credentials*.json
+
+# Empty .nodb marker of unknown origin, swept into auto-backup cc705a8 (2026-11-06).
+.nodb
