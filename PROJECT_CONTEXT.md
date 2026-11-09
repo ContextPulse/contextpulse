@@ -193,6 +193,14 @@ paid cloud tier under active evaluation.
      `~/.claude/hooks/contextpulse-inject.py`, off: `--off`) runs to **2026-11-07**; pass bar
      = 3+ confirmed saves of injected facts (`scripts/injection_trial_report.py`). Action
      `cp-injection-trial-grade`. First injected fact (cp#1550) was an overclaim, counted wrong.
+     **(Corrected 2026-11-01: the trial did NOT run to 2026-11-07. Cooper's one-week grade on 2026-11-01 met the
+     pre-registered stop condition, 12 of 78 sampled facts relevant = 15.4% against the 30% line (ruling "Trial
+     Delivering ContextPulse Facts into Sessions", 2026-10-25), and Archie ran the hook's `--off` switch the same
+     day, ~14:03 MDT (action `archie-cp-injection-off-switch`, closed). Reversible with `--on`.)**
+     The 20 held commits on this branch were NOT published 2026-10-31; a scrubbed copy is on private branch
+     `publish/cp-batch-2026-11` (d5f9948), to be ported/published as one PR after the grade (journal, Cooper,
+     2026-10-31). Public `origin/main` CI: last run 2026-10-24 failed, unfiled until 2026-11-01 (journal,
+     morning-batch).
    - Transcript ingest (David's yes, 2026-10-24, journal 28699): `contextpulse_core/transcripts.py`,
      scheduled run passes `--transcripts` (b448550). Personal estate only; other estates get
      their own stores, planned after the trial. Excluded estates are configured, not coded
@@ -221,6 +229,8 @@ paid cloud tier under active evaluation.
    Stage 2 *is* filtered correctly. **Do not restate stage 1 as "20 calls since
    <date>" until that defect is fixed** — the report cannot express it.
 
+   (Checkpoint read 2026-10-17 by Cooper: STAGE 1 NOT MET, 3 of 20 tool calls, 0 confirmed saves, so a routing
+   defect and no verdict on the KG, consistent with David's 2026-08-24 ruling. Noted 2026-11-01.)
    Checkpoint **2026-10-17**. Precondition met and saves ≥ 3 → the KG earned its
    keep. Precondition met and saves < 3 → a *genuine* stop, and unlike August that
    verdict is real evidence. **Precondition not met → a routing defect, not a
@@ -233,7 +243,8 @@ paid cloud tier under active evaluation.
    `[]` on any parse failure and the caller records `error=None`, so a total
    extraction failure is indistinguishable from a quiet day. A gate fed by a
    silently-empty fact store would repeat the exact 2026-08-20 mistake.
-3. **Ship 0.1.1 once David clears the claims changes** — push, tag, publish the
+3. **(DONE: 0.1.1 shipped 2026-09-19, tag `v0.1.1` exists; see Done. Whether advisory GHSA-xfr9-62vj-4227 was
+   published is unverified as of 2026-11-01.) Ship 0.1.1 once David clears the claims changes** — push, tag, publish the
    advisory, deploy the corrected site page. The advisory's exposure statement must
    name **OCR'd screen text alongside clipboard text**, and must note that
    pre-0.1.1 probe-consolidator runs sent raw captured text to an external model.

@@ -269,12 +269,25 @@ def test_large_single_line_paste_is_linear_and_still_redacts() -> None:
     blob = _base64_blob(300_000)
     edge = redact._VENDOR_WINDOW - 20  # a token straddling the first window edge
     text = blob[:edge] + f" {DO_TOKEN} " + blob[edge:150_000] + f" {HF_TOKEN} " + blob[150_000:]
-    start = time.perf_counter()
     cleaned = redact_sensitive(text)
-    elapsed = time.perf_counter() - start
     assert DO_TOKEN not in cleaned and HF_TOKEN not in cleaned
     assert cleaned.count("[REDACTED:VENDOR_SECRET]") == 2
-    assert elapsed < 1.5, elapsed
+
+    # Linear, measured as a ratio rather than a wall-clock bound: an absolute
+    # "< 1.5 s" failed at 2.07 s on a shared macOS runner (main CI run
+    # 41434489739). Four times the input should cost about four times the time;
+    # the quadratic pass this guards against measured 8.3x (windowing disabled).
+    def best_of_three(size: int) -> float:
+        sample = _base64_blob(size)
+        runs = []
+        for _ in range(3):
+            start = time.perf_counter()
+            redact_sensitive(sample)
+            runs.append(time.perf_counter() - start)
+        return min(runs)
+
+    small, large = best_of_three(75_000), best_of_three(300_000)
+    assert large / small < 6, (small, large)
 
 
 @pytest.mark.parametrize("space", [" ", "　", " ", " "])

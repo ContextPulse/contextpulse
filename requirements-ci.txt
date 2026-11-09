@@ -1,0 +1,19 @@
+# Test and lint tools for CI, pinned exactly. Not the project's dependencies
+# (those live in pyproject.toml); this file only fixes which pytest, ruff and
+# plugins the workflows install.
+#
+# Why pinned: CI used to install these unpinned, so any upstream release
+# changed what main was tested with, with no commit here. pytest 9.2.0
+# (2026-10-27) broke 8 tests on main that way.
+#
+# Why this file: Dependabot's pip updater watches requirements files in "/",
+# so a new release now arrives as a pull request whose CI must pass before it
+# can reach main, instead of breaking main directly.
+#
+# These are the versions CI ran green on 2026-11-02 (run 41434489739).
+hypothesis==6.170.14
+pytest==9.2.0
+pytest-cov==7.1.0
+pytest-threadleak==0.5.0
+pytest-timeout==2.4.0
+ruff==0.17.3

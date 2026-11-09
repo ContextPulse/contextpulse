@@ -66,8 +66,8 @@ class TestRequireProDecorator:
     """Test the _require_pro gating decorator.
 
     The decorator now uses has_pro_access() which grants access when:
-    - User has a valid license (starter or pro tier), OR
-    - User is within their 7-day trial period
+    - User has a valid pro-tier license (starter does not unlock Pro tools), OR
+    - User is within their 30-day trial period
     """
 
     def test_blocks_when_no_access(self):

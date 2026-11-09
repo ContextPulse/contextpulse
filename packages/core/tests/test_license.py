@@ -33,8 +33,12 @@ def _generate_test_key(
     email: str = "test@example.com",
     tier: str = "starter",
     exp: int | None = None,
+    omit_exp: bool = False,
 ) -> str:
-    """Generate a valid license key using a TEST-ONLY keypair (not production)."""
+    """Generate a valid license key using a TEST-ONLY keypair (not production).
+
+    ``omit_exp=True`` leaves "exp" out of the payload, the encoding of a perpetual key.
+    """
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
     PRIVATE_KEY_HEX = _TEST_PRIVATE_KEY_HEX
@@ -43,7 +47,9 @@ def _generate_test_key(
 
     now = int(time.time())
     payload = {"email": email, "tier": tier, "ts": now}
-    if exp is not None:
+    if omit_exp:
+        pass
+    elif exp is not None:
         payload["exp"] = exp
     else:
         payload["exp"] = now + 365 * 86400  # 1 year
@@ -167,6 +173,29 @@ class TestLicenseStatus:
         key = _generate_test_key(email="alice@test.com")
         save_license(key)
         assert get_license_email() == "alice@test.com"
+
+
+class TestPerpetualKey:
+    """Pin the module docstring's claim: a payload with no "exp" never expires.
+
+    A one-time sale (the Gumroad Founding licence) must be issued in this shape. exp=0 is
+    NOT perpetual: it reads as expired at the epoch, so a buyer on such a key is locked out.
+    """
+
+    def test_no_exp_is_licensed_and_never_expired(self, isolated_license, monkeypatch):
+        save_license(_generate_test_key(tier="pro", omit_exp=True))
+        far_future = time.time() + 50 * 365 * 86400
+        monkeypatch.setattr(time, "time", lambda: far_future)
+        assert is_licensed() is True
+        assert is_expired() is False
+        assert is_in_grace_period() is False
+        assert has_pro_access() is True
+
+    def test_exp_zero_is_not_perpetual(self, isolated_license):
+        save_license(_generate_test_key(tier="pro", exp=0))
+        assert is_expired() is True
+        assert is_licensed() is False
+        assert get_licensed_features() == []
 
 
 # ── Trial system tests ───────────────────────────────────────────────

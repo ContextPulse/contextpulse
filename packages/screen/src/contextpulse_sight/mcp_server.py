@@ -135,9 +135,10 @@ def _track_call(func):
 def _require_pro(func):
     """Decorator that gates a tool behind a Pro license (or active trial).
 
-    Allows access if:
-    - User has a valid (non-expired) license with starter or pro tier, OR
-    - User is within their 7-day trial period
+    Allows access if (see ``contextpulse_core.license.has_pro_access``):
+    - User has a valid pro-tier license, not past its expiry grace period
+      (a starter-tier license does not unlock Pro tools), OR
+    - User is within their 30-day trial period (``TRIAL_DAYS``)
     """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):

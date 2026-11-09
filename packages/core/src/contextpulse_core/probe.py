@@ -462,6 +462,113 @@ def query_context_at(
     return [_row_to_fact(r) for r in rows]
 
 
+# How long a dictated line may run in a context_at answer before it is cut.
+_DICTATION_WIDTH = 200
+
+
+@dataclass
+class RawWindow:
+    """What the raw capture log holds in a time window, for a context_at miss.
+
+    ``windows`` are app and window-title groups, most events first, each with
+    its event count and first and last timestamps. ``dictation`` is what the
+    person said, newest first. Screen text and clipboard text are counted in
+    ``by_modality`` and never returned: a title says what was open without
+    repeating everything on screen, and a clipboard is the likeliest place for a
+    secret. Everything returned is redacted, and groups are merged on the
+    redacted text, so two titles differing only by a secret count as one.
+    """
+
+    count: int
+    by_modality: dict[str, int]
+    distinct_windows: int
+    windows: list[dict[str, Any]] = field(default_factory=list)
+    dictation: list[dict[str, Any]] = field(default_factory=list)
+
+
+def query_raw_window(
+    activity_db: Path | str,
+    t: float,
+    window_s: float = 1800.0,
+    top_windows: int = 8,
+    dictation_samples: int = 5,
+) -> RawWindow | None:
+    """Fallback for a context_at miss: what did the raw capture see around ``t``?
+
+    Returns None when the capture DB cannot be opened or read (the caller says
+    the raw log was not searched). Opens activity.db read-only. The aggregates
+    use the timestamp index, so a wide window costs a range scan and no payload
+    parsing; only voice payloads are read.
+    """
+    path = Path(activity_db)
+    if not path.exists():
+        return None
+    low, high = t - window_s, t + window_s
+    try:
+        conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=5)
+    except sqlite3.Error:
+        logger.warning("raw window: cannot open %s read-only", path)
+        return None
+    conn.row_factory = sqlite3.Row
+    try:
+        modalities = conn.execute(
+            "SELECT modality, COUNT(*) AS n FROM events WHERE timestamp BETWEEN ? AND ? GROUP BY modality",
+            (low, high),
+        ).fetchall()
+        titles = conn.execute(
+            "SELECT app_name, window_title, COUNT(*) AS n, MIN(timestamp) AS first, MAX(timestamp) AS last"
+            " FROM events WHERE timestamp BETWEEN ? AND ? AND COALESCE(window_title, '') != ''"
+            " GROUP BY app_name, window_title",
+            (low, high),
+        ).fetchall()
+        voice = conn.execute(
+            "SELECT timestamp, payload FROM events WHERE timestamp BETWEEN ? AND ?"
+            " AND modality = 'voice' AND event_type = 'transcription'"
+            " AND COALESCE(json_extract(payload, '$.transcript'), '') != ''"
+            " ORDER BY timestamp DESC LIMIT ?",
+            (low, high, dictation_samples),
+        ).fetchall()
+    except sqlite3.Error:
+        logger.warning("raw window: query failed on %s", path, exc_info=True)
+        return None
+    finally:
+        conn.close()
+
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    for r in titles:
+        # A title is untrusted text: flatten it so it cannot forge another output line.
+        key = (
+            " ".join(redact_sensitive(str(r["app_name"] or "")).split()),
+            " ".join(redact_sensitive(str(r["window_title"])).split()),
+        )
+        group = groups.setdefault(key, {"app": key[0], "title": key[1], "count": 0, "first": r["first"], "last": r["last"]})
+        group["count"] += r["n"]
+        group["first"] = min(group["first"], r["first"])
+        group["last"] = max(group["last"], r["last"])
+    ranked = sorted(groups.values(), key=lambda g: (-g["count"], -g["last"]))
+
+    dictation = []
+    for r in voice:
+        text = " ".join(_extract_text(r["payload"]).split())
+        if text:
+            dictation.append({"timestamp": r["timestamp"], "text": text[:_DICTATION_WIDTH]})
+
+    by_modality = {str(r["modality"]): int(r["n"]) for r in modalities}
+    return RawWindow(
+        count=sum(by_modality.values()),
+        by_modality=by_modality,
+        distinct_windows=len(ranked),
+        windows=ranked[:top_windows],
+        dictation=dictation,
+    )
+
+
+def last_distilled_at(conn: sqlite3.Connection) -> float | None:
+    """When the consolidator last ran cleanly, or None if no run is recorded."""
+    row = conn.execute("SELECT MAX(ran_at) FROM probe_runs WHERE error IS NULL").fetchone()
+    return float(row[0]) if row and row[0] is not None else None
+
+
 # ── events (read-only source) ───────────────────────────────────────
 
 
@@ -730,6 +837,14 @@ NOISE AND HONESTY
 - Skip UI chrome, menus, ads, promotions, notifications, cookie banners,
   boilerplate, autocomplete suggestions, code merely scrolled past, and
   articles merely glimpsed.
+- Agents and scheduled jobs operate this computer while the person is away, so
+  a window on screen does not show the person was there. Say the person worked
+  on, spent time on, reviewed, read or researched something only when the same
+  period has activity lines with typing or clicks, or the person's voice or
+  agent lines. A period with sight lines alone is what the screen showed, not
+  what the person did: omit it, or word it as "the screen showed X" with no
+  claim about the person. Never infer attention or time spent from how long a
+  window stayed open.
 - Passive reading becomes a fact only at session level ("spent ~40 minutes
   researching Rust WASM toolchains"), never per headline or per page.
 - Every fact must be traceable to its cited events — no hallucination, no
