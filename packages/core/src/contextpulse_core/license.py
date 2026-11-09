@@ -5,9 +5,11 @@
 Key format: base64url(json_payload) + "." + base64url(ed25519_signature)
 Payload: {"email": "...", "tier": "starter|pro", "features": [...], "exp": unix_ts, "ts": unix_ts}
 
-Sight is always free. Licensing gates Pro features (search_all_events, get_event_timeline).
-Expired license = warning + nag, NOT hard block.
-30-day trial for Pro features on first use.
+Capture and the free MCP tools never need a license. Licensing gates the Pro features
+(memory_search, memory_semantic_search, search_all_events, get_event_timeline).
+A payload with no "exp" field is perpetual. A license past its "exp" keeps working for
+EXPIRY_GRACE_DAYS (3), after which its features are blocked unless the trial is still running.
+30-day trial (TRIAL_DAYS) of Pro features, starting on first use.
 """
 
 import base64

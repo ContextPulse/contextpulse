@@ -469,7 +469,12 @@ class TestRunTrayLoop:
             daemon._running = False
         mock_tray.run.side_effect = _quit_after_run
 
-        with patch("contextpulse_core.daemon.get_platform_provider", return_value=mock_platform), \
+        # run() calls the Session 0 guard first. Pin an interactive session so
+        # these tests exercise the tray loop wherever the suite runs: from a
+        # scheduled or remote-control process the real lookup answers 0 and
+        # the guard exits before the loop. TestRefuseIfSession0 covers the guard.
+        with patch("contextpulse_core.daemon.get_windows_session_id", return_value=1), \
+             patch("contextpulse_core.daemon.get_platform_provider", return_value=mock_platform), \
              patch("contextpulse_core.daemon.is_first_run", return_value=False), \
              patch.object(ContextPulseDaemon, "_start_modules"), \
              patch.object(ContextPulseDaemon, "_create_tray_menu", return_value=MagicMock()), \

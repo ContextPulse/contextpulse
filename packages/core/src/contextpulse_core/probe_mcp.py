@@ -96,13 +96,15 @@ def _parse_when(when: str) -> float | None:
 
 @mcp_app.tool()
 def facts_about(entity: str) -> str:
-    """[Phase 0 probe] Recall consolidated facts about an entity.
+    """Recall what was decided about a person, project, purchase, trip or tool, and why.
 
-    Fused recall over the nightly-distilled probe facts — relationships, states,
-    and decisions that plain keyword search over the raw event log can't answer.
+    Searches facts distilled every 6 hours from this computer's screen, voice and
+    input: relationships, states and decisions that keyword search over the raw
+    log cannot answer. If no fact names the subject, says whether the raw capture
+    mentions it.
 
     Args:
-        entity: Project, person, file, tool, or topic (partial, case-insensitive).
+        entity: Project, person, file, tool, or topic (whole words, case-insensitive).
     """
     conn = probe.connect_probe(probe.default_probe_db())
     try:
@@ -153,11 +155,52 @@ def _raw_fallback(entity: str) -> str:
     return "\n".join(lines)
 
 
+def _fmt_span(first: float, last: float) -> str:
+    """'2026-10-10 21:43 to 22:03', with the second date only when the day changes."""
+    a, b = _fmt_ts(first), _fmt_ts(last)
+    return f"{a} to {b[11:]}" if a[:10] == b[:10] else f"{a} to {b}"
+
+
+def _raw_window_fallback(t: float, window_minutes: int) -> str:
+    """Say what the raw capture saw around ``t``, labelled as raw.
+
+    Both real context_at calls up to 2026-11-04 returned nothing, because facts
+    are distilled every 6 hours and each carries one timestamp, while the raw log
+    held events for those windows. These rows are NOT counted as hits in
+    tool_usage, which measures distilled facts.
+    """
+    try:
+        raw = probe.query_raw_window(probe.default_activity_db(), t, window_s=window_minutes * 60)
+    except Exception:
+        logger.exception("raw window fallback failed (context_at answer unaffected)")
+        raw = None
+    if raw is None:
+        return "Raw capture log not searched (activity.db unavailable)."
+    if raw.count == 0:
+        return f"Raw capture holds nothing within {window_minutes}min of that time either."
+    kinds = ", ".join(f"{name} {n}" for name, n in sorted(raw.by_modality.items()))
+    lines = [f"Raw capture holds {raw.count} events in that window ({kinds}). These are raw records, not distilled facts."]
+    if raw.windows:
+        lines.append("Windows, most events first:")
+        for w in raw.windows:
+            lines.append(f"- {w['app']}: {w['title'][:120]} ({w['count']} events, {_fmt_span(w['first'], w['last'])})")
+        hidden = raw.distinct_windows - len(raw.windows)
+        if hidden > 0:
+            lines.append(f"- and {hidden} more windows")
+    if raw.dictation:
+        lines.append("Dictated, newest first:")
+        for d in raw.dictation:
+            lines.append(f"- ({_fmt_ts(d['timestamp'])}) {d['text']}")
+    return "\n".join(lines)
+
+
 @mcp_app.tool()
 def context_at(when: str, window_minutes: int = 30) -> str:
-    """[Phase 0 probe] Recall what was true/happening around a moment in time.
+    """Recall what was happening on this computer around a moment in time.
 
-    Temporal recall over the probe facts within +/- window_minutes of ``when``.
+    Returns facts distilled from that window. If none fall in it, returns the
+    raw capture instead: the windows on screen, event counts and dictated words,
+    labelled as raw.
 
     Args:
         when: A unix timestamp or datetime ("2026-07-07 14:30", "2026-07-07").
@@ -171,8 +214,13 @@ def context_at(when: str, window_minutes: int = 30) -> str:
     try:
         hits = probe.query_context_at(conn, t, window_s=window_minutes * 60)
         _record_usage_safe(conn, "context_at", f"{when} +/-{window_minutes}min", len(hits))
+        distilled = None if hits else probe.last_distilled_at(conn)
     finally:
         conn.close()
     if not hits:
-        return f"No probe facts within {window_minutes}min of {_fmt_ts(t)}."
+        lines = [f"No probe facts within {window_minutes}min of {_fmt_ts(t)}."]
+        if distilled is not None and t + window_minutes * 60 > distilled:
+            lines.append(f"Facts were last distilled at {_fmt_ts(distilled)}, so later events have none yet.")
+        lines.append(_raw_window_fallback(t, window_minutes))
+        return "\n".join(lines)
     return f"Context around {_fmt_ts(t)} (+/-{window_minutes}min):\n{_fmt_facts(hits)}"

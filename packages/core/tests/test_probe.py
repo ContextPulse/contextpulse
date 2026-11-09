@@ -307,6 +307,18 @@ def test_build_extraction_prompt_separates_suggestions_from_decisions():
     assert "drops a condition is wrong" in prompt
 
 
+def test_build_extraction_prompt_requires_input_before_claiming_the_person_worked():
+    # Agents drive this computer overnight. Run on 2026-11-05 00:30: 545 sight
+    # events, 0 keys, clicks or voice, and the fact said he "spent roughly six
+    # hours" reviewing a page that was simply left open.
+    prompt = " ".join(probe.build_extraction_prompt([]).split())
+    assert "Agents and scheduled jobs operate this computer" in prompt
+    assert "sight lines alone" in prompt
+    assert "how long a window stayed open" in prompt
+    # The rule must sit above the passive-reading example it qualifies.
+    assert prompt.index("sight lines alone") < prompt.index("Passive reading")
+
+
 def test_build_extraction_prompt_empty_events_is_safe():
     prompt = probe.build_extraction_prompt([])
     assert isinstance(prompt, str) and len(prompt) > 0
