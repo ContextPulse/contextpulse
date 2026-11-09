@@ -96,6 +96,17 @@ MIN_PLAUSIBLE_ELAPSED_S = 15.0
 # above 86K, so a false fault above 150K remains possible.
 MIN_PROMPT_CHARS_FOR_FLOOR = 150_000
 
+# That false fault happened (cp-consolidator-fast-empty-false-fault): on
+# 2026-11-08 06:30 and 2026-11-09 00:30 sight-only windows of 233K and 177K
+# chars came back [] in 4.7s and 9.5s, and the CLI envelope said 129,291 and
+# 95,261 prompt tokens received. Time was a proxy for "the model read the
+# prompt"; the envelope's token count measures it. So a fast [] is a quiet
+# window when the reported receipt covers the prompt at no more than this many
+# chars per token. Observed ratios on OCR-heavy prompts are about 1.8-1.9, and
+# English prose about 4; 8 leaves room for both and still refuses a reply that
+# never saw most of the prompt. No usage in the envelope keeps the time floor.
+MAX_CHARS_PER_RECEIVED_TOKEN = 8
+
 # The model the extractor runs on, named here rather than inherited
 # (cp-consolidator-pin-model). With no --model, `claude -p` runs whatever
 # ~/.claude/settings.json names, which is a person's /model choice for chat:
@@ -143,8 +154,27 @@ def build_cli_command(model: str = CONSOLIDATOR_MODEL) -> list[str]:
     return ["claude", "-p", *locked_cli_flags(model, DISTILLER_SYSTEM_PROMPT)]
 
 
+def prompt_tokens_received(usage: dict) -> int | None:
+    """Prompt tokens the CLI envelope says the model received, or None if it does not say.
+
+    The sum of input, cache-write and cache-read tokens. Only integer counts
+    are taken (``bool`` is excluded); with none present the answer is None, so
+    a caller cannot mistake "not reported" for "received nothing".
+    """
+    keys = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+    counts = [
+        usage[k]
+        for k in keys
+        if isinstance(usage.get(k), int) and not isinstance(usage.get(k), bool)
+    ]
+    return sum(counts) if counts else None
+
+
 def call_claude(
-    prompt: str, timeout: int = 600, model: str = CONSOLIDATOR_MODEL
+    prompt: str,
+    timeout: int = 600,
+    model: str = CONSOLIDATOR_MODEL,
+    usage_out: dict | None = None,
 ) -> tuple[str, float]:
     """Invoke the Claude CLI headlessly. Return (result_text, elapsed_seconds). Fail loud.
 
@@ -200,6 +230,10 @@ def call_claude(
             f"{str(payload.get('result', ''))[:300]}"
         )
     usage = payload.get("usage") or {}
+    if not isinstance(usage, dict):
+        usage = {}
+    if usage_out is not None:
+        usage_out.update(usage)
     logger.info(
         "CLI usage: model=%s turns=%s input=%s cache_write=%s cache_read=%s output=%s",
         ",".join(payload.get("modelUsage") or {}) or "?",
@@ -402,7 +436,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         try:
             logger.info("Calling Claude CLI for extraction...")
-            output, elapsed = call_claude(prompt, timeout=args.timeout, model=args.model)
+            usage: dict = {}
+            output, elapsed = call_claude(
+                prompt, timeout=args.timeout, model=args.model, usage_out=usage
+            )
         except Exception as exc:  # noqa: BLE001 — record then fail loud
             probe.record_run(pconn, events=len(events), facts=0, error=str(exc)[:300])
             logger.exception("Claude CLI call failed")
@@ -443,7 +480,25 @@ def main(argv: list[str] | None = None) -> int:
             output_bytes,
         )
         if outcome is probe.ParseOutcome.EMPTY:
-            if len(prompt) >= args.min_prompt_chars and elapsed < args.min_elapsed:
+            received = prompt_tokens_received(usage)
+            fully_received = (
+                received is not None
+                and received * MAX_CHARS_PER_RECEIVED_TOKEN >= len(prompt)
+            )
+            if (
+                len(prompt) >= args.min_prompt_chars
+                and elapsed < args.min_elapsed
+                and fully_received
+            ):
+                logger.info(
+                    "Fast empty result (%.1fs, under the %.1fs floor) taken as a quiet "
+                    "window: the CLI reports %d prompt tokens received for a %d-char prompt.",
+                    elapsed,
+                    args.min_elapsed,
+                    received,
+                    len(prompt),
+                )
+            elif len(prompt) >= args.min_prompt_chars and elapsed < args.min_elapsed:
                 # A big prompt still costs the model a full read before it can
                 # answer []. Returning [] in single-digit seconds means it
                 # never got there -- a usage-limit reply, a truncated session,
