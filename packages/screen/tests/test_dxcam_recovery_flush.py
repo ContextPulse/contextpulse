@@ -134,14 +134,51 @@ def test_a_guard_that_raises_still_leaves_the_camera_in_use(monkeypatch, fresh_c
     assert cap._dxcam_cameras[0] is camera
 
 
-def test_dxcam_recovery_handler_calls_the_guarded_release_each_attempt():
+@pytest.fixture
+def dxcam_core_without_display():
+    """Import dxcam.core.* without running dxcam/__init__.py.
+
+    The package __init__ builds DXFactory() at import, which enumerates display
+    outputs and raises COMError 'resource is not available' in a session with no
+    display (scheduled task, service, disconnected desktop). The recovery loop
+    under test needs none of that, so the package is stood in by an empty module
+    whose __path__ is the real package directory. Every dxcam module is removed
+    afterwards so later tests import the real package."""
+    import importlib.util
+    import types
+
+    pytest.importorskip("comtypes")
+    spec = importlib.util.find_spec("dxcam")
+    if spec is None or not spec.submodule_search_locations:
+        pytest.skip("dxcam not installed")
+
+    def _is_dxcam(name: str) -> bool:
+        return name == "dxcam" or name.startswith("dxcam.")
+
+    saved = {k: v for k, v in sys.modules.items() if _is_dxcam(k)}
+    for k in saved:
+        del sys.modules[k]
+    stub = types.ModuleType("dxcam")
+    stub.__path__ = list(spec.submodule_search_locations)
+    sys.modules["dxcam"] = stub
+    try:
+        import dxcam.core.display_recovery as dr
+        from dxcam.core.output_recovery import OutputState
+
+        yield dr, OutputState
+    finally:
+        for k in [k for k in sys.modules if _is_dxcam(k)]:
+            del sys.modules[k]
+        sys.modules.update(saved)
+
+
+def test_dxcam_recovery_handler_calls_the_guarded_release_each_attempt(dxcam_core_without_display):
     """Runs dxcam's own DisplayRecoveryHandler.handle loop (not a fake loop), so
     a dxcam release that binds the release callable elsewhere fails here, in the
-    default run, without a GPU."""
-    pytest.importorskip("comtypes")
-    dr = pytest.importorskip("dxcam.core.display_recovery")
+    default run, without a GPU or a display."""
     import comtypes
-    from dxcam.core.output_recovery import OutputState
+
+    dr, OutputState = dxcam_core_without_display
 
     calls: list[str] = []
     attempts = {"n": 0}
