@@ -122,7 +122,7 @@ def show_nag_dialog() -> bool:
     # Purchase link (clickable)
     purchase_label = gui_theme.make_label(
         frame,
-        "Upgrade at contextpulse.ai/pricing  (Pro $49/yr · Lifetime $249)",
+        "Upgrade at contextpulse.ai/pricing  (Pro $29 one-time founding licence)",
         font=("Segoe UI", 9, "underline"), fg=gui_theme.ACCENT,
     )
     purchase_label.pack(pady=(10, 0))

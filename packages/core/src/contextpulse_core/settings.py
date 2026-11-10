@@ -418,7 +418,7 @@ def _build_and_run() -> None:
     gui_theme.make_label(
         frame,
         "Free forever  — memory store, recall, list, forget (no license needed)\n"
-        "Pro ($49/yr)   — adds semantic search + cross-modal search  |  Lifetime: $249\n"
+        "Pro ($29 one-time) — adds semantic search + cross-modal search  |  founding licence, no subscription\n"
         "Sight (screen capture) is always free — no license required.",
         font=("Consolas", 8), fg=gui_theme.TEXT_MUTED,
     ).pack(anchor="w", pady=(0, 8))
