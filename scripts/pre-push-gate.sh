@@ -178,6 +178,88 @@ if [ "${CLAUDECODE:-}" = "1" ] || [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
     fi
 fi
 
+# --- PERSONAL TERMS ONCE SCRUBBED FROM A PUBLICATION --------------------------
+#
+# Added 2026-11-09 (action cp-publish-denylist-gate), after PR #31: a weekly
+# batch was pushed to the public remote from a branch that still carried the
+# ORIGINAL versions of commits PR #30 had published with generic names. Every
+# check below passed. pre-publish.py reads the checked-out tree and looks for
+# keys, emails, paths and other ventures; none of that knows which ordinary
+# words are personal, and none of it reads the commits a push actually sends.
+#
+# scripts/publish_denylist.py reads the ref updates git hands this hook on
+# stdin and scans EVERY commit the destination does not already hold -- each
+# message, added line and new path -- against the gitignored list in
+# .internal/publish-denylist.txt. A clean tip over an unscrubbed commit is
+# refused. It fails CLOSED: no list, an empty list, or a git error refuses.
+#
+# Runs for every destination not proven PRIVATE, whoever is pushing. A push
+# to the private backup remote is exempt: that remote exists to hold the
+# unscrubbed originals. The named-approval path above does not skip it: an
+# approval to publish is not an approval to publish these terms.
+#
+# Needs the hook's stdin, which costs the estate's global pre-push its copy:
+# AgentConfig/githooks/pre-push runs this hook through _chain.sh FIRST and then
+# reads the same stdin for its commit-message check, which would find it empty
+# and check nothing, silently. Until _chain.sh buffers stdin (filed for Archie:
+# githooks-chain-prepush-stdin), this gate runs that same check itself, on the
+# same commits, so coverage does not drop. Once the chain buffers, the check
+# runs twice, which is harmless.
+
+ZERO_SHA="0000000000000000000000000000000000000000"
+PUSH_REFS=""
+if [ ! -t 0 ]; then PUSH_REFS="$(cat)"; fi
+
+GLOBAL_HOOKS="$(git config core.hooksPath 2>/dev/null)"
+if [ -n "$GLOBAL_HOOKS" ] && [ -f "$GLOBAL_HOOKS/_checker.sh" ] && [ -n "$PUSH_REFS" ]; then
+    . "$GLOBAL_HOOKS/_checker.sh"
+    if CHECKER="$(checker_path)"; then
+        MSG_STATUS=0
+        while read -r _lr lsha _rr rsha; do
+            [ -z "${lsha:-}" ] && continue
+            [ "$lsha" = "$ZERO_SHA" ] && continue
+            # Same commit selection as the global hook: what no ref of this
+            # remote holds; a first push to an empty remote checks the newest 20.
+            if [ "$rsha" != "$ZERO_SHA" ] && git cat-file -e "${rsha}^{commit}" 2>/dev/null; then
+                shas="$(git rev-list "$lsha" --not "$rsha" --remotes="$REMOTE_NAME")" || shas="FAILED"
+            elif git for-each-ref --count=1 "refs/remotes/${REMOTE_NAME}/" | grep -q .; then
+                shas="$(git rev-list "$lsha" --not --remotes="$REMOTE_NAME")" || shas="FAILED"
+            else
+                shas="$(git rev-list --max-count=20 "$lsha")" || shas="FAILED"
+            fi
+            if [ "$shas" = "FAILED" ]; then
+                echo "pre-push: could not list the new commits of $lsha; refusing" >&2
+                MSG_STATUS=1
+                continue
+            fi
+            for sha in $shas; do
+                python "$CHECKER" --range "$sha^!" || MSG_STATUS=1
+            done
+        done <<< "$PUSH_REFS"
+        if [ "$MSG_STATUS" -ne 0 ]; then
+            echo "PRE-PUSH REFUSED -- an outgoing commit message fails the writing-commits bar." >&2
+            exit 1
+        fi
+    fi
+fi
+
+DENY_VIS="${DEST_VISIBILITY:-$(remote_visibility "$REMOTE_URL")}"
+if [ "$DENY_VIS" = "PRIVATE" ]; then
+    echo "pre-push: personal-terms check skipped (destination is PRIVATE)." >&2
+else
+    DENY_SCRIPT="$(git rev-parse --show-toplevel 2>/dev/null)/scripts/publish_denylist.py"
+    if [ ! -f "$DENY_SCRIPT" ]; then
+        echo "PRE-PUSH REFUSED -- scripts/publish_denylist.py is missing; the personal-terms" >&2
+        echo "check cannot run, and this destination is not proven private." >&2
+        exit 1
+    fi
+    printf '%s\n' "$PUSH_REFS" | python "$DENY_SCRIPT" "${REMOTE_NAME:-}"
+    DENY_RC=$?
+    if [ "$DENY_RC" -ne 0 ]; then
+        exit 1
+    fi
+fi
+
 # --- WILL THIS PUSH GO RED? ---------------------------------------------------
 #
 # Added 2026-09-20, after David asked why failure emails keep arriving. The
