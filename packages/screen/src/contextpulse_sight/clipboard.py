@@ -20,6 +20,7 @@ import hashlib
 import logging
 import threading
 import time
+from collections.abc import Callable
 
 from contextpulse_core.platform import get_platform_provider
 
@@ -43,8 +44,16 @@ class ClipboardMonitor:
     messages, to avoid needing a hidden window and message loop.
     """
 
-    def __init__(self, activity_db: ActivityDB):
+    def __init__(
+        self,
+        activity_db: ActivityDB,
+        is_paused: Callable[[], bool] | None = None,
+    ):
         self._activity_db = activity_db
+        # Pause Capture (tray, hotkey, session lock) lives on the Sight app.
+        # The monitor asks through this callable rather than holding the app,
+        # so a monitor built without one keeps capturing as before.
+        self._is_paused = is_paused
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._last_text: str = ""
@@ -96,11 +105,35 @@ class ClipboardMonitor:
             except Exception:
                 logger.debug("Clipboard poll error", exc_info=True)
 
+    def _paused(self) -> bool:
+        """True while the user (or a session lock) has paused capture.
+
+        Fails closed: if the pause check itself raises, treat capture as
+        paused. Skipping one clip is cheap; storing a password the user
+        paused for is not.
+        """
+        if self._is_paused is None:
+            return False
+        try:
+            return bool(self._is_paused())
+        except Exception:
+            logger.warning("Pause check failed -- treating clipboard as paused", exc_info=True)
+            return True
+
     def _check_clipboard(self):
         """Check if clipboard text has changed and record it."""
         # Check sequence number first (cheap) to avoid reading clipboard unnecessarily
         seq = _get_clipboard_sequence()
         if seq == self._sequence_number:
+            return
+
+        if self._paused():
+            # Consume the change WITHOUT reading it. The clipboard still holds
+            # whatever was copied while paused after the user resumes, so only
+            # skipping this tick would store it on the first tick after Resume
+            # -- the password the user paused for. Not reading it also keeps
+            # it out of _last_text (contextpulse-pause-skips-clipboard-20261110).
+            self._sequence_number = seq
             return
 
         text = _get_clipboard_text()
