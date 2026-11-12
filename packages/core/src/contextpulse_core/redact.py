@@ -188,6 +188,21 @@ _PATTERNS: list[tuple[re.Pattern, str]] = [
     # through get_screen_text and search_history -- the product capturing the
     # credential to the product.
     (re.compile(r"cpmcp_[A-Za-z0-9_-]{20,}"), "[REDACTED:CP_MCP_TOKEN]"),
+    # 1Password service-account token: "ops_" + base64 JSON, so "ops_eyJ...",
+    # ~850 characters. The vendored gitleaks rule needs 250+ unbroken base64
+    # characters after "ops_eyJ", which screen OCR never delivers: a terminal
+    # wraps the token over several lines and OCR misreads the odd character
+    # (2026-11-11 it stored "ops_ey." plus ~30 characters raw). So: match from
+    # "ops_ey" over OCR's punctuation, require a capital and a digit so an
+    # identifier like "devops_eyes_on_the_dashboard" is left alone, and take
+    # each following line that is nothing but base64 (with a capital and a
+    # digit) as more of the same token.
+    (re.compile(
+        r"ops_ey(?=[A-Za-z0-9+/=._-]{0,60}[A-Z])(?=[A-Za-z0-9+/=._-]{0,60}[0-9])"
+        r"[A-Za-z0-9+/=._-]{20,}"
+        r"(?:\r?\n[ \t]*(?=[A-Za-z0-9+/=_-]*[A-Z])(?=[A-Za-z0-9+/=_-]*[0-9])"
+        r"[A-Za-z0-9+/=_-]{20,}[ \t]*(?=\r?\n|$))*"
+    ), "[REDACTED:OP_TOKEN]"),
     # Twilio account SID: AC + exactly 32 hex. The hex requirement is what
     # keeps this off ordinary words beginning "AC".
     (re.compile(r"AC[0-9a-f]{32}"), "[REDACTED:TWILIO_SID]"),
