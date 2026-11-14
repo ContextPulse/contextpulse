@@ -11,7 +11,7 @@
 # can reach main, instead of breaking main directly.
 #
 # These are the versions CI ran green on 2026-11-02 (run 41434489739).
-hypothesis==6.170.14
+hypothesis==6.170.15
 pytest==9.2.0
 pytest-cov==7.1.0
 pytest-threadleak==0.5.0
