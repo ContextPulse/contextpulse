@@ -143,7 +143,15 @@ ENV_READ_ALLOWLIST: dict[str, set[str]] = {
     # step 6; that refers to CONTEXTPULSE_ACTIVITY_DB (line 58), which is
     # deliberately NOT allowlisted here so it stays visible until step 6
     # replaces it with an import from core.config.
-    "packages/core/src/contextpulse_core/daemon.py": {"CONTEXTPULSE_THREAD_BUDGET_WARN"},
+    # INSTANCE and MCP_PORT (2026-11-14) are installed-build process identity,
+    # read once before any config loads: which single-instance mutex this copy
+    # takes (so an isolated copy can be smoke-tested beside another) and which
+    # port the tray daemon hands its MCP server child. No config key, no UI.
+    "packages/core/src/contextpulse_core/daemon.py": {
+        "CONTEXTPULSE_THREAD_BUDGET_WARN",
+        "CONTEXTPULSE_INSTANCE",
+        "CONTEXTPULSE_MCP_PORT",
+    },
 }
 
 # config.py declares the variables; it is the one file allowed to read them.

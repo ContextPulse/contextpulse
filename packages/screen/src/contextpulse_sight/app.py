@@ -193,7 +193,7 @@ class ContextPulseSightApp:
         # see did nothing. None means "user turned clipboard capture off" and
         # every lifecycle site below is written to tolerate it.
         self._clipboard_monitor = (
-            ClipboardMonitor(self.activity_db) if self._clipboard_enabled() else None
+            ClipboardMonitor(self.activity_db, is_paused=self._capture_paused) if self._clipboard_enabled() else None
         )
 
         # Hotkeys are startup-bound by design: pynput binds a listener once
@@ -257,7 +257,7 @@ class ContextPulseSightApp:
             self._clipboard_monitor = None
             return
         if self._clipboard_monitor is None:
-            self._clipboard_monitor = ClipboardMonitor(self.activity_db)
+            self._clipboard_monitor = ClipboardMonitor(self.activity_db, is_paused=self._capture_paused)
             self._clipboard_monitor.set_sight_module(self._sight_module)
         elif self._clipboard_monitor.is_alive():
             # Already running. Calling start() again raises "threads can only
@@ -323,7 +323,7 @@ class ContextPulseSightApp:
             return
         logger.warning("Clipboard monitor died — restarting")
         try:
-            self._clipboard_monitor = ClipboardMonitor(self.activity_db)
+            self._clipboard_monitor = ClipboardMonitor(self.activity_db, is_paused=self._capture_paused)
             self._clipboard_monitor.set_sight_module(self._sight_module)
             self._clipboard_monitor.start()
         except Exception:
@@ -376,6 +376,10 @@ class ContextPulseSightApp:
             capture.save_image(img, FILE_REGION)
         except Exception:
             logger.exception("Region capture failed")
+
+    def _capture_paused(self) -> bool:
+        """Read by the clipboard monitor on every poll, so Pause covers it too."""
+        return bool(self.paused)
 
     def toggle_pause(self):
         self._user_paused = not self._user_paused

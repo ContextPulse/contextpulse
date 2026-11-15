@@ -318,6 +318,78 @@ function Start-McpServer {
     Write-Log "Unified MCP server FAILED to start after $MaxAttempts attempts - will retry next loop iteration" "ERROR"
 }
 
+function Get-McpStaleness {
+    # Decide whether the running MCP server predates the source it serves.
+    # Python imports a module once, so a fix to the read path (redaction,
+    # search filters) reaches agents only after the server restarts.
+    # Start-McpServer relaunches only a server whose port is dead, and the
+    # 4 AM memory guard kills only the daemon, so before this check a live
+    # server kept the code it started with until the watchdog itself was
+    # restarted (measured 2026-11-13: the server was started 2026-11-11
+    # 21:30, six hours before the OP_TOKEN redaction rule was committed).
+    param([datetime[]]$StartTimes, [string]$SourceRoot)
+
+    $result = [ordered]@{
+        stale          = $false
+        server_started = $null
+        newest_source  = $null
+        newest_file    = $null
+        reason         = ""
+    }
+    if (-not $StartTimes -or $StartTimes.Count -eq 0) {
+        $result.reason = "no server process"
+        return $result
+    }
+    $started = ($StartTimes | Sort-Object)[0]
+    $result.server_started = $started
+
+    $newest = Get-ChildItem -Path $SourceRoot -Recurse -File -Filter "*.py" -ErrorAction Stop |
+        Where-Object { $_.FullName -match '\\src\\' -and $_.FullName -notmatch '\\__pycache__\\' } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if (-not $newest) {
+        throw "no package source files under $SourceRoot"
+    }
+    $result.newest_source = $newest.LastWriteTime
+    $result.newest_file = $newest.FullName
+    if ($newest.LastWriteTime -gt $started) {
+        $result.stale = $true
+        $result.reason = "source changed after the server started"
+    } else {
+        $result.reason = "server is newer than every source file"
+    }
+    return $result
+}
+
+function Restart-McpServerIfStale {
+    # Restart the unified MCP server when package source changed after it
+    # started, so it serves the same code as the daemon. Runs once per
+    # supervisor iteration, which in practice is the daily 4 AM daemon
+    # restart. Agents re-initialise their MCP session on the next call.
+    try {
+        $procs = @(Get-CimInstance Win32_Process -Filter "Name like 'python%'" -ErrorAction Stop |
+            Where-Object { $_.CommandLine -and ($_.CommandLine -like "*$McpModule*") })
+        if ($procs.Count -eq 0) { return }   # Start-McpServer handles a missing server
+
+        $s = Get-McpStaleness -StartTimes @($procs | ForEach-Object { $_.CreationDate }) `
+            -SourceRoot (Join-Path $WorkDir "packages")
+        if (-not $s.stale) { return }
+
+        Write-Log "Unified MCP server (started $($s.server_started)) predates $($s.newest_file) (changed $($s.newest_source)); restarting it so it serves current code"
+        foreach ($p in $procs) {
+            try {
+                Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop
+            } catch {
+                Write-Log "Could not stop MCP server pid=$($p.ProcessId): $($_.Exception.Message)" "ERROR"
+            }
+        }
+        Start-Sleep -Seconds 2
+        Start-McpServer
+    } catch {
+        Write-Log "MCP freshness check failed: $($_.Exception.Message)" "ERROR"
+    }
+}
+
 # --- Main Loop ---
 try {
     Write-Log "Watchdog starting (max $MaxRestartsPerHour restarts/hour, max backoff ${MaxBackoffSeconds}s)"
@@ -332,6 +404,9 @@ try {
         # Re-assert MCP server health every iteration. Start-McpServer no-ops
         # if the port is already listening, so this only acts when the server
         # died. Catches MCP crashes that happen after the initial launch.
+        # The freshness check first restarts a live server whose code is
+        # older than the package source (see Get-McpStaleness).
+        Restart-McpServerIfStale
         Start-McpServer
 
         # Check restart budget

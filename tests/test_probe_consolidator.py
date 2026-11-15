@@ -862,3 +862,118 @@ class TestPromptIsCondensed:
         assert "shipped the fix" in body  # the person's own text survives
         [(events, _facts, _error, _elapsed)] = _probe_runs_rows(probe_db)
         assert events == 51
+
+
+class _ReceiptRecorder(_PromptRecorder):
+    """Stand in for call_claude that also reports how many prompt tokens arrived.
+
+    ``tokens`` is a function of the prompt, so a test states the receipt as a
+    share of what main() actually built, and ``None`` leaves usage_out empty.
+    """
+
+    def __init__(self, output: str, elapsed: float, tokens):
+        super().__init__(output, elapsed)
+        self._tokens = tokens
+
+    def __call__(self, prompt, *args, usage_out=None, **kwargs):
+        result = super().__call__(prompt, *args, **kwargs)
+        if usage_out is not None and self._tokens is not None:
+            usage_out.update(
+                {
+                    "input_tokens": 2,
+                    "cache_creation_input_tokens": self._tokens(prompt),
+                    "cache_read_input_tokens": 0,
+                    "output_tokens": 300,
+                }
+            )
+        return result
+
+
+class TestFastEmptyWithFullReceiptIsAQuietWindow:
+    """cp-consolidator-fast-empty-false-fault (2026-11-09).
+
+    The 15s floor assumed a model needs >15s to read a big prompt before it can
+    answer []. On 2026-11-08 06:30 and 2026-11-09 00:30 the CLI envelope said
+    cache_write=129291 and 95261 tokens received for 233K- and 177K-char
+    prompts, and [] came back in 4.7s and 9.5s. Both windows were sight-only
+    (1279 and 983 sight events, 481 of 484 frames in one carrying no app or
+    window). The model read them and found nothing; the floor called it a
+    fault. The token count is a direct measurement of what the floor guessed
+    at from time, so a full receipt clears it. No receipt keeps the floor.
+    """
+
+    def _run_with(self, consolidator, activity_db, probe_db, tokens, elapsed=4.7):
+        _pad_to_incident(activity_db)
+        recorder = _ReceiptRecorder("[]", elapsed, tokens)
+        with patch.object(consolidator, "call_claude", recorder):
+            rc = _run(consolidator, activity_db, probe_db, extra_argv=["--limit", "1500"])
+        assert recorder.prompt_chars >= consolidator.MIN_PROMPT_CHARS_FOR_FLOOR
+        return rc, recorder
+
+    def test_fast_empty_with_the_prompt_received_is_quiet(
+        self, consolidator, activity_db, probe_db
+    ):
+        rc, _ = self._run_with(consolidator, activity_db, probe_db, lambda p: len(p) // 2)
+        assert rc == 0
+        [(events, facts, error, elapsed_s)] = _probe_runs_rows(probe_db)
+        assert (events, facts, error) == (1500, 0, None)
+        assert elapsed_s == pytest.approx(4.7)
+
+    def test_receipt_is_logged_with_the_token_count(
+        self, consolidator, activity_db, probe_db, caplog
+    ):
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="probe.consolidator"):
+            rc, rec = self._run_with(consolidator, activity_db, probe_db, lambda p: 12345)
+        # 12345 tokens only clears the floor if the prompt is <= 8 * 12345 chars
+        expected = 0 if 12345 * consolidator.MAX_CHARS_PER_RECEIVED_TOKEN >= rec.prompt_chars else 1
+        assert rc == expected
+        if rc == 0:
+            assert "12347" in caplog.text  # input + cache_write + cache_read
+
+    def test_fast_empty_with_a_tiny_receipt_is_still_a_fault(
+        self, consolidator, activity_db, probe_db
+    ):
+        rc, _ = self._run_with(consolidator, activity_db, probe_db, lambda p: 10)
+        assert rc == 1
+        [(_e, _f, error, _el)] = _probe_runs_rows(probe_db)
+        assert error and "implausibly fast" in error
+
+    def test_fast_empty_with_no_usage_keeps_the_floor(self, consolidator, activity_db, probe_db):
+        rc, _ = self._run_with(consolidator, activity_db, probe_db, None)
+        assert rc == 1
+
+    @pytest.mark.parametrize(("delta", "expected"), [(0, 0), (-1, 1)], ids=["at", "below"])
+    def test_receipt_boundary_is_inclusive(
+        self, consolidator, activity_db, probe_db, delta, expected
+    ):
+        ratio = consolidator.MAX_CHARS_PER_RECEIVED_TOKEN
+
+        def tokens(prompt: str) -> int:
+            # total received = 2 (input) + this; make 8 * total land exactly on len(prompt)
+            need = -(-len(prompt) // ratio)  # ceil
+            return need - 2 + delta
+
+        rc, _ = self._run_with(consolidator, activity_db, probe_db, tokens)
+        assert rc == expected
+
+
+class TestCallClaudeReportsUsage:
+    def test_usage_out_is_filled_from_the_envelope(self, consolidator, monkeypatch):
+        monkeypatch.setattr(consolidator.subprocess, "run", _RecordingRun())
+        usage: dict = {}
+        consolidator.call_claude("p", usage_out=usage)
+        assert usage["cache_creation_input_tokens"] == 768
+        assert usage["input_tokens"] == 2
+        assert consolidator.prompt_tokens_received(usage) == 770
+
+    def test_no_usage_in_envelope_leaves_none(self, consolidator, monkeypatch):
+        monkeypatch.setattr(consolidator.subprocess, "run", _RecordingRun(stdout=_envelope(usage=None)))
+        usage: dict = {}
+        consolidator.call_claude("p", usage_out=usage)
+        assert consolidator.prompt_tokens_received(usage) is None
+
+    @pytest.mark.parametrize("bad", [{}, {"output_tokens": 5}, {"input_tokens": "2"}, {"input_tokens": True}])
+    def test_received_is_none_without_integer_input_counts(self, consolidator, bad):
+        assert consolidator.prompt_tokens_received(bad) is None

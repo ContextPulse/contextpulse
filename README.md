@@ -12,7 +12,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue.svg" alt="AGPL-3.0" /></a>
   <img src="https://img.shields.io/badge/python-3.12+-3776AB.svg" alt="Python 3.12+" />
-  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-0078D6.svg" alt="Windows | macOS" />
+  <img src="https://img.shields.io/badge/platform-Windows-0078D6.svg" alt="Windows" />
   <img src="https://img.shields.io/badge/MCP-native-orange.svg" alt="MCP Native" />
 </p>
 
@@ -130,11 +130,35 @@ AI coding assistants are powerful but blind. They can't see your screen, hear yo
 
 | Platform | Status |
 |----------|--------|
-| Windows 10+ | Full support |
-| macOS 13+ (Apple Silicon and Intel) | Full support |
+| Windows 10+ | Supported. Installer on the [Releases page](https://github.com/ContextPulse/contextpulse/releases/latest) |
+| macOS | Planned. Platform code exists but has not been verified end to end; no Mac build is offered |
 | Linux | Community contributions welcome -- core abstractions are in place, platform modules need implementation |
 
 ## Installation
+
+### Windows installer (no Python needed)
+
+1. Download `ContextPulseSetup-<version>.exe` from the [latest release](https://github.com/ContextPulse/contextpulse/releases/latest) and run it. It installs for your user account only, so it needs no administrator rights. The installer is not code-signed yet, so Windows SmartScreen may warn you first: choose **More info**, then **Run anyway**.
+2. ContextPulse starts in the system tray. Pro tools are open for a 30-day trial from first use, with no card needed.
+3. Connect your agent: copy the access token from the tray under **Settings -> MCP Access**. Then see [Manual MCP configuration](#manual-mcp-configuration) below.
+
+#### Activating Pro
+
+1. Buy a Pro licence ($29, one time) at [gumroad.com/l/lpcuoe](https://gumroad.com/l/lpcuoe). Your licence key arrives by email.
+2. In the tray menu choose **Enter License Key** and paste the key. The key is checked offline against a public key built into the app.
+
+Without the tray, save the key to a text file and run, from the install folder (by default `%LOCALAPPDATA%\Programs\ContextPulse`):
+
+```powershell
+.\ContextPulseCLI.exe --activate-license C:\path\to\key.txt
+.\ContextPulseCLI.exe --license-status
+```
+
+`--license-status` should report `tier=pro` and `source=license`. Add `--json` to either command for machine-readable output.
+
+### From source
+
+macOS from source is unverified: the `[macos]` extras below are what the code expects, but no Mac install has been tested end to end.
 
 ```bash
 git clone https://github.com/ContextPulse/contextpulse
@@ -172,8 +196,9 @@ contextpulse-mcp   # starts the MCP server on port 8420
 
 That's it. Your AI agent now has tools for reading your screen, voice, activity, and memory.
 
+<a id="manual-mcp-configuration"></a>
 <details>
-<summary>Manual MCP configuration (if not using --setup)</summary>
+<summary>Manual MCP configuration (if not using --setup, and for the Windows installer)</summary>
 
 Add to `~/.claude.json`:
 
