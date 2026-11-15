@@ -40,7 +40,7 @@ from contextpulse_core import _thread_caps  # noqa: F401  side-effect; must be f
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
-from contextpulse_core import mcp_auth
+from contextpulse_core import __version__, mcp_auth
 # isort: on
 
 logging.basicConfig(
@@ -224,7 +224,7 @@ def build_http_app(fastmcp_app: FastMCP, no_auth: bool = False, token_file: Path
 
 def build_app(host: str, port: int) -> FastMCP:
     """The unified FastMCP app, before any tools are registered on it."""
-    return FastMCP(
+    app = FastMCP(
         "ContextPulse",
         instructions=SERVER_INSTRUCTIONS,
         host=host,
@@ -232,6 +232,10 @@ def build_app(host: str, port: int) -> FastMCP:
         stateless_http=True,  # No per-session state needed — all state is in SQLite
         transport_security=build_transport_security(port),
     )
+    # FastMCP (mcp<2) has no version argument; unset, the low-level server
+    # reports the mcp SDK's own version as serverInfo.version.
+    app._mcp_server.version = __version__
+    return app
 
 
 def main():
