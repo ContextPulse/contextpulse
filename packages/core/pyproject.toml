@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "contextpulse-core"
-version = "0.1.1"
+version = "0.1.2"
 description = "Shared utilities for the ContextPulse platform"
 authors = [
     { name = "David Jerard", email = "david@jerardventures.com" },

@@ -7,8 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-15
+
 ### Added
 
+- A Windows installer, `ContextPulseSetup-0.1.2.exe`, attached to the GitHub
+  release. It bundles Python and every dependency, installs per user without
+  administrator rights, and starts the tray daemon, which now runs the MCP
+  server itself.
+- `ContextPulseCLI.exe --activate-license <file>` and `--license-status`
+  (`--json` for either) activate and check a Pro licence without the tray.
+  The key is read from a file and never printed.
 - Redaction now recognises about 220 vendor token formats (HuggingFace,
   Perplexity, DigitalOcean, GitLab, age secret keys and more) by running
   gitleaks' MIT-licensed rule list as a second pass after ContextPulse's own
@@ -19,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The MCP server reports ContextPulse's version in `serverInfo`; it used to
+  report the MCP SDK's (1.30.0).
+- Pausing capture now stops clipboard capture too.
+- 1Password service-account tokens that screen OCR wraps or misreads are
+  redacted.
+- The licence and settings windows state the current Pro price, $29 one time.
 - The daemon no longer grows by one full-screen staging texture (33 MB at
   3840x2160) every couple of seconds while the screen is locked. dxcam's
   display-recovery loop released those textures without flushing the D3D11

@@ -117,7 +117,7 @@ paid cloud tier under active evaluation.
   `installer_output/`)", but `contextpulse.spec` and `installer.iss` had never been
   built and both folders were empty; v0.1.1 shipped as wheels/sdists only. The first
   Windows installer was built 2026-11-14 on branch `feat/windows-installer` (see
-  "Windows installer" under Tech Stack); not yet released.
+  "Windows installer" under Tech Stack); released as v0.1.2 on 2026-11-15.
 - **Version 0.1.1 SHIPPED 2026-09-19 23:40 MDT, a security release.** David approved the
   public push after reading the release review doc; PR #17 merged to public `main`
   (`50a4393`, all 14 CI checks green), GitHub release `v0.1.1` published, draft advisory
