@@ -61,6 +61,19 @@ def commit(repo: Path, name: str, content: str, message: str) -> str:
     return git(repo, "rev-parse", "HEAD")
 
 
+@pytest.fixture(autouse=True)
+def _no_inherited_git_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The gate is called in-process, so its own git calls read os.environ.
+
+    Run from a pre-push hook in a linked worktree, git exports GIT_DIR (and
+    friends) pointing at the REAL repository; the gate then looked for the
+    fixture's commits there and failed with "bad object". Clear them so every
+    git call the gate makes resolves the fixture repo from its cwd.
+    """
+    for key in [k for k in os.environ if k.startswith("GIT_")]:
+        monkeypatch.delenv(key)
+
+
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
     """A repo with one commit already on a fake remote 'origin', and a denylist."""
