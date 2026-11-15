@@ -19,14 +19,21 @@ from contextpulse_core.license import (
 
 logger = logging.getLogger(__name__)
 
+# The dialog has a fixed geometry and a tk.Label never wraps unless told to, so
+# a long sentence ran off the right edge ("... stay free for", 2026-11-15
+# clean-machine test). Every sentence wraps inside the frame's padding.
+_DIALOG_WIDTH = 500
+_FRAME_PADX = 30
+_WRAP = _DIALOG_WIDTH - 2 * _FRAME_PADX
+
 
 def show_nag_dialog() -> bool:
     """Show the license nag dialog. Returns True if user continues."""
     result = {"continue": False}
 
-    dlg = gui_theme.create_dialog("ContextPulse — License", width=500, height=420)
+    dlg = gui_theme.create_dialog("ContextPulse — License", width=_DIALOG_WIDTH, height=480)
 
-    frame = tk.Frame(dlg, bg=gui_theme.BG, padx=30, pady=20)
+    frame = tk.Frame(dlg, bg=gui_theme.BG, padx=_FRAME_PADX, pady=20)
     frame.pack(fill="both", expand=True)
 
     # Title
@@ -49,6 +56,7 @@ def show_nag_dialog() -> bool:
     gui_theme.make_label(
         frame, trial_msg,
         font=("Segoe UI", 10), fg=trial_color,
+        wraplength=_WRAP, justify="center",
     ).pack(pady=(5, 3))
 
     # Free forever reassurance
@@ -56,6 +64,7 @@ def show_nag_dialog() -> bool:
         frame,
         "Sight (screen capture) and basic memory (store/recall/list/forget) are free forever.",
         font=("Segoe UI", 9), fg=gui_theme.TEXT_MUTED,
+        wraplength=_WRAP, justify="center",
     ).pack(pady=(0, 15))
 
     # License key entry
@@ -74,6 +83,7 @@ def show_nag_dialog() -> bool:
 
     status_label = gui_theme.make_label(
         frame, "", font=("Segoe UI", 9), fg=gui_theme.TEXT_MUTED,
+        wraplength=_WRAP, justify="center",
     )
     status_label.pack(pady=(0, 10))
 
@@ -124,6 +134,7 @@ def show_nag_dialog() -> bool:
         frame,
         "Upgrade at contextpulse.ai/pricing  (Pro $29 one-time founding licence)",
         font=("Segoe UI", 9, "underline"), fg=gui_theme.ACCENT,
+        wraplength=_WRAP, justify="center",
     )
     purchase_label.pack(pady=(10, 0))
     purchase_label.bind(
