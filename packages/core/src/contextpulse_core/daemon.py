@@ -338,6 +338,9 @@ class ContextPulseDaemon:
         # _init_knowledge); None keeps the capture path byte-identical (AT-4).
         self._knowledge_store = None
         self._knowledge_ingestor = None
+        # Installed (frozen) build only: the MCP server child this daemon owns.
+        self._mcp_proc: subprocess.Popen | None = None
+        self._mcp_restarts = 0
 
         self._init_sight()
         self._init_voice()
@@ -641,6 +644,11 @@ class ContextPulseDaemon:
             except Exception:
                 logger.debug("Heartbeat write failed", exc_info=True)
 
+            try:
+                self._check_bundled_mcp_server()
+            except Exception:
+                logger.exception("MCP server watchdog check failed")
+
             # Thread-budget diagnostic — emit every ~60s so leak regressions
             # are visible in the log without an external probe.
             if tick % BUDGET_LOG_EVERY == 0:
@@ -872,10 +880,68 @@ class ContextPulseDaemon:
         self.tray.icon = create_icon(warning if paused else None)
         self.tray.title = self._get_status_text()
 
+    # ── Bundled MCP server (installed build only) ─────────────────
+
+    def _start_bundled_mcp_server(self) -> None:
+        """Start the MCP server as a child process, in the installed build only.
+
+        From source, the MCP server is a separate ``python -m
+        contextpulse_core.mcp_unified`` process that an external supervisor
+        (scripts/daemon-watchdog.ps1) starts. A buyer's machine has neither a
+        Python nor that supervisor, so the frozen daemon re-runs its own
+        executable with ``--mcp-server``. Fail-soft: capture keeps running.
+        """
+        if not getattr(sys, "frozen", False):
+            return
+        cmd = _bundled_mcp_command()
+        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        try:
+            self._mcp_proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=flags,
+            )
+            logger.info("MCP server started (pid=%d): %s", self._mcp_proc.pid, " ".join(cmd[1:]))
+        except OSError as exc:
+            self._mcp_proc = None
+            self._module_errors["mcp"] = str(exc)
+            logger.exception("MCP server failed to start: %s", exc)
+
+    def _check_bundled_mcp_server(self) -> None:
+        """Watchdog tick: restart a dead MCP child, at most MCP_MAX_RESTARTS times."""
+        proc = self._mcp_proc
+        if proc is None or proc.poll() is None:
+            return
+        if self._mcp_restarts >= MCP_MAX_RESTARTS:
+            return
+        self._mcp_restarts += 1
+        logger.warning(
+            "MCP server exited (code=%s) — restart %d/%d",
+            proc.returncode, self._mcp_restarts, MCP_MAX_RESTARTS,
+        )
+        self._start_bundled_mcp_server()
+
+    def _stop_bundled_mcp_server(self) -> None:
+        proc, self._mcp_proc = self._mcp_proc, None
+        if proc is None or proc.poll() is not None:
+            return
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+
     def _quit(self) -> None:
         logger.info("ContextPulse shutting down")
         self._running = False
         self._stop_modules()
+        try:
+            self._stop_bundled_mcp_server()
+        except Exception:
+            logger.exception("MCP server stop failed")
 
         # Clean up tkinter root
         try:
@@ -937,6 +1003,8 @@ class ContextPulseDaemon:
 
         # Start all modules
         self._start_modules()
+        # Installed build: this daemon is also the MCP server's supervisor.
+        self._start_bundled_mcp_server()
 
         # Rebuild context vocabulary from project directories (non-blocking).
         # This generates vocabulary_context.json with CamelCase project names
@@ -1044,6 +1112,60 @@ def _write_fatal_crash_log(header: str) -> None:
         pass
 
 
+MCP_DEFAULT_PORT = 8420  # contextpulse_core.mcp_unified.MCP_PORT; not imported (heavy module)
+MCP_MAX_RESTARTS = 3
+_INSTANCE_BASE = "ContextPulse_SingleInstance"
+
+
+def _single_instance_name() -> str:
+    """Name of the single-instance mutex.
+
+    ``CONTEXTPULSE_INSTANCE`` appends a suffix so a second, fully isolated
+    instance (its own APPDATA / output dir, e.g. an installed build being
+    smoke-tested next to a dev checkout) can run. Unset = the historic name, so
+    upgrades still see an older running copy. Not a security control: the
+    mutex only prevents accidental double launches by the same user.
+    """
+    suffix = os.environ.get("CONTEXTPULSE_INSTANCE", "")
+    if not suffix:
+        return _INSTANCE_BASE
+    if len(suffix) > 64 or not suffix.replace("-", "").replace("_", "").isalnum():
+        print(f"CONTEXTPULSE_INSTANCE must be 1-64 letters, digits, '-' or '_': {suffix!r}",
+              file=sys.stderr)
+        sys.exit(2)
+    return f"{_INSTANCE_BASE}_{suffix}"
+
+
+def _bundled_mcp_command() -> list[str]:
+    """argv the installed daemon uses to start its MCP server child."""
+    raw = os.environ.get("CONTEXTPULSE_MCP_PORT", "")
+    port = MCP_DEFAULT_PORT
+    if raw:
+        if raw.isdigit() and 0 < int(raw) < 65536:
+            port = int(raw)
+        else:
+            logger.warning("Ignoring invalid CONTEXTPULSE_MCP_PORT=%r; using %d", raw, port)
+    return [sys.executable, "--mcp-server", "--port", str(port)]
+
+
+def _ensure_std_streams(log_path: Path) -> None:
+    """Give a windowed (no-console) build real stdout/stderr.
+
+    A PyInstaller ``console=False`` exe starts with ``sys.stdout`` and
+    ``sys.stderr`` set to None. uvicorn calls ``sys.stdout.isatty()`` while
+    configuring logging and dies on None, so the MCP server child would exit
+    at startup with nowhere to say why. Point both at a log file instead.
+    """
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    stream = open(log_path, "a", encoding="utf-8", errors="replace", buffering=1)  # noqa: SIM115
+    if sys.stdout is None:
+        sys.stdout = stream
+    if sys.stderr is None:
+        sys.stderr = stream
+
+
 def _acquire_single_instance_or_exit() -> object:
     """Kill zombie ContextPulse processes and acquire the single-instance mutex.
 
@@ -1075,7 +1197,7 @@ def _acquire_single_instance_or_exit() -> object:
             # Brief pause to let the OS release the mutex
             time.sleep(0.5)
 
-    mutex = platform.acquire_single_instance_lock("ContextPulse_SingleInstance")
+    mutex = platform.acquire_single_instance_lock(_single_instance_name())
     if mutex is None:
         logger.error("ContextPulse is already running. Exiting.")
         print("ContextPulse is already running.", file=sys.stderr)
@@ -1085,6 +1207,24 @@ def _acquire_single_instance_or_exit() -> object:
 
 def main() -> None:
     """Entry point for contextpulse CLI command."""
+    # Licence commands: no daemon, no mutex, no log file. Same code path as the
+    # tray's "Enter License Key" dialog (license.save_license).
+    from contextpulse_core import license_cli
+
+    if license_cli.handles(sys.argv[1:]):
+        sys.exit(license_cli.main(sys.argv[1:]))
+
+    # Installed build: the same executable runs the MCP server when the daemon
+    # re-launches it with --mcp-server (see _start_bundled_mcp_server). Before
+    # the Session 0 guard on purpose: the server captures nothing.
+    if "--mcp-server" in sys.argv:
+        _ensure_std_streams(OUTPUT_DIR / "mcp_server.log")
+        sys.argv = [sys.argv[0], *[a for a in sys.argv[1:] if a != "--mcp-server"]]
+        from contextpulse_core import mcp_unified
+
+        mcp_unified.main()
+        return
+
     _setup_logging()
 
     # Handle --setup flag for MCP config + companion skills
