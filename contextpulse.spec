@@ -4,6 +4,8 @@
 import os
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_submodules
+
 block_cipher = None
 
 # Paths — resolved dynamically so spec works on any machine
@@ -161,6 +163,30 @@ hidden_imports = [
     "anthropic",
 ]
 
+# The installed build is also the MCP server (ContextPulse.exe --mcp-server)
+# and the licence CLI (ContextPulseCLI.exe --license-status). uvicorn picks its
+# protocol/loop/lifespan implementations by string at runtime, and the tool
+# modules are registered from inside functions, so collect them all rather
+# than rely on import analysis.
+hidden_imports += [
+    "contextpulse_core.license_cli",
+    "contextpulse_core.mcp_unified",
+    "contextpulse_core.probe_mcp",
+    "contextpulse_memory.mcp_server",
+    "contextpulse_project.mcp_server",
+]
+for _pkg in (
+    "uvicorn",
+    "contextpulse_core",
+    "contextpulse_sight",
+    "contextpulse_voice",
+    "contextpulse_touch",
+    "contextpulse_project",
+    "contextpulse_memory",
+    "contextpulse_knowledge",
+):
+    hidden_imports += collect_submodules(_pkg)
+
 a = Analysis(
     [str(PACKAGES / "core" / "src" / "contextpulse_core" / "daemon.py")],
     pathex=[
@@ -221,8 +247,31 @@ exe = EXE(
     icon="assets/contextpulse.ico",
 )
 
+# Console twin of ContextPulse.exe: same code, same entry point, but a real
+# stdout so `ContextPulseCLI.exe --license-status` / `--activate-license FILE`
+# print their result (a windowed exe has no stdout). Shares every DLL below.
+exe_cli = EXE(
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name="ContextPulseCLI",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    console=True,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon="assets/contextpulse.ico",
+)
+
 coll = COLLECT(
     exe,
+    exe_cli,
     a.binaries,
     a.zipfiles,
     a.datas,

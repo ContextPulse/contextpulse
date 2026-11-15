@@ -44,6 +44,33 @@ paid cloud tier under active evaluation.
   redacted text rather than raw), `mcp_auth.py` (per-install bearer token) and
   `env_guard.py` (snapshots the environment before `load_dotenv` so a `.env` cannot
   silently disable auth).
+- **Windows installer (first built 2026-11-14).** `contextpulse.spec` (PyInstaller
+  6.19, onedir, run from the dev `.venv`) produces `dist\ContextPulse\` with two exes
+  sharing one `_internal\`: `ContextPulse.exe` (windowed tray daemon) and
+  `ContextPulseCLI.exe` (console twin, same code). `installer.iss` (Inno Setup 6,
+  per-user, no admin, AppId `{A3F7E2B1-...}`) packs it into
+  `installer_output\ContextPulseSetup-<version>.exe`. One command:
+  `powershell -ExecutionPolicy Bypass -File scripts\build_windows_installer.ps1`
+  (or `build.cmd`); it prints path, size and SHA-256. Inno Setup 6 is installed user
+  scope at `%LOCALAPPDATA%\Programs\Inno Setup 6\` (already present on the dev PC on
+  2026-11-14; on a new machine `winget install JRSoftware.InnoSetup --scope user`).
+  Installed-build behaviour that differs from a source checkout:
+  - the tray daemon starts its own MCP server child (`ContextPulse.exe --mcp-server`,
+    127.0.0.1:8420, port overridable with `CONTEXTPULSE_MCP_PORT`), restarts it up to
+    3 times and stops it on quit; from source the MCP server is still started by
+    `scripts/daemon-watchdog.ps1`;
+  - headless licence tools: `ContextPulseCLI.exe --activate-license <file>` (calls
+    `license.save_license`, the tray dialog's own function; exit 0 saved, 2 invalid,
+    1 unreadable) and `--license-status [--json]` (tier, pro_access, source
+    license/trial/none; never prints the key, masks the email);
+  - `CONTEXTPULSE_INSTANCE=<suffix>` renames the single-instance mutex so an
+    isolated copy can run beside another (testing only; unset = historic name);
+  - the tray daemon refuses Windows Session 0 (by design), so over SSM or any
+    service context only `--mcp-server` and the CLI run; the tray needs an
+    interactive logon (a one-shot `schtasks /IT` task works);
+  - first run downloads the Whisper `small` model (several hundred MB) from Hugging Face into
+    `%APPDATA%\ContextPulse\voice\models\`, and shows a modal welcome window unless
+    `%APPDATA%\ContextPulse\.first_run_complete` exists.
 - **The live `contextpulse.ai` page is `.internal/site/index.html`** — byte-identical
   to what is served, verified by fetch-and-diff 2026-09-19. It is gitignored and not
   under git, so it has no revert point. `ContextPulse-jv-private/site/index.html` is
@@ -85,8 +112,12 @@ paid cloud tier under active evaluation.
 ## Current State
 
 ### Done
-- Public open-core daemon (Sight + Voice + Touch), 37 MCP tools, packaged and
-  installable (installer under `installer_output/`, `dist/`).
+- Public open-core daemon (Sight + Voice + Touch), 37 MCP tools. **Corrected
+  2026-11-14:** this line said "packaged and installable (installer under
+  `installer_output/`)", but `contextpulse.spec` and `installer.iss` had never been
+  built and both folders were empty; v0.1.1 shipped as wheels/sdists only. The first
+  Windows installer was built 2026-11-14 on branch `feat/windows-installer` (see
+  "Windows installer" under Tech Stack); not yet released.
 - **Version 0.1.1 SHIPPED 2026-09-19 23:40 MDT, a security release.** David approved the
   public push after reading the release review doc; PR #17 merged to public `main`
   (`50a4393`, all 14 CI checks green), GitHub release `v0.1.1` published, draft advisory

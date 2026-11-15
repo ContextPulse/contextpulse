@@ -1,20 +1,36 @@
-; ContextPulse Windows Installer — Inno Setup Script
-; Builds from PyInstaller dist/ContextPulse/ output
-; Replaces the Sight .cmd startup
+; ContextPulse Windows Installer -- Inno Setup 6 script
+; Packs the PyInstaller onedir output (dist\ContextPulse\) into one setup exe.
+; Build with scripts\build_windows_installer.ps1, which passes the version:
+;   ISCC.exe /DMyAppVersion=0.1.1 installer.iss
+;
+; Installs per-user (no admin): %LOCALAPPDATA%\Programs\ContextPulse by default.
+; Silent install for scripted tests / deployment:
+;   ContextPulseSetup-<ver>.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="C:\path" /MERGETASKS="!autostart"
+; Silent uninstall:
+;   "<dir>\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+;
+; Installed programs:
+;   ContextPulse.exe     tray daemon (capture + its own MCP server on 127.0.0.1:8420)
+;   ContextPulseCLI.exe  console twin: --license-status, --activate-license FILE
 
 #define MyAppName "ContextPulse"
-#define MyAppVersion "0.1.0"
+#ifndef MyAppVersion
+  #define MyAppVersion "0.1.1"
+#endif
 #define MyAppPublisher "Jerard Ventures LLC"
 #define MyAppURL "https://contextpulse.ai"
 #define MyAppExeName "ContextPulse.exe"
+#define MyCliExeName "ContextPulseCLI.exe"
 
 [Setup]
 AppId={{A3F7E2B1-6D4C-4E8A-B2C1-5D9F3A7E1B3C}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
+AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
+VersionInfoVersion={#MyAppVersion}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
@@ -26,6 +42,7 @@ WizardStyle=modern
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
+MinVersion=10.0
 CloseApplications=no
 RestartApplications=no
 SetupIconFile=assets\contextpulse.ico
@@ -39,8 +56,12 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "autostart"; Description: "Start ContextPulse when Windows starts"; GroupDescription: "Startup:"
 
 [Files]
-; Bundle everything from the PyInstaller dist folder
+; Everything PyInstaller produced: both exes and the shared _internal\ folder.
 Source: "dist\ContextPulse\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; AGPL-3.0: the licence text and notices travel with the binary.
+Source: "LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
+Source: "NOTICE"; DestDir: "{app}"; DestName: "NOTICE.txt"; Flags: ignoreversion
+Source: "THIRD_PARTY_LICENSES.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -55,11 +76,25 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
 [Code]
-function InitializeSetup(): Boolean;
+procedure StopRunningCopies();
 var
   ResultCode: Integer;
 begin
-  // Close running ContextPulse before installing
-  Exec('taskkill', '/f /im ContextPulse.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  // The tray daemon and its MCP server child are both ContextPulse.exe.
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/f /im {#MyAppExeName}', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/f /im {#MyCliExeName}', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+function InitializeSetup(): Boolean;
+begin
+  // Upgrade in place: a running copy would hold its DLLs open.
+  StopRunningCopies();
+  Result := True;
+end;
+
+function InitializeUninstall(): Boolean;
+begin
+  // Otherwise files in use survive the uninstall.
+  StopRunningCopies();
   Result := True;
 end;
