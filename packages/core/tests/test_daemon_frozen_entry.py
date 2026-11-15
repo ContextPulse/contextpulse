@@ -181,6 +181,30 @@ def test_mcp_child_restarted_when_dead_up_to_cap(monkeypatch):
     assert popen.call_count == d.MCP_MAX_RESTARTS
 
 
+def test_mcp_child_not_started_once_quitting(monkeypatch):
+    import threading
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    popen = MagicMock()
+    monkeypatch.setattr(d.subprocess, "Popen", popen)
+    dm = _bare_daemon()
+    dm.stop_event = threading.Event()
+    dm.stop_event.set()
+    dm._start_bundled_mcp_server()
+    popen.assert_not_called()
+
+
+def test_mcp_child_output_goes_to_a_log_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(d, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(d.atexit, "register", lambda f: None)
+    popen = MagicMock()
+    monkeypatch.setattr(d.subprocess, "Popen", popen)
+    _bare_daemon()._start_bundled_mcp_server()
+    assert popen.call_args.kwargs["stdout"] is not subprocess.DEVNULL
+    assert (tmp_path / "mcp_server.log").exists()
+
+
 def test_mcp_child_alive_is_left_alone(monkeypatch):
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     alive = MagicMock()

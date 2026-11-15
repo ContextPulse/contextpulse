@@ -160,8 +160,9 @@ def test_output_never_contains_the_key(tmp_path, capsys, as_json):
     key = _key("pro")
     payload_part, sig_part = key.split(".")
     extra = ["--json"] if as_json else []
-    license_cli.main(["--activate-license", str(_write(tmp_path, key)), *extra])
-    license_cli.main(["--license-status", *extra])
+    assert license_cli.main(["--activate-license", str(_write(tmp_path, key)), *extra]) == 0
+    assert license_cli.main(["--license-status", *extra]) == 0
+    license_cli.main(["--activate-license", key])  # the key pasted where a path belongs
     out = capsys.readouterr()
     text = out.out + out.err
     assert payload_part not in text
@@ -185,6 +186,18 @@ def test_mask_email():
     assert license_cli.mask_email("buyer@example.com") == "b***@example.com"
     assert license_cli.mask_email("") == ""
     assert license_cli.mask_email("noatsign") == "***"
+
+
+def test_expired_key_is_refused_and_does_not_replace_a_good_one(tmp_path, isolated):
+    good = _key("pro")
+    assert license_cli.main(["--activate-license", str(_write(tmp_path, good))]) == 0
+    old = _key("pro", exp=int(time.time()) - 30 * 86400)
+    assert license_cli.main(["--activate-license", str(_write(tmp_path, old))]) == 2
+    assert (isolated / "license.key").read_text(encoding="utf-8") == good
+
+
+def test_handles_equals_form():
+    assert license_cli.handles(["--activate-license=k.txt"]) is True
 
 
 def test_handles_only_its_own_flags():

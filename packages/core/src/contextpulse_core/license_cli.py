@@ -39,7 +39,9 @@ _FLAGS = ("--activate-license", "--license-status")
 
 def handles(argv: list[str]) -> bool:
     """True if ``argv`` asks for one of this module's commands."""
-    return any(a in _FLAGS for a in argv)
+    # "--activate-license=FILE" too: unmatched, it would fall through to
+    # starting the whole daemon from the console exe.
+    return any(a.split("=", 1)[0] in _FLAGS for a in argv)
 
 
 def mask_email(email: str) -> str:
@@ -124,13 +126,22 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     path = Path(args.activate_license)
+    if not path.is_file():
+        # The path is not echoed: the usual mistake is pasting the key itself here.
+        print("error: no such key file. Pass the PATH of a text file that contains the key, "
+              "not the key itself.", file=sys.stderr)
+        return 1
     try:
         key = _read_key_file(path)
     except OSError as exc:
-        print(f"error: cannot read key file {path}: {exc.strerror or exc}", file=sys.stderr)
+        print(f"error: cannot read the key file: {exc.strerror or type(exc).__name__}", file=sys.stderr)
         return 1
     if not key:
         print(f"error: key file {path} is empty", file=sys.stderr)
+        return 2
+    pre = _lic.verify_key(key)
+    if pre is not None and "exp" in pre and pre["exp"] + _lic.EXPIRY_GRACE_DAYS * 86400 < time.time():
+        print("error: this licence key has expired; nothing was saved", file=sys.stderr)
         return 2
     payload = save_license(key)
     if payload is None:

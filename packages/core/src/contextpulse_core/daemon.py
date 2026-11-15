@@ -16,6 +16,7 @@ Production features:
   - Model download: progress indicator for first-run Whisper download
 """
 
+import atexit
 import logging
 import os
 import subprocess
@@ -893,16 +894,26 @@ class ContextPulseDaemon:
         """
         if not getattr(sys, "frozen", False):
             return
+        if getattr(self, "stop_event", None) is not None and self.stop_event.is_set():
+            return  # quitting: never start a child that _quit has already passed
         cmd = _bundled_mcp_command()
         flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         try:
-            self._mcp_proc = subprocess.Popen(
-                cmd,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=flags,
-            )
+            # The child's own output goes to a log file the parent opens, so a
+            # startup failure is readable even if the child never gets that far.
+            OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+            with open(OUTPUT_DIR / "mcp_server.log", "ab") as log:
+                self._mcp_proc = subprocess.Popen(
+                    cmd,
+                    stdin=subprocess.DEVNULL,
+                    stdout=log,
+                    stderr=log,
+                    creationflags=flags,
+                )
+            if not getattr(self, "_mcp_atexit", False):
+                # sys.exit paths (tray restart limit, fatal crash) skip _quit.
+                atexit.register(self._stop_bundled_mcp_server)
+                self._mcp_atexit = True
             logger.info("MCP server started (pid=%d): %s", self._mcp_proc.pid, " ".join(cmd[1:]))
         except OSError as exc:
             self._mcp_proc = None
@@ -1130,7 +1141,7 @@ def _single_instance_name() -> str:
     if not suffix:
         return _INSTANCE_BASE
     if len(suffix) > 64 or not suffix.replace("-", "").replace("_", "").isalnum():
-        print(f"CONTEXTPULSE_INSTANCE must be 1-64 letters, digits, '-' or '_': {suffix!r}",
+        print(f"instance suffix must be 1-64 letters, digits, '-' or '_': {suffix!r}",
               file=sys.stderr)
         sys.exit(2)
     return f"{_INSTANCE_BASE}_{suffix}"
