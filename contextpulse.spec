@@ -228,6 +228,17 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
+# Windows version resource (Properties > Details), from contextpulse_core's
+# __version__. Loaded by path: the spec runs in PyInstaller's namespace, not
+# as a package. See scripts/windows_version_info.py.
+import importlib.util as _ilu
+
+_vi_spec = _ilu.spec_from_file_location(
+    "windows_version_info", _spec_dir / "scripts" / "windows_version_info.py"
+)
+_vi = _ilu.module_from_spec(_vi_spec)
+_vi_spec.loader.exec_module(_vi)
+
 exe = EXE(
     pyz,
     a.scripts,
@@ -245,6 +256,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon="assets/contextpulse.ico",
+    version=_vi.build_version_info("ContextPulse", "ContextPulse"),
 )
 
 # Console twin of ContextPulse.exe: same code, same entry point, but a real
@@ -267,6 +279,7 @@ exe_cli = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon="assets/contextpulse.ico",
+    version=_vi.build_version_info("ContextPulseCLI", "ContextPulse command line"),
 )
 
 coll = COLLECT(

@@ -142,6 +142,18 @@ SECRET_CASES = [
         "zqconnstrneedle88",
         "zqconnstrneedle88",
     ),
+    # ContextPulse's own licence key, copied from the receipt to paste into the
+    # tray's Enter License Key dialog (2026-11-15 clean-machine finding). Payload
+    # is base64url of sorted compact JSON, as the licence webhook writes it; the
+    # signature is 64 synthetic bytes, so 86 base64url characters.
+    (
+        "contextpulse_licence_key",
+        f"{CONTROL_WORD} "
+        "eyJlbWFpbCI6InpxLmJ1eWVyQGV4YW1wbGUuaW52YWxpZCIsImZlYXR1cmVzIjpbInNpZ2h0Il0sInRpZXIiOiJwcm8iLCJ0cyI6MTc2MzE5MDAwMH0"
+        ".enFsaWNlbmNlc2lnbmVlZGxlMDEyMzQ1Njc4OWFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6MDEyMzQ1Njc4OU\n",
+        "eyJlbWFpbCI6InpxLmJ1eWVyQGV4YW1wbGUuaW52YWxpZCIsImZlYXR1cmVzIjpbInNpZ2h0Il0sInRpZXIiOiJwcm8iLCJ0cyI6MTc2MzE5MDAwMH0",
+        "eyjlbwfpbci6inpxlmj1ewvyqgv4yw1wbguuaw52ywxpzcisimzlyxr1cmvzijpbinnpz2h0il0sinrpzxiioijwcm8ilcj0cyi6mtc2mze5mdawmh0",
+    ),
 ]
 
 CASE_IDS = [c[0] for c in SECRET_CASES]

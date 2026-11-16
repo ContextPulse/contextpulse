@@ -40,7 +40,11 @@ logger = logging.getLogger(__name__)
 # Bumped when the redaction patterns change in a way that makes an already-
 # migrated store worth re-sweeping. The marker is per-name, so raising this
 # re-runs the sweep exactly once more.
-MIGRATION_NAME = "secret-redaction-v2"
+#
+# v3 (2026-11-15): ContextPulse licence keys. Activation by paste stored every
+# buyer's key in clipboard history, so installs already marked v2 need one
+# more sweep to remove keys captured before the CP_LICENSE_KEY pattern.
+MIGRATION_NAME = "secret-redaction-v3"
 
 _MIGRATIONS_DDL = """
 CREATE TABLE IF NOT EXISTS cp_migrations (
@@ -88,6 +92,10 @@ def open_db(db_path: Path, read_only: bool = False) -> sqlite3.Connection:
         # A pragma is a WRITE. Skipped on a read-only open so a dry run is
         # literally side-effect free rather than nearly so (review N2).
         conn.execute("PRAGMA journal_mode=WAL")
+        # Without this an in-place redaction leaves the old cell bytes on the
+        # freed page, so the secret is gone from every query and still in the
+        # file (found 2026-11-15 by a raw-bytes check on the licence-key sweep).
+        conn.execute("PRAGMA secure_delete=ON")
     conn.execute("PRAGMA busy_timeout=5000")
     return conn
 

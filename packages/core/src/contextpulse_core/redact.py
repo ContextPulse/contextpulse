@@ -112,6 +112,20 @@ _PATTERNS: list[tuple[re.Pattern, str]] = [
     # of against the fixtures, all of which used long segments.
     (re.compile(r"eyJ[a-zA-Z0-9_-]{8,}\.eyJ[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}"), "[REDACTED:JWT]"),
 
+    # ContextPulse's own licence key: base64url(JSON payload) + "." +
+    # base64url(Ed25519 signature), padding stripped (ContextPulse-Backend
+    # lambda/license_webhook.py _generate_license_key; verified by
+    # license.verify_key). Two segments, so the JWT rule above never sees it.
+    # Pasting the key into the tray's Enter License Key dialog is the
+    # documented activation path, and on 2026-11-15 a clean-machine test found
+    # the clipboard monitor storing it -- every buyer's key in their own
+    # activity.db. What makes the shape specific is the signature: an Ed25519
+    # signature is exactly 64 bytes, which is exactly 86 base64url characters,
+    # behind a payload that opens with `eyJ` (`{"`). Placed AFTER the JWT rule
+    # so a three-segment token keeps its JWT label.
+    (re.compile(r"eyJ[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{86}={0,2}(?![A-Za-z0-9_=-])"),
+     "[REDACTED:CP_LICENSE_KEY]"),
+
     # Credit card numbers live in _VALIDATED_PATTERNS below -- shape alone is
     # not enough to call a digit run a card.
 
