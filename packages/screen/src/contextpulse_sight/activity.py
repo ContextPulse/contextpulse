@@ -15,7 +15,7 @@ from pathlib import Path
 
 from contextpulse_core.config import _DEFAULTS
 from contextpulse_core.config import get as cfg_get
-from contextpulse_core.redact import redact_sensitive
+from contextpulse_core.redact import redact_sensitive, redact_title
 from contextpulse_core.search_filter import keep_rows_matching_redacted_text
 
 from contextpulse_sight.config import ACTIVITY_DB_PATH
@@ -155,6 +155,10 @@ class ActivityDB:
         diff_score: float = 0.0,
     ) -> int:
         """Insert an activity record. Returns row ID."""
+        # Real keys in titles are redacted; ordinary "password:" titles are not
+        # (redact.TITLE_SKIP_CATEGORIES, cp-window-titles-keep-aws-keys).
+        window_title = redact_title(window_title)
+        app_name = redact_title(app_name)
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO activity (timestamp, window_title, app_name, monitor_index, frame_path, diff_score) "

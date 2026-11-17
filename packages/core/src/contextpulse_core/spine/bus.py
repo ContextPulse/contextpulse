@@ -15,6 +15,7 @@ mcp_calls) without modifying them.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import sqlite3
@@ -22,6 +23,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
+from contextpulse_core.redact import redact_title
 from contextpulse_core.search_filter import keep_rows_matching_redacted_text
 
 from .events import ContextEvent
@@ -242,6 +244,14 @@ class EventBus:
         """
         if not event.validate():
             raise ValueError(f"Invalid event: {event.event_id}")
+
+        # A key in a window title (a notepad holding an AWS key is enough) was
+        # stored raw. Redact here, the one writer of events.window_title, and
+        # hand listeners the same clean event: the knowledge bridge copies it.
+        title = redact_title(event.window_title)
+        app = redact_title(event.app_name)
+        if title != event.window_title or app != event.app_name:
+            event = dataclasses.replace(event, window_title=title, app_name=app)
 
         row = event.to_row()
         with self._lock:
