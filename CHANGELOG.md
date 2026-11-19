@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-19
+
+### Fixed
+
+- Clipboard capture no longer stores a pasted ContextPulse licence key. Pasting
+  the key into the tray's Enter License Key dialog is the documented activation
+  path, and 0.1.2 kept a copy of it in clipboard history.
+- On first start, 0.1.3 redacts any licence key already stored in clipboard
+  history by an earlier version.
+- The licence dialog's text now wraps inside the window instead of running off
+  its edge.
+
+### Changed
+
+- `ContextPulse.exe` and `ContextPulseCLI.exe` carry a Windows version resource,
+  so File Properties shows the product name and version.
+
 ## [0.1.2] - 2026-11-15
 
 ### Added
