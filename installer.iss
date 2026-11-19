@@ -1,7 +1,7 @@
 ; ContextPulse Windows Installer -- Inno Setup 6 script
 ; Packs the PyInstaller onedir output (dist\ContextPulse\) into one setup exe.
 ; Build with scripts\build_windows_installer.ps1, which passes the version:
-;   ISCC.exe /DMyAppVersion=0.1.2 installer.iss
+;   ISCC.exe /DMyAppVersion=0.1.3 installer.iss
 ;
 ; Installs per-user (no admin): %LOCALAPPDATA%\Programs\ContextPulse by default.
 ; Silent install for scripted tests / deployment:
@@ -15,7 +15,7 @@
 
 #define MyAppName "ContextPulse"
 #ifndef MyAppVersion
-  #define MyAppVersion "0.1.2"
+  #define MyAppVersion "0.1.3"
 #endif
 #define MyAppPublisher "Jerard Ventures LLC"
 #define MyAppURL "https://contextpulse.ai"

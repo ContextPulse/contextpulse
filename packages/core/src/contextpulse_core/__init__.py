@@ -2,7 +2,7 @@
 # Copyright (C) 2025-2026 Jerard Ventures LLC
 """ContextPulse Core — Shared utilities for the ContextPulse platform."""
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 __all__ = [
     "config",
