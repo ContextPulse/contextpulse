@@ -18,6 +18,7 @@ from contextpulse_core import __version__, mcp_unified
 pytestmark = pytest.mark.unit
 
 ROOT_PYPROJECT = Path(__file__).resolve().parents[3] / "pyproject.toml"
+CORE_PYPROJECT = Path(__file__).resolve().parents[1] / "pyproject.toml"
 
 
 def _sent_version() -> str:
@@ -40,3 +41,13 @@ def test_core_version_matches_the_release_version():
     with ROOT_PYPROJECT.open("rb") as fh:
         release = tomllib.load(fh)["project"]["version"]
     assert __version__ == release
+
+
+def test_core_package_version_matches_core_version():
+    # The release workflow builds packages/core into the wheel it attaches to
+    # the GitHub release. The 0.1.3 bump moved __version__ but not this file,
+    # so the v0.1.3 release carried a contextpulse_core-0.1.2 wheel built from
+    # 0.1.3 code: two different files with one name and version.
+    with CORE_PYPROJECT.open("rb") as fh:
+        package = tomllib.load(fh)["project"]["version"]
+    assert package == __version__
