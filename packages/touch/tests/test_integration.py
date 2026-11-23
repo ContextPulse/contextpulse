@@ -493,16 +493,27 @@ class TestMouseEventDebouncing:
 # Edge Cases
 # ═══════════════════════════════════════════════════════════════════════
 
+# The burst timer runs on its own thread. A fixed sleep of twice the timeout was
+# too short on a loaded macOS runner (PR #38: called 0 times), so tests that
+# expect a burst wait for the callback itself, up to this long.
+BURST_WAIT_S = 5.0
+
+
+def _burst_recorder() -> tuple[MagicMock, threading.Event]:
+    fired = threading.Event()
+    return MagicMock(side_effect=lambda *_a, **_k: fired.set()), fired
+
+
 class TestEdgeCases:
     """Edge cases for touch input processing."""
 
     def test_rapid_fire_keystrokes(self):
         """100 keystrokes in quick succession should form a single burst."""
-        on_burst = MagicMock()
+        on_burst, fired = _burst_recorder()
         bt = BurstTracker(burst_timeout=0.2, min_chars=3, on_burst=on_burst)
         for i in range(100):
             bt.on_key_press(chr(ord('a') + (i % 26)))
-        time.sleep(0.4)
+        assert fired.wait(BURST_WAIT_S), "burst never emitted"
         on_burst.assert_called_once()
         data = on_burst.call_args[0][0]
         assert data["char_count"] == 100
@@ -510,13 +521,13 @@ class TestEdgeCases:
 
     def test_rapid_fire_with_backspaces(self):
         """Rapid typing with interspersed backspaces."""
-        on_burst = MagicMock()
+        on_burst, fired = _burst_recorder()
         bt = BurstTracker(burst_timeout=0.2, min_chars=3, on_burst=on_burst)
         for i in range(50):
             bt.on_key_press("a")
             if i % 5 == 4:
                 bt.on_key_press(None, is_backspace=True)
-        time.sleep(0.4)
+        assert fired.wait(BURST_WAIT_S), "burst never emitted"
         on_burst.assert_called_once()
         data = on_burst.call_args[0][0]
         assert data["char_count"] == 50
@@ -594,11 +605,11 @@ class TestEdgeCases:
 
     def test_burst_min_chars_boundary(self):
         """Exactly min_chars characters should still emit a burst."""
-        on_burst = MagicMock()
+        on_burst, fired = _burst_recorder()
         bt = BurstTracker(burst_timeout=0.1, min_chars=3, on_burst=on_burst)
         for c in "abc":
             bt.on_key_press(c)
-        time.sleep(0.2)
+        assert fired.wait(BURST_WAIT_S), "burst never emitted"
         on_burst.assert_called_once()
         data = on_burst.call_args[0][0]
         assert data["char_count"] == 3

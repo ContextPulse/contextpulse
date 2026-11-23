@@ -81,6 +81,24 @@ def fixture_db(tmp_path):
     module.stop()
     bus.close()
     db.close()
+
+    # The writers now redact a card number in a title at capture
+    # (cp-window-titles-keep-aws-keys), so put the raw title back the way a
+    # store written before that change holds it. This file tests the CLI's
+    # title handling, which needs a raw title to act on.
+    from contextpulse_core.redact import redact_title
+
+    stored = redact_title(TITLE_TEXT)
+    assert stored != TITLE_TEXT, "capture did not redact the title -- fixture premise wrong"
+    conn = sqlite3.connect(str(db_path))
+    with conn:
+        for table in ("events", "activity"):
+            conn.execute(
+                f"UPDATE {table} SET window_title = ? WHERE window_title = ?",
+                (TITLE_TEXT, stored),
+            )
+        conn.execute("INSERT INTO events_fts(events_fts) VALUES('rebuild')")
+    conn.close()
     return db_path
 
 

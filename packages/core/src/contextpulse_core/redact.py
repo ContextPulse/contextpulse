@@ -601,11 +601,16 @@ def _redact_vendor(text: str) -> tuple[str, int]:
     return text, len(merged)
 
 
-def redact_with_counts(text: str) -> tuple[str, dict[str, int]]:
+def redact_with_counts(
+    text: str, skip: frozenset[str] = frozenset()
+) -> tuple[str, dict[str, int]]:
     """Redact, and report how many matches each category accounted for.
 
     Returns (cleaned_text, {category: match_count}). Categories with zero
     matches are omitted, so an empty dict means the text was clean.
+
+    ``skip`` names categories whose patterns are not run at all. Only
+    redact_title_with_counts passes it; every other caller gets the full table.
 
     This is the counting entry point for offline auditing (see
     scripts/purge_clipboard_secrets.py), which must be able to report WHAT was
@@ -627,26 +632,59 @@ def redact_with_counts(text: str) -> tuple[str, dict[str, int]]:
     ]
 
     for pattern, replacement in [*_PATTERNS, *armed]:
+        category = category_of(replacement)
+        if category in skip:
+            continue
         text, n = pattern.subn(replacement, text)
         if n:
-            category = category_of(replacement)
             counts[category] = counts.get(category, 0) + n
 
     # Validated families last. subn() would count every CANDIDATE, including the
     # ones the validator rejects, so these are substituted through a callable
     # that counts only what it actually replaced.
     for pattern, replacement, is_valid in _VALIDATED_PATTERNS:
+        category = category_of(replacement)
+        if category in skip:
+            continue
         text, n = _subn_validated(pattern, replacement, is_valid, text)
         if n:
-            category = category_of(replacement)
             counts[category] = counts.get(category, 0) + n
 
     # Vendor formats last, so anything our own table labels keeps its label.
-    text, n = _redact_vendor(text)
-    if n:
-        category = category_of(_VENDOR_REPLACEMENT)
-        counts[category] = counts.get(category, 0) + n
+    if category_of(_VENDOR_REPLACEMENT) not in skip:
+        text, n = _redact_vendor(text)
+        if n:
+            category = category_of(_VENDOR_REPLACEMENT)
+            counts[category] = counts.get(category, 0) + n
     return text, counts
+
+
+# ── window titles ───────────────────────────────────────────────────
+#
+# Titles were stored raw because the CREDENTIAL rule fires on ordinary titles:
+# on the live database 58 of 60 flagged titles were things like "Change
+# password: settings". Skipping titles wholesale also kept real keys raw --
+# 2026-11-16 the same database held AWS_KEY 2 and AWS_SECRET 2 in
+# events.window_title (cp-window-titles-keep-aws-keys). So titles get every
+# category except the ones that need a labelled value to be meaningful.
+TITLE_SKIP_CATEGORIES: frozenset[str] = frozenset({"CREDENTIAL"})
+
+
+def redact_title_with_counts(text: str | None) -> tuple[str | None, dict[str, int]]:
+    """Redact a window title or app name; CREDENTIAL is not applied.
+
+    Not cached on purpose: a cache keyed on the raw title would keep the very
+    secrets this removes in daemon memory. A value that is not a string is
+    returned unchanged, so a capture caller passing one cannot fail the write.
+    """
+    if not text or not isinstance(text, str):
+        return text, {}
+    return redact_with_counts(text, skip=TITLE_SKIP_CATEGORIES)
+
+
+def redact_title(text: str | None) -> str | None:
+    """Redact a window title before it is stored. Empty and None pass through."""
+    return redact_title_with_counts(text)[0]
 
 
 def redact_sensitive(text: str) -> str:

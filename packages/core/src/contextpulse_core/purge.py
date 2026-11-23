@@ -33,7 +33,11 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from contextpulse_core.redact import _redactable_payload_keys, redact_with_counts
+from contextpulse_core.redact import (
+    _redactable_payload_keys,
+    redact_title_with_counts,
+    redact_with_counts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +48,11 @@ logger = logging.getLogger(__name__)
 # v3 (2026-11-15): ContextPulse licence keys. Activation by paste stored every
 # buyer's key in clipboard history, so installs already marked v2 need one
 # more sweep to remove keys captured before the CP_LICENSE_KEY pattern.
-MIGRATION_NAME = "secret-redaction-v3"
+#
+# v4 (2026-11-17): window titles. Titles were never rewritten, so real keys in
+# them stayed raw (AWS_KEY 2, AWS_SECRET 2 on a live store). v4 rewrites
+# titles with every category except CREDENTIAL (redact.TITLE_SKIP_CATEGORIES).
+MIGRATION_NAME = "secret-redaction-v4"
 
 _MIGRATIONS_DDL = """
 CREATE TABLE IF NOT EXISTS cp_migrations (
@@ -294,6 +302,60 @@ def apply_updates(
         conn.execute("INSERT INTO events_fts(events_fts) VALUES('rebuild')")
 
 
+# (table, key column, FTS index) for the title pass.
+TITLE_TABLES = (("events", "rowid", "events_fts"), ("activity", "id", "activity_fts"))
+
+
+def scan_title_secrets(
+    conn: sqlite3.Connection, table: str, key_column: str
+) -> tuple[Tally, list[tuple[str, str, int]]]:
+    """Find titles and app names holding a real secret. Returns (tally, updates).
+
+    Uses redact_title_with_counts, which skips CREDENTIAL, so this pass rewrites
+    the keys the --include-titles switch exists for without the ordinary
+    "password:" titles that switch would also scrub. Measured read-only on a
+    live store 2026-11-17: of 445,123 event rows it matched 2 values (one
+    distinct title), against 60 for the full table.
+    """
+    tally = Tally()
+    updates: list[tuple[str, str, int]] = []
+    if not table_exists(conn, table):
+        return tally, updates
+    for row in conn.execute(
+        f"SELECT {key_column} AS k, window_title, app_name FROM {table}"
+    ).fetchall():
+        tally.rows_scanned += 1
+        title, title_counts = redact_title_with_counts(row["window_title"])
+        app, app_counts = redact_title_with_counts(row["app_name"])
+        merged: dict[str, int] = {}
+        for counts in (title_counts, app_counts):
+            for category, n in counts.items():
+                merged[category] = merged.get(category, 0) + n
+        if merged:
+            tally.add(merged)
+            updates.append((title, app, row["k"]))
+    return tally, updates
+
+
+def apply_title_updates(
+    conn: sqlite3.Connection,
+    table: str,
+    key_column: str,
+    fts_table: str,
+    updates: list[tuple[str, str, int]],
+) -> None:
+    """Rewrite titles and rebuild the table's FTS index (events has no update trigger)."""
+    if not updates:
+        return
+    with conn:
+        conn.executemany(
+            f"UPDATE {table} SET window_title = ?, app_name = ? WHERE {key_column} = ?",
+            updates,
+        )
+        if table_exists(conn, fts_table):
+            conn.execute(f"INSERT INTO {fts_table}({fts_table}) VALUES('rebuild')")
+
+
 def verify_fts_matches_content(conn: sqlite3.Connection) -> None:
     """Prove events_fts agrees with the rows it indexes.
 
@@ -453,17 +515,30 @@ def sweep_activity_db(conn: sqlite3.Connection) -> tuple[dict[str, int], int, bo
         apply_updates(conn, clip_updates, evt_updates)
     apply_activity_updates(conn, act_updates)
 
-    for tally in (clip_tally, evt_tally, act_tally):
+    # Titles last, over the rows the passes above may just have rewritten.
+    title_tallies: list[Tally] = []
+    any_title_updates = False
+    for table, key_column, fts_table in TITLE_TABLES:
+        title_tally, title_updates = scan_title_secrets(conn, table, key_column)
+        apply_title_updates(conn, table, key_column, fts_table, title_updates)
+        title_tallies.append(title_tally)
+        any_title_updates = any_title_updates or bool(title_updates)
+
+    for tally in (clip_tally, evt_tally, act_tally, *title_tallies):
         for category, n in tally.categories.items():
             counts[category] = counts.get(category, 0) + n
-    rows = clip_tally.rows_affected + evt_tally.rows_affected + act_tally.rows_affected
+    rows = sum(t.rows_affected for t in (clip_tally, evt_tally, act_tally, *title_tallies))
 
     verified = True
-    if clip_updates or evt_updates or act_updates:
+    if clip_updates or evt_updates or act_updates or any_title_updates:
         remaining = (
             scan_clipboard(conn)[0].total_matches
             + scan_events(conn, include_titles=False)[0].total_matches
             + scan_activity(conn, include_titles=False)[0].total_matches
+            + sum(
+                scan_title_secrets(conn, table, key_column)[0].total_matches
+                for table, key_column, _fts in TITLE_TABLES
+            )
         )
         verified = remaining == 0
         if not verified:

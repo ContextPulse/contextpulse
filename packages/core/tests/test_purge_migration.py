@@ -596,3 +596,125 @@ class TestDaemonAndMcpBothCallIt:
         assert "start_secret_migration" in inspect.getsource(
             mcp_server._ensure_secret_migration
         ), "a tool call must not block on a full-table scan"
+
+
+TITLE_SECRET = "AKIAZQTITLESWEEP0123"
+BENIGN_TITLE = "Change password: zqbenignsettings - Chrome"
+
+
+def _titled_activity_db(tmp_path):
+    """Raw titles as a pre-fix daemon wrote them: inserted straight into SQL."""
+    from contextpulse_core.spine import EventBus
+    from contextpulse_sight.activity import ActivityDB
+
+    db_path = tmp_path / "activity.db"
+    ActivityDB(db_path=db_path).close()
+    EventBus(db_path).close()
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "INSERT INTO activity (timestamp, window_title, app_name, monitor_index,"
+        " frame_path, diff_score) VALUES (?, ?, 'notepad.exe', 0, NULL, 0.0)",
+        (time.time(), f"{CONTROL_WORD} {TITLE_SECRET} - Notepad"),
+    )
+    for event_id, title in (
+        ("e-title-1", f"{CONTROL_WORD} {TITLE_SECRET} - Notepad"),
+        ("e-title-2", BENIGN_TITLE),
+    ):
+        conn.execute(
+            "INSERT INTO events (event_id, timestamp, modality, event_type, app_name,"
+            " window_title, monitor_index, payload, correlation_id, attention_score,"
+            " cognitive_load) VALUES (?, ?, 'sight', 'window_focus', 'notepad.exe', ?,"
+            " 0, '{}', NULL, 0.0, 0.0)",
+            (event_id, time.time(), title),
+        )
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def _titles(db_path, table):
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return [r[0] for r in conn.execute(f"SELECT window_title FROM {table}")]
+    finally:
+        conn.close()
+
+
+class TestTitlesAreSwept:
+    """cp-window-titles-keep-aws-keys: real keys in titles were never rewritten."""
+
+    def test_a_key_in_an_event_title_is_removed(self, tmp_path):
+        db_path = _titled_activity_db(tmp_path)
+        assert any(TITLE_SECRET in t for t in _titles(db_path, "events")), "vacuous"
+
+        counts = purge.ensure_migrated(db_path)
+
+        titles = _titles(db_path, "events")
+        assert not any(TITLE_SECRET in t for t in titles)
+        assert any(CONTROL_WORD in t for t in titles), "context was destroyed"
+        assert counts.get("AWS_KEY") == 2  # one event title, one activity title
+
+    def test_a_key_in_an_activity_title_is_removed(self, tmp_path):
+        db_path = _titled_activity_db(tmp_path)
+        purge.ensure_migrated(db_path)
+        titles = _titles(db_path, "activity")
+        assert titles and not any(TITLE_SECRET in t for t in titles)
+
+    def test_an_ordinary_password_title_is_kept(self, tmp_path):
+        db_path = _titled_activity_db(tmp_path)
+        purge.ensure_migrated(db_path)
+        assert BENIGN_TITLE in _titles(db_path, "events")
+
+    def test_the_events_index_no_longer_holds_the_key(self, tmp_path):
+        db_path = _titled_activity_db(tmp_path)
+        purge.ensure_migrated(db_path)
+        conn = sqlite3.connect(str(db_path))
+        try:
+            hits = conn.execute(
+                "SELECT count(*) FROM events_fts WHERE events_fts MATCH ?",
+                (f'"{TITLE_SECRET}"',),
+            ).fetchone()[0]
+            control = conn.execute(
+                "SELECT count(*) FROM events_fts WHERE events_fts MATCH ?",
+                (CONTROL_WORD,),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        assert control == 1, "index lost -- the assertion below is vacuous"
+        assert hits == 0
+
+    def test_the_marker_is_v4(self):
+        assert purge.MIGRATION_NAME == "secret-redaction-v4"
+
+
+class TestCaptureRedactsTitles:
+    def test_the_bus_stores_a_redacted_title(self, tmp_path):
+        from contextpulse_core.spine import ContextEvent, EventBus
+
+        db_path = tmp_path / "activity.db"
+        bus = EventBus(db_path)
+        seen = []
+        bus.on(seen.append)
+        try:
+            bus.emit(ContextEvent(window_title=f"{CONTROL_WORD} {TITLE_SECRET}"))
+            bus.emit(ContextEvent(window_title=BENIGN_TITLE))
+        finally:
+            bus.close()
+        titles = _titles(db_path, "events")
+        assert not any(TITLE_SECRET in t for t in titles)
+        assert BENIGN_TITLE in titles
+        # Listeners (the knowledge bridge copies titles) get the clean title too.
+        assert not any(TITLE_SECRET in e.window_title for e in seen)
+
+    def test_activity_record_stores_a_redacted_title(self, tmp_path):
+        from contextpulse_sight.activity import ActivityDB
+
+        db = ActivityDB(db_path=tmp_path / "activity.db")
+        try:
+            db.record(timestamp=time.time(), window_title=f"{TITLE_SECRET} - x", app_name="a")
+            db.record(timestamp=time.time(), window_title=BENIGN_TITLE, app_name="a")
+        finally:
+            db.close()
+        titles = _titles(tmp_path / "activity.db", "activity")
+        assert not any(TITLE_SECRET in t for t in titles)
+        assert BENIGN_TITLE in titles
